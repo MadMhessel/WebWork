@@ -83,13 +83,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
             status TEXT,
             tg_message_id TEXT
         );
-        """
-    )
-    _ensure_column(conn, "items", "image_url", "TEXT")
-    _ensure_column(conn, "moderation_queue", "image_url", "TEXT")
-            status TEXT,
-            tg_message_id TEXT
-        );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_moderation_queue_url ON moderation_queue(url);
         CREATE INDEX IF NOT EXISTS idx_moderation_queue_status ON moderation_queue(status);
 
@@ -111,32 +104,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_dedup_title_hash ON dedup(title_hash);
         """
     )
+
     _ensure_column(conn, "items", "image_url", "TEXT")
     try:
         _ensure_column(conn, "moderation_queue", "image_url", "TEXT")
         _ensure_column(conn, "moderation_queue", "channel_message_id", "TEXT")
     except Exception:
         pass
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS images_cache (
-            item_id INTEGER PRIMARY KEY,
-            tg_file_id TEXT,
-            channel_message_id TEXT
-        );
-        """
-    )
-    conn.commit()
-    logger.info("Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db"))
 
-    # Добавляем столбец image_url, если он отсутствует
-    try:
-        conn.execute("ALTER TABLE items ADD COLUMN image_url TEXT")
-        conn.commit()
-    except Exception:
-        pass
-
-    # migrate existing records into the dedup table
     try:
         conn.execute(
             """
@@ -144,9 +119,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
             SELECT url, guid, title_hash, added_ts FROM items
             """
         )
-        conn.commit()
     except Exception:
         pass
+
+    logger.info(
+        "Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db")
+    )
+    conn.commit()
 
 # ---------- Existence checks used by dedup ----------
 
