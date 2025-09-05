@@ -70,6 +70,37 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_items_guid ON items(guid);
         CREATE INDEX IF NOT EXISTS idx_items_title_hash ON items(title_hash);
         CREATE INDEX IF NOT EXISTS idx_items_source ON items(source);
+
+        CREATE TABLE IF NOT EXISTS moderation_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT,
+            guid TEXT,
+            url TEXT UNIQUE,
+            title TEXT,
+            content TEXT,
+            published_at TEXT,
+            status TEXT,
+            tg_message_id TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_moderation_queue_url ON moderation_queue(url);
+        CREATE INDEX IF NOT EXISTS idx_moderation_queue_status ON moderation_queue(status);
+
+        CREATE TABLE IF NOT EXISTS images_cache (
+            url TEXT PRIMARY KEY,
+            data BLOB,
+            content_type TEXT,
+            added_ts INTEGER DEFAULT (strftime('%s','now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS dedup (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT UNIQUE,
+            guid TEXT,
+            title_hash TEXT,
+            added_ts INTEGER DEFAULT (strftime('%s','now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_dedup_guid ON dedup(guid);
+        CREATE INDEX IF NOT EXISTS idx_dedup_title_hash ON dedup(title_hash);
         """
     )
     _ensure_column(conn, "items", "image_url", "TEXT")
@@ -97,24 +128,36 @@ def init_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
+    # migrate existing records into the dedup table
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO dedup (url, guid, title_hash, added_ts)
+            SELECT url, guid, title_hash, added_ts FROM items
+            """
+        )
+        conn.commit()
+    except Exception:
+        pass
+
 # ---------- Existence checks used by dedup ----------
 
 def exists_url(conn: sqlite3.Connection, url: str) -> bool:
     if not url:
         return False
-    cur = conn.execute("SELECT 1 FROM items WHERE url = ? LIMIT 1", (url,))
+    cur = conn.execute("SELECT 1 FROM dedup WHERE url = ? LIMIT 1", (url,))
     return cur.fetchone() is not None
 
 def exists_guid(conn: sqlite3.Connection, guid: str) -> bool:
     if not guid:
         return False
-    cur = conn.execute("SELECT 1 FROM items WHERE guid = ? LIMIT 1", (guid,))
+    cur = conn.execute("SELECT 1 FROM dedup WHERE guid = ? LIMIT 1", (guid,))
     return cur.fetchone() is not None
 
 def exists_title_hash(conn: sqlite3.Connection, title_hash: str) -> bool:
     if not title_hash:
         return False
-    cur = conn.execute("SELECT 1 FROM items WHERE title_hash = ? LIMIT 1", (title_hash,))
+    cur = conn.execute("SELECT 1 FROM dedup WHERE title_hash = ? LIMIT 1", (title_hash,))
     return cur.fetchone() is not None
 
 # ---------- Insert helpers ----------

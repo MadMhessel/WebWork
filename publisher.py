@@ -1,6 +1,6 @@
 import html, logging, time, json
 from io import BytesIO
-from typing import Optional, Any, Dict, Tuple
+from typing import Optional, Any, Dict, Tuple, List
 import requests
 from . import config, rewrite, db
 from .utils import shorten_url
@@ -157,6 +157,23 @@ def _send_text(chat_id: str, text: str, parse_mode: str, reply_markup: Optional[
     return str(j.get("result", {}).get("message_id"))
 
 
+def _send_photo_file(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
+def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
+    """Send a simple text message. Returns message_id or None."""
+    parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
+    return _send_text(chat_id, text, parse_mode)
+
+
+def _send_photo(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
+    """Возвращает message_id при успехе, иначе None."""
+    payload: Dict[str, Any] = {"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode}
+    files = {"photo": ("image", image, mime)}
+    j = _api_post("sendPhoto", payload, files=files)
+    if not j:
+        return None
+    return str(j.get("result", {}).get("message_id"))
+
+
 def _edit_message_text(chat_id: str, message_id: str, text: str, parse_mode: str, reply_markup: Optional[dict] = None) -> bool:
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
@@ -185,9 +202,15 @@ def _send_photo(chat_id: str, photo: str, caption: str, parse_mode: str) -> Opti
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "photo": photo,
+def _send_photo(chat_id: str, photo_id: str, caption: str, parse_mode: str, reply_markup: Optional[dict] = None) -> Optional[str]:
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "photo": photo_id,
         "caption": caption,
         "parse_mode": parse_mode,
     }
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
     j = _api_post("sendPhoto", payload)
     if not j:
         return None
@@ -198,6 +221,19 @@ def _send_photo(chat_id: str, photo: str, caption: str, parse_mode: str) -> Opti
     if photos:
         file_id = photos[-1].get("file_id")
     return mid, file_id
+
+
+def _send_media_group(chat_id: str, file_ids: List[str], caption: str, parse_mode: str) -> bool:
+    media = []
+    for i, fid in enumerate(file_ids):
+        obj: Dict[str, Any] = {"type": "photo", "media": fid}
+        if i == 0 and caption:
+            obj["caption"] = caption
+            obj["parse_mode"] = parse_mode
+        media.append(obj)
+    payload: Dict[str, Any] = {"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)}
+    j = _api_post("sendMediaGroup", payload)
+    return bool(j)
 
 
 def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Optional[str] = None, cfg=config) -> bool:
@@ -382,6 +418,26 @@ def publish_to_channel(item_id: int, text_override: Optional[str] = None, cfg=co
     conn.commit()
     conn.close()
     return mid
+                caption = f"{_escape_html(title)}\n\n{_escape_html(url)}"
+            mid = _send_photo_file(chat_id, img_data, mime, caption, parse_mode)
+            if mid:
+                logger.info(
+                    "Фото отправлено: chat_id=%s, message_id=%s, bytes=%d", chat_id, mid, img_data.getbuffer().nbytes
+                )
+                slp = float(cfg.PUBLISH_SLEEP_BETWEEN_SEC or 0)
+                if slp > 0:
+                    time.sleep(slp)
+                return True
+            logger.debug("Отправка фото не удалась, fallback на текст.")
+        else:
+            logger.debug("Изображение не загружено, fallback на текст.")
+    else:
+        if not getattr(cfg, "ALLOW_IMAGES", False):
+            logger.debug("Отправка изображений отключена.")
+        elif not image_url:
+            logger.debug("image_url отсутствует, отправляем текст.")
+
+    return publish_message(chat_id, title, body, url, cfg=cfg)
 
 
 def publish(item: Dict[str, Any], cfg=config) -> bool:
@@ -389,28 +445,108 @@ def publish(item: Dict[str, Any], cfg=config) -> bool:
     return publish_item(item, cfg=cfg)
 
 
-def send_moderation_preview(chat_id: str, mod_title: str, title: str, body: str, url: str, mod_id: int, cfg=config) -> Optional[str]:
-    """
-    Отправляет модератору предпросмотр новости + инлайн-кнопки.
-    Возвращает message_id, либо None при ошибке.
-    """
+
+
+
+
+def send_moderation_preview(
+    chat_id: str,
+    mod_title: str,
+    title: str,
+    body: str,
+    url: str,
+    mod_id: int,
+    images: Optional[List[str]] = None,
+    cfg=config,
+) -> Optional[str]:
+    """Отправляет предпросмотр новости модератору с кнопками и картинками."""
+
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
     item = {"title": title, "content": body, "url": url}
     rewritten = rewrite.maybe_rewrite_item(item, cfg)
     body_rewritten = rewritten.get("content", "") or ""
-    header = _escape_html(mod_title)
-    preview = _build_message_html(title, body_rewritten, url)
-    text = f"<b>{header}</b>\n\n{preview}"
+
+    if parse_mode == "MARKDOWNV2":
+        header = f"*{_escape_markdown_v2(mod_title)}*"
+    else:
+        header = f"<b>{_escape_html(mod_title)}</b>"
+
+    def _build_full(limit: int) -> str:
+        body_current = body_rewritten
+        preview = _build_message(title, body_current, url, parse_mode)
+        text = f"{header}\n\n{preview}".strip()
+        attempt = 0
+        while len(text) > limit and attempt < 4:
+            overflow = len(text) - limit
+            cut_by = max(overflow + 32, 64)
+            target_len = max(0, len(body_current) - cut_by)
+            body_current = _smart_trim(body_current, target_len)
+            preview = _build_message(title, body_current, url, parse_mode)
+            text = f"{header}\n\n{preview}".strip()
+            attempt += 1
+        if len(text) > limit:
+            allowed = max(0, len(body_current) - (len(text) - limit + 32))
+            body_current = _smart_trim(body_current, allowed)
+            preview = _build_message(title, body_current, url, parse_mode)
+            text = f"{header}\n\n{preview}".strip()
+        return text
+
+    message_text = _build_full(int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096)))
+    caption_text = _build_full(1024)
+
     reply_markup = {
-        "inline_keyboard": [[
-            {"text": "✅ Одобрить", "callback_data": f"approve:{mod_id}"},
-            {"text": "❌ Отклонить", "callback_data": f"reject:{mod_id}"},
-        ]]
+        "inline_keyboard": [
+            [
+                {"text": "✅ Publish", "callback_data": f"publish:{mod_id}"},
+                {"text": "❌ Reject", "callback_data": f"reject:{mod_id}"},
+            ],
+            [
+                {"text": "😴 Snooze", "callback_data": f"snooze:{mod_id}"},
+                {"text": "✏️ Edit", "callback_data": f"edit:{mod_id}"},
+            ],
+            [
+                {"text": "🔗 Source", "url": url},
+                {"text": "✅ Одобрить", "callback_data": f"approve:{mod_id}"},
+                {"text": "❌ Отклонить", "callback_data": f"reject:{mod_id}"},
+            ],
+            [
+                {"text": "🕐 Отложить", "callback_data": f"snooze:{mod_id}"},
+                {"text": "✏️ Править", "callback_data": f"edit:{mod_id}"},
+            ],
+        ]
     }
-    mid = _send_text(chat_id, text, parse_mode, reply_markup=reply_markup)
+
+    imgs = [i for i in (images or []) if i]
+    if imgs:
+        if len(imgs) > 1 and getattr(cfg, "ALLOW_MEDIA_GROUPS", False):
+            ok = _send_media_group(chat_id, imgs, caption_text, parse_mode)
+            if not ok:
+                return None
+            mid = _send_text(chat_id, message_text, parse_mode, reply_markup=reply_markup)
+            if mid:
+                logger.info(
+                    "Модерация отправлена: chat_id=%s, message_id=%s, mod_id=%d (media group)",
+                    chat_id,
+                    mid,
+                    mod_id,
+                )
+            return mid
+        else:
+            mid = _send_photo(chat_id, imgs[0], caption_text, parse_mode, reply_markup=reply_markup)
+            if mid:
+                logger.info(
+                    "Модерация отправлена: chat_id=%s, message_id=%s, mod_id=%d (photo)",
+                    chat_id,
+                    mid,
+                    mod_id,
+                )
+            return mid
+
+    mid = _send_text(chat_id, message_text, parse_mode, reply_markup=reply_markup)
     if mid:
         logger.info("Модерация отправлена: chat_id=%s, message_id=%s, mod_id=%d", chat_id, mid, mod_id)
     return mid
+
 
 
 def edit_moderation_message(chat_id: str, message_id: str, text: str, cfg=config) -> bool:
