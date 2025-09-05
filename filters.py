@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Iterable, List, Union, Any
+from typing import Iterable, List, Union, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +87,16 @@ def _slice_head(content: str, head_chars: int) -> str:
     return head
 
 
-def is_relevant(title: str, content: str, cfg) -> bool:
+def is_relevant(title: str, content: str, cfg) -> Tuple[bool, bool, bool, str]:
     """
     Базовая проверка релевантности:
       - регион: cfg.REGION_KEYWORDS
       - тематика: cfg.CONSTRUCTION_KEYWORDS
     Логика по умолчанию строгая «И» (cfg.STRICT_FILTER = true).
     Сканируем заголовок + «голову» текста на длину cfg.FILTER_HEAD_CHARS.
+
+    Возвращает кортеж из четырёх элементов:
+    (ok, region_ok, topic_ok, reason).
     """
     title = title or ""
     content = content or ""
@@ -110,19 +113,32 @@ def is_relevant(title: str, content: str, cfg) -> bool:
 
     ok = (region_ok and topic_ok) if strict else (region_ok or topic_ok)
 
+    if ok:
+        reason = ""
+    else:
+        if not region_ok and not topic_ok:
+            reason = "нет слов региона и тематики"
+        elif not region_ok:
+            reason = "нет слов региона"
+        else:
+            reason = "нет слов тематики"
+
     logger.debug(
         "is_relevant(strict=%s, head=%d) => region=%s topic=%s title='%s'",
         strict, head_chars, region_ok, topic_ok, title[:120]
     )
-    return ok
+    return ok, region_ok, topic_ok, reason
 
 
-def is_relevant_for_source(title: str, content: str, source_name: str, cfg) -> bool:
+def is_relevant_for_source(title: str, content: str, source_name: str, cfg) -> Tuple[bool, bool, bool, str]:
     """
     Обёртка над is_relevant с учётом белых списков.
     Если источник в cfg.WHITELIST_SOURCES и cfg.WHITELIST_RELAX=true —
     проверяем по ПОЛНОМУ тексту (но логика «И» остаётся строгой).
     Для остальных источников — как обычно (заголовок + голова).
+
+    Возвращает тот же кортеж, что и is_relevant:
+    (ok, region_ok, topic_ok, reason).
     """
     title = title or ""
     content = content or ""
@@ -139,10 +155,19 @@ def is_relevant_for_source(title: str, content: str, source_name: str, cfg) -> b
         region_ok = contains_any(text_full, region_kw)
         topic_ok  = contains_any(text_full, topic_kw)
         ok = (region_ok and topic_ok) if strict else (region_ok or topic_ok)
+        if ok:
+            reason = ""
+        else:
+            if not region_ok and not topic_ok:
+                reason = "нет слов региона и тематики"
+            elif not region_ok:
+                reason = "нет слов региона"
+            else:
+                reason = "нет слов тематики"
         logger.debug(
             "is_relevant_for_source[WHITELIST] src='%s' => region=%s topic=%s title='%s'",
             source_name, region_ok, topic_ok, title[:120]
         )
-        return ok
+        return ok, region_ok, topic_ok, reason
 
     return is_relevant(title, content, cfg)
