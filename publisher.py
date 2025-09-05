@@ -1,5 +1,6 @@
 import html, logging, time, json
-from typing import Optional, Any, Dict
+from io import BytesIO
+from typing import Optional, Any, Dict, Tuple
 import requests
 from . import config, rewrite
 from .utils import shorten_url
@@ -84,13 +85,49 @@ def _build_message(title: str, body: str, url: str, parse_mode: str) -> str:
     return _build_message_html(title, body, url)
 
 
-def _api_post(method: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
+    """Скачивает изображение и возвращает BytesIO и MIME тип или None."""
+    if not url:
+        logger.debug("URL изображения отсутствует.")
+        return None
+    timeout = float(getattr(cfg, "IMAGE_DOWNLOAD_TIMEOUT", 10))
+    max_bytes = int(getattr(cfg, "IMAGE_MAX_BYTES", 5 * 1024 * 1024))
+    try:
+        r = requests.get(url, timeout=timeout, stream=True)
+        if r.status_code != 200:
+            logger.debug("Загрузка изображения вернула статус %s", r.status_code)
+            return None
+        content_type = (r.headers.get("Content-Type") or "").split(";")[0].lower()
+        if not content_type.startswith("image/"):
+            logger.debug("Отказано: Content-Type %s", content_type)
+            return None
+        cl_header = r.headers.get("Content-Length")
+        if cl_header and int(cl_header) > max_bytes:
+            logger.debug("Отказано: заявленный размер %s превышает лимит %d", cl_header, max_bytes)
+            return None
+        data = BytesIO()
+        for chunk in r.iter_content(8192):
+            if not chunk:
+                continue
+            data.write(chunk)
+            if data.tell() > max_bytes:
+                logger.debug("Отказано: изображение превышает лимит %d байт", max_bytes)
+                return None
+        data.seek(0)
+        logger.debug("Изображение скачано (%d байт, %s)", data.getbuffer().nbytes, content_type)
+        return data, content_type
+    except Exception as ex:
+        logger.debug("Ошибка при загрузке изображения %s: %s", url, ex)
+        return None
+
+
+def _api_post(method: str, payload: Dict[str, Any], files: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     if not _ensure_client():
         logger.warning("Telegram клиент не инициализирован — вызов %s пропущен.", method)
         return None
     url = f"{_client_base_url}/{method}"
     try:
-        r = requests.post(url, data=payload, timeout=30)
+        r = requests.post(url, data=payload, files=files, timeout=30)
         if r.status_code != 200:
             logger.error("Ошибка HTTP %s: %s %s", method, r.status_code, r.text)
             return None
@@ -115,6 +152,16 @@ def _send_text(chat_id: str, text: str, parse_mode: str, reply_markup: Optional[
     if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
     j = _api_post("sendMessage", payload)
+    if not j:
+        return None
+    return str(j.get("result", {}).get("message_id"))
+
+
+def _send_photo(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
+    """Возвращает message_id при успехе, иначе None."""
+    payload: Dict[str, Any] = {"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode}
+    files = {"photo": ("image", image, mime)}
+    j = _api_post("sendPhoto", payload, files=files)
     if not j:
         return None
     return str(j.get("result", {}).get("message_id"))
@@ -245,14 +292,48 @@ def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Op
         return False
 
 
-def publish(item: Dict[str, Any], cfg=config) -> bool:
-    """Публикует новость, извлекая данные из словаря."""
+def publish_item(item: Dict[str, Any], cfg=config) -> bool:
     chat_id = str(cfg.CHANNEL_ID or "")
     title = item.get("title") or ""
     body = item.get("content") or ""
     url = item.get("url") or ""
     image_url = item.get("image_url") or ""
     return publish_message(chat_id, title, body, url, image_url=image_url, cfg=cfg)
+
+    parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
+
+    if getattr(cfg, "ALLOW_IMAGES", False) and image_url:
+        img = _download_image(image_url, cfg)
+        if img:
+            img_data, mime = img
+            if parse_mode == "MARKDOWNV2":
+                caption = f"{_escape_markdown_v2(title)}\n\n{_escape_url_md_v2(url)}"
+            else:
+                caption = f"{_escape_html(title)}\n\n{_escape_html(url)}"
+            mid = _send_photo(chat_id, img_data, mime, caption, parse_mode)
+            if mid:
+                logger.info(
+                    "Фото отправлено: chat_id=%s, message_id=%s, bytes=%d", chat_id, mid, img_data.getbuffer().nbytes
+                )
+                slp = float(cfg.PUBLISH_SLEEP_BETWEEN_SEC or 0)
+                if slp > 0:
+                    time.sleep(slp)
+                return True
+            logger.debug("Отправка фото не удалась, fallback на текст.")
+        else:
+            logger.debug("Изображение не загружено, fallback на текст.")
+    else:
+        if not getattr(cfg, "ALLOW_IMAGES", False):
+            logger.debug("Отправка изображений отключена.")
+        elif not image_url:
+            logger.debug("image_url отсутствует, отправляем текст.")
+
+    return publish_message(chat_id, title, body, url, cfg=cfg)
+
+
+def publish(item: Dict[str, Any], cfg=config) -> bool:
+    """Публикует новость, извлекая данные из словаря."""
+    return publish_item(item, cfg=cfg)
 
 
 def send_moderation_preview(chat_id: str, mod_title: str, title: str, body: str, url: str, mod_id: int, cfg=config) -> Optional[str]:

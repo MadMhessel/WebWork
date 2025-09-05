@@ -68,6 +68,7 @@ def mark_published(
     title: Optional[str],
     published_at: Optional[str],
     source: Optional[str],
+    image_url: Optional[str] = None,
     db_conn,
 ) -> None:
     """Пометить материал как опубликованный, сохранив его в таблице ``items``.
@@ -85,6 +86,7 @@ def mark_published(
         "content": None,
         "source": source or "",
         "published_at": published_at or "",
+        "image_url": image_url,
     }
     try:
         db.upsert_item(db_conn, record)

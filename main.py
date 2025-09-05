@@ -62,6 +62,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             guid = (it.get("guid") or "").strip()
             title = normalize_whitespace(it.get("title") or "")
             content = normalize_whitespace(it.get("content") or "")
+            image_url = it.get("image_url")
 
             ok, region_ok, topic_ok, reason = filters.is_relevant_for_source(title, content, src, config)
             if not ok:
@@ -91,14 +92,23 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 continue
 
             # отправка
-            sent = _publisher_send(it)
+            item_clean = {
+                "source": src,
+                "guid": guid,
+                "url": url,
+                "title": title,
+                "content": content,
+                "published_at": it.get("published_at") or "",
+                "image_url": image_url,
+            }
+            sent = _publisher_send(item_clean)
             if sent:
                 cnt_published += 1
             else:
                 cnt_not_sent += 1
 
             # запоминаем в БД
-            dedup.remember(conn, it)
+            dedup.remember(conn, item_clean)
 
         except KeyboardInterrupt:
             raise
