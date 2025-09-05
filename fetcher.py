@@ -97,17 +97,45 @@ def _extract_html_content(soup) -> str:
         content = content[:8000].rsplit(" ", 1)[0].strip()
     return content
 
+def _extract_html_image_url(soup) -> str:
+    if not soup:
+        return ""
+    # meta tags: OpenGraph and Twitter cards
+    for attrs in [
+        {"property": "og:image"},
+        {"property": "og:image:url"},
+        {"name": "twitter:image"},
+        {"name": "twitter:image:src"},
+        {"property": "twitter:image"},
+        {"property": "twitter:image:src"},
+    ]:
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content"):
+            return tag["content"].strip()
+    # link rel="image_src"
+    link = soup.find("link", attrs={"rel": "image_src"})
+    if link and link.get("href"):
+        return link["href"].strip()
+    # first <img>
+    img = soup.find("img")
+    if img and img.get("src"):
+        return img["src"].strip()
+    return ""
+
 def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
     html_text = _requests_get(url)
     if not html_text:
         return None
-    title, content, published_at = "", "", ""
+    title, content, published_at, image_url = "", "", "", ""
     if BeautifulSoup is not None:
         try:
             soup = BeautifulSoup(html_text, "html.parser")
             title = _extract_html_title(soup)
             published_at = _extract_html_published_at(soup)
             content = _extract_html_content(soup)
+            img = _extract_html_image_url(soup)
+            if img:
+                image_url = urljoin(url, img)
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
     # грубые фолбэки
@@ -138,6 +166,7 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
         "title": title,
         "content": content,
         "published_at": published_at,
+        "image_url": image_url,
     }
 
 # -------------------- RSS --------------------
