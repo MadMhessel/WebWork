@@ -203,6 +203,15 @@ def publish_message(chat_id: str, title: str, body: str, url: str, cfg=config) -
         return False
 
 
+def publish(item: Dict[str, Any], cfg=config) -> bool:
+    """Публикует новость, извлекая данные из словаря."""
+    chat_id = str(cfg.CHANNEL_ID or "")
+    title = item.get("title") or ""
+    body = item.get("content") or ""
+    url = item.get("url") or ""
+    return publish_message(chat_id, title, body, url, cfg=cfg)
+
+
 def send_moderation_preview(chat_id: str, mod_title: str, title: str, body: str, url: str, mod_id: int, cfg=config) -> Optional[str]:
     """
     Отправляет модератору предпросмотр новости + инлайн-кнопки.
