@@ -174,6 +174,10 @@ def insert_item(conn: sqlite3.Connection, item: Dict[str, Any]) -> Optional[int]
         """,
         values,
     )
+    conn.execute(
+        "INSERT OR IGNORE INTO dedup(url, guid, title_hash) VALUES (?,?,?)",
+        (item.get("url"), item.get("guid"), item.get("title_hash")),
+    )
     conn.commit()
     rid = cur.lastrowid or None
     return rid
@@ -192,6 +196,10 @@ def upsert_item(conn: sqlite3.Connection, item: Dict[str, Any]) -> int:
         row = cur.fetchone()
         if row:
             _update_existing(conn, row["id"], item)
+            conn.execute(
+                "INSERT OR IGNORE INTO dedup(url, guid, title_hash) VALUES (?,?,?)",
+                (item.get("url"), item.get("guid"), item.get("title_hash")),
+            )
             conn.commit()
             return int(row["id"])
 
@@ -200,6 +208,10 @@ def upsert_item(conn: sqlite3.Connection, item: Dict[str, Any]) -> int:
         row = cur.fetchone()
         if row:
             _update_existing(conn, row["id"], item)
+            conn.execute(
+                "INSERT OR IGNORE INTO dedup(url, guid, title_hash) VALUES (?,?,?)",
+                (item.get("url"), item.get("guid"), item.get("title_hash")),
+            )
             conn.commit()
             return int(row["id"])
 

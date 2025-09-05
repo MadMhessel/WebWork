@@ -6,7 +6,6 @@ import time
 from typing import Dict, List, Tuple
 
 from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
-from . import config, logging_setup, fetcher, filters, dedup, db
 from . import moderator as moderation
 from .utils import normalize_whitespace, compute_title_hash
 
@@ -164,8 +163,6 @@ def main() -> int:
     logger.info("Старт бесконечного цикла. Пауза: %d сек.", config.LOOP_DELAY_SECS)
     while True:
         try:
-            db.init_schema(conn)  # на всякий случай
-            _publisher_init()
             run_once(conn)
             time.sleep(config.LOOP_DELAY_SECS)
         except KeyboardInterrupt:

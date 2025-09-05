@@ -1,19 +1,20 @@
 from __future__ import annotations
 import hashlib
 import logging
+import os
 import re
 from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional
 from urllib.parse import urlparse
 
-import requests
 try:  # Pillow is optional during runtime
     from PIL import Image  # type: ignore
 except Exception:  # pragma: no cover
     Image = None  # type: ignore
 
 from . import config
+from .fetcher import HTTP_SESSION, DEFAULT_TIMEOUT
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +42,28 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
         if not u or u in seen:
             continue
         seen.add(u)
-        out.append(ImageCandidate(url=u))
+        if _url_allowed(u):
+            out.append(ImageCandidate(url=u))
     return out
+
+
+def _url_allowed(url: str) -> bool:
+    """Filter URL by scheme, denylist patterns and extension."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    low = url.lower()
+    deny = getattr(config, "IMAGE_DENYLIST_DOMAINS", set())
+    if any(d in low for d in deny):
+        return False
+    ext = os.path.splitext(parsed.path)[1].lower()
+    allowed_ext = getattr(config, "IMAGE_ALLOWED_EXT", set())
+    if allowed_ext and ext not in allowed_ext:
+        return False
+    return True
 
 
 def _domain_allowed(url: str) -> bool:
@@ -69,8 +90,15 @@ def ensure_tg_file_id(image_url: str) -> Optional[str]:
     if not image_url or not getattr(config, "ALLOW_IMAGES", True):
         return None
     try:
-        timeout = int(getattr(config, "IMAGE_TIMEOUT", 15))
-        r = requests.get(image_url, timeout=timeout)
+        # HEAD check for type and length
+        head = HTTP_SESSION.head(image_url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        ctype = head.headers.get("Content-Type", "")
+        if head.status_code != 200 or not ctype.startswith("image/"):
+            return None
+        clen = int(head.headers.get("Content-Length", "0") or "0")
+        if clen < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
+            return None
+        r = HTTP_SESSION.get(image_url, timeout=DEFAULT_TIMEOUT)
         if r.status_code != 200:
             return None
         data = r.content
@@ -80,6 +108,12 @@ def ensure_tg_file_id(image_url: str) -> Optional[str]:
             return image_url
         with Image.open(BytesIO(data)) as im:
             w, h = im.size
+        if (
+            w < int(getattr(config, "IMAGE_MIN_EDGE", 0))
+            or h < int(getattr(config, "IMAGE_MIN_EDGE", 0))
+            or w * h < int(getattr(config, "IMAGE_MIN_AREA", 0))
+        ):
+            return None
         ratio = w / float(h or 1)
         min_ratio = float(getattr(config, "IMAGE_MIN_RATIO", 0.0))
         max_ratio = float(getattr(config, "IMAGE_MAX_RATIO", 10.0))
