@@ -73,24 +73,35 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS moderation_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT,
-            guid TEXT,
+            source_id TEXT,
             url TEXT UNIQUE,
+            guid TEXT,
             title TEXT,
+            summary TEXT,
             content TEXT,
-            published_at TEXT,
             image_url TEXT,
+            image_hash TEXT,
+            tg_file_id TEXT,
             status TEXT,
-            tg_message_id TEXT
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            fetched_at INTEGER,
+            reviewed_at INTEGER,
+            published_at INTEGER,
+            review_message_id TEXT,
+            channel_message_id TEXT,
+            moderator_user_id INTEGER,
+            moderator_comment TEXT,
+            attempts INTEGER DEFAULT 0
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_moderation_queue_url ON moderation_queue(url);
-        CREATE INDEX IF NOT EXISTS idx_moderation_queue_status ON moderation_queue(status);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mq_url ON moderation_queue(url);
+        CREATE INDEX IF NOT EXISTS idx_mq_status ON moderation_queue(status);
 
         CREATE TABLE IF NOT EXISTS images_cache (
-            url TEXT PRIMARY KEY,
-            data BLOB,
-            content_type TEXT,
-            added_ts INTEGER DEFAULT (strftime('%s','now'))
+            src_url TEXT PRIMARY KEY,
+            hash TEXT,
+            width INTEGER,
+            height INTEGER,
+            tg_file_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS dedup (
@@ -106,11 +117,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
 
     _ensure_column(conn, "items", "image_url", "TEXT")
-    try:
-        _ensure_column(conn, "moderation_queue", "image_url", "TEXT")
-        _ensure_column(conn, "moderation_queue", "channel_message_id", "TEXT")
-    except Exception:
-        pass
 
     try:
         conn.execute(
