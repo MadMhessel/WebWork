@@ -3,6 +3,18 @@ import re
 import hashlib
 from typing import Any, Dict
 
+
+def shorten_url(url: str, max_len: int = 100) -> str:
+    """Возвращает укороченный вариант URL для логов."""
+    try:
+        if not url:
+            return ""
+        if len(url) <= max_len:
+            return url
+        return url[: max_len - 3] + "..."
+    except Exception:
+        return url
+
 _WS_RE = re.compile(r"\s+", re.U)
 
 def normalize_whitespace(text: str) -> str:

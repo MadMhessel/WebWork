@@ -8,7 +8,7 @@ import requests
 import feedparser
 
 from . import config
-from .utils import normalize_whitespace
+from .utils import normalize_whitespace, shorten_url
 
 logger = logging.getLogger(__name__)
 
@@ -97,19 +97,77 @@ def _extract_html_content(soup) -> str:
         content = content[:8000].rsplit(" ", 1)[0].strip()
     return content
 
+
+def _extract_html_image_url(soup, base_url: str) -> str:
+    if not soup:
+        return ""
+    try:
+        og = soup.find("meta", attrs={"property": "og:image"})
+        if og and og.get("content"):
+            return urljoin(base_url, og["content"].strip())
+        img = soup.find("img")
+        if img and img.get("src"):
+            return urljoin(base_url, img["src"].strip())
+    except Exception as ex:
+        logger.warning("Отказ извлечения картинки %s: %s", base_url, ex)
+    return ""
+
+
+def _validate_image_url(url: str) -> str:
+    if not url:
+        return ""
+    r = None
+    try:
+        r = requests.get(url, timeout=10, stream=True)
+        if r.status_code != 200:
+            logger.warning(
+                "Отказ скачивания картинки %s: HTTP %s",
+                shorten_url(url),
+                r.status_code,
+            )
+            return ""
+        ctype = r.headers.get("Content-Type", "")
+        if not ctype.startswith("image/"):
+            logger.warning(
+                "Отказ скачивания картинки %s: тип %s",
+                shorten_url(url),
+                ctype or "неизвестен",
+            )
+            return ""
+        return url
+    except Exception as ex:
+        logger.warning(
+            "Отказ скачивания картинки %s: %s",
+            shorten_url(url),
+            ex,
+        )
+        return ""
+    finally:
+        try:
+            if r is not None:
+                r.close()
+        except Exception:
+            pass
+
 def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
     html_text = _requests_get(url)
     if not html_text:
         return None
-    title, content, published_at = "", "", ""
+    title, content, published_at, image_url = "", "", "", ""
+    soup = None
     if BeautifulSoup is not None:
         try:
             soup = BeautifulSoup(html_text, "html.parser")
             title = _extract_html_title(soup)
             published_at = _extract_html_published_at(soup)
             content = _extract_html_content(soup)
+            img_candidate = _extract_html_image_url(soup, url)
+            image_url = _validate_image_url(img_candidate)
+            if image_url:
+                logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
+            soup = None
     # грубые фолбэки
     if not title:
         try:
@@ -121,9 +179,8 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
                 title = normalize_whitespace(raw)
         except Exception:
             pass
-    if not content and BeautifulSoup is not None:
+    if not content and soup is not None:
         try:
-            soup = BeautifulSoup(html_text, "html.parser")
             md = soup.find("meta", attrs={"name": "description"})
             if md and md.get("content"):
                 content = normalize_whitespace(md["content"])
@@ -138,6 +195,7 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
         "title": title,
         "content": content,
         "published_at": published_at,
+        "image_url": image_url,
     }
 
 # -------------------- RSS --------------------
@@ -150,6 +208,7 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     title = getattr(entry, "title", "") or ""
     published_at = getattr(entry, "published", "") or getattr(entry, "updated", "") or ""
     content_val = ""
+    image_url = ""
     try:
         if getattr(entry, "content", None):
             blocks = []
@@ -160,8 +219,34 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
             content_val = "\n\n".join(blocks)
         if not content_val:
             content_val = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
-    except Exception:
-        pass
+
+        if getattr(entry, "media_content", None):
+            for m in entry.media_content:
+                u = getattr(m, "url", "") or ""
+                if u:
+                    image_url = u
+                    break
+        if not image_url and getattr(entry, "media_thumbnail", None):
+            for m in entry.media_thumbnail:
+                u = getattr(m, "url", "") or ""
+                if u:
+                    image_url = u
+                    break
+        if not image_url:
+            links = getattr(entry, "links", []) or []
+            for l in links:
+                rel = getattr(l, "rel", "") or ""
+                typ = getattr(l, "type", "") or ""
+                if rel == "enclosure" and typ.startswith("image/"):
+                    u = getattr(l, "href", "") or ""
+                    if u:
+                        image_url = u
+                        break
+    except Exception as ex:
+        logger.warning("Отказ извлечения картинки из RSS: %s", ex)
+    image_url = _validate_image_url(image_url)
+    if image_url:
+        logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
     title = normalize_whitespace(title)
     content_val = normalize_whitespace(content_val)
     if not title:
@@ -173,6 +258,7 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
         "title": title,
         "content": content_val,
         "published_at": published_at,
+        "image_url": image_url,
     }
 
 def fetch_rss(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
@@ -319,6 +405,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
                 "title": title_list or "(без заголовка)",
                 "content": "",
                 "published_at": date_text or "",
+                "image_url": "",
             })
             continue
 
@@ -331,6 +418,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
             "title": title_final,
             "content": detail.get("content") or "",
             "published_at": detail.get("published_at") or date_text or "",
+            "image_url": detail.get("image_url") or "",
         })
 
     logger.info("Получено %d записей из HTML-листа: %s", len(out), name)

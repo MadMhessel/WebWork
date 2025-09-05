@@ -2,6 +2,7 @@ import html, logging, time, json
 from typing import Optional, Any, Dict
 import requests
 from . import config, rewrite
+from .utils import shorten_url
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,20 @@ def answer_callback_query(callback_query_id: str, text: Optional[str] = None, sh
     return bool(j)
 
 
-def publish_message(chat_id: str, title: str, body: str, url: str, cfg=config) -> bool:
+def _send_photo(chat_id: str, photo_url: str, caption: str, parse_mode: str) -> Optional[str]:
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "photo": photo_url,
+        "caption": caption,
+        "parse_mode": parse_mode,
+    }
+    j = _api_post("sendPhoto", payload)
+    if not j:
+        return None
+    return str(j.get("result", {}).get("message_id"))
+
+
+def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Optional[str] = None, cfg=config) -> bool:
     """
     Публикует сообщение. True — при успехе (получен message_id), False — при ошибке.
     """
@@ -174,6 +188,32 @@ def publish_message(chat_id: str, title: str, body: str, url: str, cfg=config) -
         allowed_for_body = max(0, len(body_current) - (len(message) - limit + 32))
         body_current = _smart_trim(body_current, allowed_for_body)
         message = _build_message(title or "", body_current, url or "", parse_mode)
+
+    if image_url:
+        logger.debug("Картинка для публикации: %s", shorten_url(image_url))
+        try:
+            mid = _send_photo(chat_id, image_url, message, parse_mode)
+            if mid:
+                logger.info(
+                    "Сообщение с картинкой отправлено: chat_id=%s, message_id=%s, len=%d",
+                    chat_id,
+                    mid,
+                    len(message),
+                )
+                slp = float(cfg.PUBLISH_SLEEP_BETWEEN_SEC or 0)
+                if slp > 0:
+                    time.sleep(slp)
+                return True
+            logger.warning(
+                "Отказ публикации картинки %s: Telegram не вернул message_id",
+                shorten_url(image_url),
+            )
+        except Exception as ex:
+            logger.warning(
+                "Отказ публикации картинки %s: %s",
+                shorten_url(image_url),
+                ex,
+            )
 
     policy = (cfg.ON_SEND_ERROR or "retry").lower()
     retries = int(cfg.PUBLISH_MAX_RETRIES or 0) if policy == "retry" else 0
@@ -211,7 +251,8 @@ def publish(item: Dict[str, Any], cfg=config) -> bool:
     title = item.get("title") or ""
     body = item.get("content") or ""
     url = item.get("url") or ""
-    return publish_message(chat_id, title, body, url, cfg=cfg)
+    image_url = item.get("image_url") or ""
+    return publish_message(chat_id, title, body, url, image_url=image_url, cfg=cfg)
 
 
 def send_moderation_preview(chat_id: str, mod_title: str, title: str, body: str, url: str, mod_id: int, cfg=config) -> Optional[str]:
