@@ -29,6 +29,25 @@ def connect(db_path: Optional[str] = None) -> sqlite3.Connection:
         pass
     return conn
 
+
+def _ensure_column(
+    conn: sqlite3.Connection, table: str, column: str, col_type: str
+) -> None:
+    """Ensure that ``table`` has a column named ``column`` of ``col_type``.
+
+    SQLite prior to version 3.35 does not support ``ALTER TABLE ... ADD COLUMN
+    IF NOT EXISTS`` so we manually inspect the table schema via
+    ``PRAGMA table_info`` and add the column if it is missing.  The function is
+    idempotent and commits the change immediately when a column is added.
+    """
+
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    cols = {row[1] for row in cur.fetchall()}  # row[1] is column name
+    if column in cols:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+    conn.commit()
+
 def init_schema(conn: sqlite3.Connection) -> None:
     """
     Create minimal schema needed by the bot.
@@ -52,6 +71,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_items_source ON items(source);
         """
     )
+    _ensure_column(conn, "items", "image_url", "TEXT")
     conn.commit()
     logger.info("Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db"))
 
@@ -81,14 +101,23 @@ def insert_item(conn: sqlite3.Connection, item: Dict[str, Any]) -> Optional[int]
     """
     Insert item into items table.
     Returns row id or None if ignored due to UNIQUE(url) conflict.
-    Expected keys: url, guid, title, title_hash, content, source, published_at
+    Expected keys: url, guid, title, title_hash, content, source, published_at, image_url
     """
-    fields = ("url","guid","title","title_hash","content","source","published_at")
+    fields = (
+        "url",
+        "guid",
+        "title",
+        "title_hash",
+        "content",
+        "source",
+        "published_at",
+        "image_url",
+    )
     values = tuple(item.get(k) for k in fields)
     cur = conn.execute(
         """
-        INSERT OR IGNORE INTO items (url, guid, title, title_hash, content, source, published_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO items (url, guid, title, title_hash, content, source, published_at, image_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         values,
     )
@@ -133,7 +162,8 @@ def _update_existing(conn: sqlite3.Connection, item_id: int, item: Dict[str, Any
                title_hash = COALESCE(?, title_hash),
                content = COALESCE(?, content),
                source = COALESCE(?, source),
-               published_at = COALESCE(?, published_at)
+               published_at = COALESCE(?, published_at),
+               image_url = COALESCE(?, image_url)
          WHERE id = ?
         """,
         (
@@ -143,6 +173,7 @@ def _update_existing(conn: sqlite3.Connection, item_id: int, item: Dict[str, Any
             item.get("content"),
             item.get("source"),
             item.get("published_at"),
+            item.get("image_url"),
             item_id,
         ),
     )
