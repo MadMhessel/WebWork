@@ -75,8 +75,11 @@ def enqueue_and_notify(item: Dict[str, str], conn: sqlite3.Connection) -> Option
     title = item.get("title","") or ""
     body  = item.get("content","") or ""
     url   = item.get("url","") or ""
+    images = item.get("image_file_ids") or item.get("tg_file_ids") or item.get("image_tg_file_ids") or []
+    if isinstance(images, str):
+        images = [images]
     header = f"Предмодерация #{mod_id}"
-    mid = publisher.send_moderation_preview(admin_chat, header, title, body, url, mod_id, cfg=config)
+    mid = publisher.send_moderation_preview(admin_chat, header, title, body, url, mod_id, images=images, cfg=config)
     if mid:
         set_tg_message_id(conn, mod_id, mid)
         logger.info("[QUEUED] id=%d | %s", mod_id, title[:140])
@@ -135,7 +138,7 @@ def _handle_callback_query(cb: Dict[str, Any], conn: sqlite3.Connection) -> None
     body  = it.get("content","") or ""
     source= it.get("source","") or ""
 
-    if action == "approve":
+    if action == "publish":
         # Публикуем в канал
         ok = publisher.publish_message(
             chat_id=config.CHANNEL_ID,
@@ -165,6 +168,11 @@ def _handle_callback_query(cb: Dict[str, Any], conn: sqlite3.Connection) -> None
         set_status(conn, mod_id, "rejected")
         publisher.answer_callback_query(cq_id, text="Отклонено ❌", show_alert=False)
         publisher.edit_moderation_message(chat_id, message_id, f"❌ Отклонено.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}", cfg=config)
+    elif action == "snooze":
+        publisher.answer_callback_query(cq_id, text="Отложено ⏰", show_alert=False)
+        publisher.edit_moderation_message(chat_id, message_id, f"⏰ Отложено.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}", cfg=config)
+    elif action == "edit":
+        publisher.answer_callback_query(cq_id, text="Редактирование не поддерживается", show_alert=True)
     else:
         publisher.answer_callback_query(cq_id, text="Неизвестное действие.", show_alert=False)
 
