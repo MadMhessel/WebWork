@@ -40,19 +40,20 @@ def fetch_from_sources(use_mock: bool = False, limit: int = 10) -> Iterable[Dict
     """
 
     for src in SOURCES:
+        url = src["url"]
         if use_mock:
             yield {
-                "title": f"Нижегородская область строительство news from {src}",
-                "url": src,
-                "guid": src,
+                "title": f"Нижегородская область строительство news from {src['name']}",
+                "url": url,
+                "guid": url,
             }
             continue
 
         try:
-            response = requests.get(src, timeout=10)
+            response = requests.get(url, timeout=10)
             response.raise_for_status()
         except requests.RequestException as exc:
-            print(f"Error fetching {src}: {exc}")
+            print(f"Error fetching {src['name']}: {exc}")
             continue
 
         feed = feedparser.parse(response.content)
@@ -61,7 +62,7 @@ def fetch_from_sources(use_mock: bool = False, limit: int = 10) -> Iterable[Dict
         if entries:
             for entry in entries[:limit]:
                 title = entry.get("title", "").strip()
-                link = entry.get("link", src).strip()
+                link = entry.get("link", url).strip()
                 guid = entry.get("id") or entry.get("guid") or link
                 yield {"title": title, "url": link, "guid": guid}
             continue
@@ -72,7 +73,7 @@ def fetch_from_sources(use_mock: bool = False, limit: int = 10) -> Iterable[Dict
             title = tag.get_text(strip=True)
             if not title:
                 continue
-            link = urljoin(src, tag["href"])
+            link = urljoin(url, tag["href"])
             yield {"title": title, "url": link, "guid": link}
 
 
