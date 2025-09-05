@@ -63,7 +63,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             title = normalize_whitespace(it.get("title") or "")
             content = normalize_whitespace(it.get("content") or "")
 
-            ok, region_ok, topic_ok, reason = filters.is_relevant_for_source(src, title, content)
+            ok, region_ok, topic_ok, reason = filters.is_relevant_for_source(title, content, src, config)
             if not ok:
                 logger.info("[SKIP] %s | %s | причина: %s", src, title, reason)
                 continue
