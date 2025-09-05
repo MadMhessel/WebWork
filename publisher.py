@@ -157,6 +157,14 @@ def _send_text(chat_id: str, text: str, parse_mode: str, reply_markup: Optional[
     return str(j.get("result", {}).get("message_id"))
 
 
+def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
+    """Send a simple text message. Returns message_id or None."""
+    parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
+    return _send_text(chat_id, text, parse_mode)
+
+
+def _send_photo(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
+    """Возвращает message_id при успехе, иначе None."""
 def _send_photo_file(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
     """Send a photo using a file-like object and return the message_id."""
     payload: Dict[str, Any] = {"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode}
@@ -444,10 +452,6 @@ def publish(item: Dict[str, Any], cfg=config) -> bool:
     return publish_item(item, cfg=cfg)
 
 
-
-
-
-
 def send_moderation_preview(
     chat_id: str,
     mod_title: str,
@@ -545,7 +549,6 @@ def send_moderation_preview(
     if mid:
         logger.info("Модерация отправлена: chat_id=%s, message_id=%s, mod_id=%d", chat_id, mid, mod_id)
     return mid
-
 
 
 def edit_moderation_message(chat_id: str, message_id: str, text: str, cfg=config) -> bool:
