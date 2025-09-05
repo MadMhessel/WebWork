@@ -1,7 +1,7 @@
 import html, logging, time, json
 from typing import Optional, Any, Dict
 import requests
-from . import config
+from . import config, rewrite
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +154,10 @@ def publish_message(chat_id: str, title: str, body: str, url: str, cfg=config) -
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
     limit = int(cfg.TELEGRAM_MESSAGE_LIMIT or 4096)
 
-    # Сборка и поджим
-    body_current = body or ""
+    # Переписываем текст перед отправкой
+    item = {"title": title, "content": body, "url": url}
+    rewritten = rewrite.maybe_rewrite_item(item, cfg)
+    body_current = rewritten.get("content", "") or ""
     message = _build_message(title or "", body_current, url or "", parse_mode)
 
     max_attempts = 4
@@ -209,8 +211,11 @@ def send_moderation_preview(chat_id: str, mod_title: str, title: str, body: str,
     Возвращает message_id, либо None при ошибке.
     """
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
+    item = {"title": title, "content": body, "url": url}
+    rewritten = rewrite.maybe_rewrite_item(item, cfg)
+    body_rewritten = rewritten.get("content", "") or ""
     header = _escape_html(mod_title)
-    preview = _build_message_html(title, body, url)
+    preview = _build_message_html(title, body_rewritten, url)
     text = f"<b>{header}</b>\n\n{preview}"
     reply_markup = {
         "inline_keyboard": [[
