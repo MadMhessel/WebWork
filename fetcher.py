@@ -150,18 +150,29 @@ def _extract_html_content(soup) -> str:
     return content
 
 
-def _extract_html_image_url(soup, base_url: str) -> str:
+def _extract_html_image_url(soup, base_url: str = "") -> str:
     if not soup:
         return ""
-    try:
-        og = soup.find("meta", attrs={"property": "og:image"})
-        if og and og.get("content"):
-            return urljoin(base_url, og["content"].strip())
-        img = soup.find("img")
-        if img and img.get("src"):
-            return urljoin(base_url, img["src"].strip())
-    except Exception as ex:
-        logger.warning("Отказ извлечения картинки %s: %s", base_url, ex)
+    # meta tags: OpenGraph and Twitter cards
+    for attrs in [
+        {"property": "og:image"},
+        {"property": "og:image:url"},
+        {"name": "twitter:image"},
+        {"name": "twitter:image:src"},
+        {"property": "twitter:image"},
+        {"property": "twitter:image:src"},
+    ]:
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content"):
+            return urljoin(base_url, tag["content"].strip())
+    # link rel="image_src"
+    link = soup.find("link", attrs={"rel": "image_src"})
+    if link and link.get("href"):
+        return urljoin(base_url, link["href"].strip())
+    # first <img>
+    img = soup.find("img")
+    if img and img.get("src"):
+        return urljoin(base_url, img["src"].strip())
     return ""
 
 
@@ -200,40 +211,6 @@ def _validate_image_url(url: str) -> str:
                 r.close()
         except Exception:
             pass
-def _extract_html_image_url(soup, base_url: str) -> str:
-    """Attempt to extract main image URL from HTML."""
-    if not soup:
-        return ""
-    og = soup.find("meta", attrs={"property": "og:image"})
-    if og and og.get("content"):
-        return urljoin(base_url, og["content"].strip())
-    img = soup.find("img")
-    if img and img.get("src"):
-        return urljoin(base_url, img.get("src").strip())
-def _extract_html_image_url(soup) -> str:
-    if not soup:
-        return ""
-    # meta tags: OpenGraph and Twitter cards
-    for attrs in [
-        {"property": "og:image"},
-        {"property": "og:image:url"},
-        {"name": "twitter:image"},
-        {"name": "twitter:image:src"},
-        {"property": "twitter:image"},
-        {"property": "twitter:image:src"},
-    ]:
-        tag = soup.find("meta", attrs=attrs)
-        if tag and tag.get("content"):
-            return tag["content"].strip()
-    # link rel="image_src"
-    link = soup.find("link", attrs={"rel": "image_src"})
-    if link and link.get("href"):
-        return link["href"].strip()
-    # first <img>
-    img = soup.find("img")
-    if img and img.get("src"):
-        return img["src"].strip()
-    return ""
 
 def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
     html_text = _requests_get(url)
@@ -251,10 +228,6 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
             image_url = _validate_image_url(img_candidate)
             if image_url:
                 logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
-            image_url = _extract_html_image_url(soup, url)
-            img = _extract_html_image_url(soup)
-            if img:
-                image_url = urljoin(url, img)
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
             soup = None
@@ -286,7 +259,6 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
         "content": content,
         "published_at": published_at,
         "image_url": image_url or "",
-        "image_url": image_url,
     }
 
 # -------------------- RSS --------------------
