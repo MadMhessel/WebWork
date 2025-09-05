@@ -1,19 +1,21 @@
 from __future__ import annotations
 import hashlib
 import logging
+import os
 import re
 from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional
 from urllib.parse import urlparse
 
-import requests
 try:  # Pillow is optional during runtime
     from PIL import Image  # type: ignore
 except Exception:  # pragma: no cover
     Image = None  # type: ignore
 
-from . import config
+import sqlite3
+from . import config, db
+from .fetcher import HTTP_SESSION, DEFAULT_TIMEOUT
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +43,28 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
         if not u or u in seen:
             continue
         seen.add(u)
-        out.append(ImageCandidate(url=u))
+        if _url_allowed(u):
+            out.append(ImageCandidate(url=u))
     return out
+
+
+def _url_allowed(url: str) -> bool:
+    """Filter URL by scheme, denylist patterns and extension."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    low = url.lower()
+    deny = getattr(config, "IMAGE_DENYLIST_DOMAINS", set())
+    if any(d in low for d in deny):
+        return False
+    ext = os.path.splitext(parsed.path)[1].lower()
+    allowed_ext = getattr(config, "IMAGE_ALLOWED_EXT", set())
+    if allowed_ext and ext not in allowed_ext:
+        return False
+    return True
 
 
 def _domain_allowed(url: str) -> bool:
@@ -64,22 +86,54 @@ def pick_best(candidates: List[ImageCandidate]) -> Optional[ImageCandidate]:
     return None
 
 
-def ensure_tg_file_id(image_url: str) -> Optional[str]:
-    """Ensure Telegram file id for image, applying filters and caching by hash."""
+def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None) -> Optional[tuple[str, str]]:
+    """Ensure Telegram file id for image, applying filters and caching by hash.
+
+    Returns tuple ``(file_id, image_hash)`` or ``None`` if validation fails.
+    Results are cached in the ``images_cache`` table when ``conn`` is provided.
+    """
     if not image_url or not getattr(config, "ALLOW_IMAGES", True):
         return None
+
+    if conn is None:
+        try:
+            conn = db.connect()
+        except Exception:  # pragma: no cover
+            conn = None
+
+    if conn is not None:
+        cur = conn.execute(
+            "SELECT tg_file_id, hash FROM images_cache WHERE src_url = ?",
+            (image_url,),
+        )
+        row = cur.fetchone()
+        if row:
+            return row["tg_file_id"], row["hash"]
+
     try:
-        timeout = int(getattr(config, "IMAGE_TIMEOUT", 15))
-        r = requests.get(image_url, timeout=timeout)
+        head = HTTP_SESSION.head(image_url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        ctype = head.headers.get("Content-Type", "")
+        if head.status_code != 200 or not ctype.startswith("image/"):
+            return None
+        clen = int(head.headers.get("Content-Length", "0") or "0")
+        if clen < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
+            return None
+        r = HTTP_SESSION.get(image_url, timeout=DEFAULT_TIMEOUT)
         if r.status_code != 200:
             return None
         data = r.content
         if len(data) < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
             return None
         if Image is None:
-            return image_url
+            return None
         with Image.open(BytesIO(data)) as im:
             w, h = im.size
+        if (
+            w < int(getattr(config, "IMAGE_MIN_EDGE", 0))
+            or h < int(getattr(config, "IMAGE_MIN_EDGE", 0))
+            or w * h < int(getattr(config, "IMAGE_MIN_AREA", 0))
+        ):
+            return None
         ratio = w / float(h or 1)
         min_ratio = float(getattr(config, "IMAGE_MIN_RATIO", 0.0))
         max_ratio = float(getattr(config, "IMAGE_MAX_RATIO", 10.0))
@@ -88,9 +142,16 @@ def ensure_tg_file_id(image_url: str) -> Optional[str]:
         ihash = hashlib.sha256(data).hexdigest()
         cached = images_cache.get(ihash)
         if cached:
-            return cached
-        images_cache[ihash] = image_url
-        return image_url
+            return cached, ihash
+        file_id = f"file_{ihash[:32]}"
+        images_cache[ihash] = file_id
+        if conn is not None:
+            conn.execute(
+                "INSERT OR REPLACE INTO images_cache(src_url, hash, width, height, tg_file_id) VALUES (?,?,?,?,?)",
+                (image_url, ihash, w, h, file_id),
+            )
+            conn.commit()
+        return file_id, ihash
     except Exception as ex:  # pragma: no cover
         log.debug("ensure_tg_file_id failed for %s: %s", image_url, ex)
         return None

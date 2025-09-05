@@ -5,6 +5,12 @@ BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", "").strip()  # пример: "@my_news_channel" или числовой ID
 RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
+# === HTTP-клиент ===
+HTTP_TIMEOUT_CONNECT: float = float(os.getenv("HTTP_TIMEOUT_CONNECT", "5"))
+HTTP_TIMEOUT_READ: float = float(os.getenv("HTTP_TIMEOUT_READ", "15"))
+HTTP_RETRY_TOTAL: int = int(os.getenv("HTTP_RETRY_TOTAL", "3"))
+HTTP_BACKOFF: float = float(os.getenv("HTTP_BACKOFF", "0.5"))
+
 # === Флаги и режимы ===
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}
 STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "true").lower() in {"1", "true", "yes"}
@@ -21,6 +27,16 @@ IMAGE_ALLOWED_DOMAINS = set(
 )
 IMAGE_MIN_RATIO: float = float(os.getenv("IMAGE_MIN_RATIO", "0.2"))
 IMAGE_MAX_RATIO: float = float(os.getenv("IMAGE_MAX_RATIO", "3.0"))
+IMAGE_ALLOWED_EXT = set(
+    e.strip().lower()
+    for e in os.getenv("IMAGE_ALLOWED_EXT", ".jpg,.jpeg,.png,.webp").split(",")
+    if e.strip()
+)
+IMAGE_DENYLIST_DOMAINS = set(
+    d.strip().lower()
+    for d in os.getenv("IMAGE_DENYLIST_DOMAINS", "mc.yandex.ru,top-fwz1.mail.ru,counter,logo,pixel").split(",")
+    if d.strip()
+)
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -36,14 +52,8 @@ ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "true").lower() in {"1", "true"
 MAX_MEDIA_PER_POST: int = int(os.getenv("MAX_MEDIA_PER_POST", "10"))
 IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "320"))
 IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", str(320 * 320)))
-IMAGE_DOMAINS_DENYLIST = set(
-    d.strip().lower()
-    for d in os.getenv("IMAGE_DOMAINS_DENYLIST", "").split(",")
-    if d.strip()
-)
 SNOOZE_MINUTES: int = int(os.getenv("SNOOZE_MINUTES", "0"))
 REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
-RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === Регулируемые параметры фильтра ===
 FILTER_HEAD_CHARS: int = int(os.getenv("FILTER_HEAD_CHARS", "400"))
@@ -234,20 +244,21 @@ CONSTRUCTION_KEYWORDS = [
 #  - type="html_list" — страница-лента с карточками; "selectors" все опциональны.
 SOURCES = [
     # === ОФИЦИАЛЬНЫЕ (RSS) — остаются как есть ===
-    {"name": "Минград НО — пресс-центр",      "type": "rss", "url": "https://mingrad.nobl.ru/presscenter/news/rss/"},
-    {"name": "Госстройнадзор НО — пресс-центр","type": "rss", "url": "https://nngosnadzor.nobl.ru/presscenter/news/rss/"},
-    {"name": "Минтранс НО — пресс-центр",     "type": "rss", "url": "https://mintrans.nobl.ru/presscenter/news/rss/"},
-    {"name": "г.о. Бор — пресс-центр",        "type": "rss", "url": "https://bor.nobl.ru/presscenter/news/rss/"},
-    {"name": "Арзамас — пресс-центр",         "type": "rss", "url": "https://arzamas.nobl.ru/presscenter/news/rss/"},
-    {"name": "Кстовский округ — пресс-центр", "type": "rss", "url": "https://kstovo.nobl.ru/presscenter/news/rss/"},
-    {"name": "Павлово — пресс-центр",         "type": "rss", "url": "https://pavlovo.nobl.ru/presscenter/news/rss/"},
-    {"name": "Гордума Нижнего Новгорода",     "type": "rss", "url": "https://www.duma.nnov.ru/rss"},
-    {"name": "ИА «Время Н»",                  "type": "rss", "url": "https://www.vremyan.ru/rss/news.rss"},
+    {"name": "Минград НО — пресс-центр",      "type": "rss", "url": "https://mingrad.nobl.ru/presscenter/news/rss/", "enabled": True},
+    {"name": "Госстройнадзор НО — пресс-центр","type": "rss", "url": "https://nngosnadzor.nobl.ru/presscenter/news/rss/", "enabled": True},
+    {"name": "Минтранс НО — пресс-центр",     "type": "rss", "url": "https://mintrans.nobl.ru/presscenter/news/rss/", "enabled": True},
+    {"name": "г.о. Бор — пресс-центр",        "type": "rss", "url": "https://bor.nobl.ru/presscenter/news/rss/", "enabled": True},
+    {"name": "Арзамас — пресс-центр",         "type": "rss", "url": "https://arzamas.nobl.ru/presscenter/news/rss/", "enabled": True},
+    {"name": "Кстовский округ — пресс-центр", "type": "rss", "url": "https://kstovo.nobl.ru/presscenter/news/rss/", "enabled": True},
+    {"name": "Павлово — пресс-центр",         "type": "rss", "url": "https://pavlovo.nobl.ru/presscenter/news/rss/", "enabled": True},
+    {"name": "Гордума Нижнего Новгорода",     "type": "rss", "url": "https://www.duma.nnov.ru/rss", "enabled": True},
+    {"name": "ИА «Время Н»",                  "type": "rss", "url": "https://www.vremyan.ru/rss/news.rss", "enabled": True},
 
     # === HTML-ЛИСТИНГИ (новые) ===
     # Администрация Нижнего Новгорода — раздел «Строительство»
     {"name": "Администрация НН — Строительство", "type": "html_list",
      "url": "https://admnnov.ru/?id=48",
+     "enabled": False,
      "selectors": {
         "item": "article, .news-item, .entry, .post, li",
         "link": "a",
@@ -259,6 +270,7 @@ SOURCES = [
     # Правительство НО — лента «Все новости»
     {"name": "Правительство НО — Новости", "type": "html_list",
      "url": "https://nobl.ru/news/",
+     "enabled": True,
      "selectors": {
         "item": "article, .news__item, .card, li",
         "link": "a",
@@ -270,6 +282,7 @@ SOURCES = [
     # NewsNN — тег «Строительство»
     {"name": "NewsNN — Строительство", "type": "html_list",
      "url": "https://www.newsnn.ru/tags/stroitelstvo",
+     "enabled": True,
      "selectors": {
         "item": "article, .card, .news-item, li",
         "link": "a",
@@ -281,6 +294,7 @@ SOURCES = [
     # Newsroom24 — основная лента
     {"name": "Newsroom24 — Новости", "type": "html_list",
      "url": "https://newsroom24.ru/news/",
+     "enabled": True,
      "selectors": {
         "item": "article, .news, .news-item, .card, li",
         "link": "a",
@@ -292,6 +306,7 @@ SOURCES = [
     # Говорит Нижний — главная/новости
     {"name": "Говорит Нижний — Новости", "type": "html_list",
      "url": "https://govoritnn.ru/",
+     "enabled": True,
      "selectors": {
         "item": "article, .post, .entry, .card, .news, li",
         "link": "a",
@@ -303,6 +318,7 @@ SOURCES = [
     # НТА-Приволжье — главная/новости
     {"name": "НТА-Приволжье — Новости", "type": "html_list",
      "url": "https://www.nta-nn.ru/",
+     "enabled": True,
      "selectors": {
         "item": "article, .news-item, .news, .card, li",
         "link": "a",
@@ -314,6 +330,7 @@ SOURCES = [
     # GIPERNN — Журнал/Жилье/Новости
     {"name": "GIPERNN — Жилье/Новости", "type": "html_list",
      "url": "https://www.gipernn.ru/zhurnal/zhile/novosti",
+     "enabled": True,
      "selectors": {
         "item": "article, .article, .news-item, .card, li",
         "link": "a",
@@ -325,6 +342,8 @@ SOURCES = [
     # Столица Нижний — медиа-портал
     {"name": "Столица Нижний (STN Media)", "type": "html_list",
      "url": "https://stnmedia.ru/",
+     "enabled": True,
+     "timeout": (5, 30),
      "selectors": {
         "item": "article, .news-item, .card, li",
         "link": "a",
@@ -336,6 +355,7 @@ SOURCES = [
     # STN REALTY — LIVE
     {"name": "STN REALTY — LIVE", "type": "html_list",
      "url": "https://stn-realty.ru/live/",
+     "enabled": True,
      "selectors": {
         "item": "article, .news-item, .card, li",
         "link": "a",
@@ -347,6 +367,7 @@ SOURCES = [
     # В городе N — новости
     {"name": "В городе N — Новости", "type": "html_list",
      "url": "https://vgoroden.ru/news/",
+     "enabled": False,
      "selectors": {
         "item": "article, .news-item, .news, .card, li",
         "link": "a",
@@ -358,6 +379,7 @@ SOURCES = [
     # NN.RU — Новости
     {"name": "NN.RU — Новости", "type": "html_list",
      "url": "https://www.nn.ru/news/",
+     "enabled": True,
      "selectors": {
         "item": "article, .news, .card, li",
         "link": "a",
@@ -369,6 +391,7 @@ SOURCES = [
     # NN.RU — Недвижимость
     {"name": "NN.RU — Недвижимость", "type": "html_list",
      "url": "https://www.nn.ru/realty/",
+     "enabled": True,
      "selectors": {
         "item": "article, .news, .card, li",
         "link": "a",
@@ -380,6 +403,7 @@ SOURCES = [
     # Домострой-НН — Новости
     {"name": "Домострой-НН — Новости", "type": "html_list",
      "url": "https://www.domostroynn.ru/novosti",
+     "enabled": True,
      "selectors": {
         "item": "article, .news-item, .card, li",
         "link": "a",
@@ -393,7 +417,8 @@ SOURCES = [
 DB_PATH: str = os.getenv("DB_PATH", "newsbot.db")
 
 # === Telegram ===
-TELEGRAM_PARSE_MODE: str = os.getenv("TELEGRAM_PARSE_MODE", "HTML").strip()
+PARSE_MODE: str = os.getenv("PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML")).strip()
+TELEGRAM_PARSE_MODE: str = PARSE_MODE
 TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = os.getenv("TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", "true").lower() in {"1", "true", "yes"}
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 ON_SEND_ERROR: str = os.getenv("ON_SEND_ERROR", "retry").strip().lower()
