@@ -59,3 +59,34 @@ def remember(db_conn, item: dict) -> None:
         db.upsert_item(db_conn, record)
     except Exception as ex:
         logger.warning("Не удалось сохранить элемент в БД: %s", ex)
+
+
+def mark_published(
+    *,
+    url: Optional[str],
+    guid: Optional[str],
+    title: Optional[str],
+    published_at: Optional[str],
+    source: Optional[str],
+    db_conn,
+) -> None:
+    """Пометить материал как опубликованный, сохранив его в таблице ``items``.
+
+    В БД записываются URL/GUID, нормализованный хеш заголовка и прочие
+    основные поля, чтобы в дальнейшем корректно работать с антидублем.
+    Ошибки при записи не считаются фатальными и логируются в warn.
+    """
+
+    record = {
+        "url": (url or "").strip(),
+        "guid": (guid or "").strip(),
+        "title": title or "",
+        "title_hash": calc_title_hash(title or ""),
+        "content": None,
+        "source": source or "",
+        "published_at": published_at or "",
+    }
+    try:
+        db.upsert_item(db_conn, record)
+    except Exception as ex:  # pragma: no cover - ошибки не критичны
+        logger.warning("Не удалось сохранить элемент в БД: %s", ex)
