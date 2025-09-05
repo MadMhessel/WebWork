@@ -2,7 +2,7 @@ import html, logging, time, json
 from io import BytesIO
 from typing import Optional, Any, Dict, Tuple, List
 import requests
-from . import config, rewrite
+from . import config, rewrite, db
 from .utils import shorten_url
 
 logger = logging.getLogger(__name__)
@@ -198,6 +198,10 @@ def answer_callback_query(callback_query_id: str, text: Optional[str] = None, sh
     return bool(j)
 
 
+def _send_photo(chat_id: str, photo: str, caption: str, parse_mode: str) -> Optional[Tuple[str, Optional[str]]]:
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "photo": photo,
 def _send_photo(chat_id: str, photo_id: str, caption: str, parse_mode: str, reply_markup: Optional[dict] = None) -> Optional[str]:
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
@@ -210,7 +214,13 @@ def _send_photo(chat_id: str, photo_id: str, caption: str, parse_mode: str, repl
     j = _api_post("sendPhoto", payload)
     if not j:
         return None
-    return str(j.get("result", {}).get("message_id"))
+    result = j.get("result", {})
+    mid = str(result.get("message_id"))
+    photos = result.get("photo") or []
+    file_id = None
+    if photos:
+        file_id = photos[-1].get("file_id")
+    return mid, file_id
 
 
 def _send_media_group(chat_id: str, file_ids: List[str], caption: str, parse_mode: str) -> bool:
@@ -261,8 +271,9 @@ def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Op
     if image_url:
         logger.debug("Картинка для публикации: %s", shorten_url(image_url))
         try:
-            mid = _send_photo(chat_id, image_url, message, parse_mode)
-            if mid:
+            res = _send_photo(chat_id, image_url, message, parse_mode)
+            if res:
+                mid, _ = res
                 logger.info(
                     "Сообщение с картинкой отправлено: chat_id=%s, message_id=%s, len=%d",
                     chat_id,
@@ -322,15 +333,91 @@ def publish_item(item: Dict[str, Any], cfg=config) -> bool:
     image_url = item.get("image_url") or ""
     return publish_message(chat_id, title, body, url, image_url=image_url, cfg=cfg)
 
+
+def publish_to_channel(item_id: int, text_override: Optional[str] = None, cfg=config) -> Optional[str]:
+    """Публикует элемент из moderation_queue в канал.
+
+    Возвращает channel_message_id при успехе, иначе None. Повторные вызовы
+    не создают дубль, а возвращают уже сохранённый message_id.
+    """
+    conn = db.connect()
+    cur = conn.execute("SELECT * FROM moderation_queue WHERE id = ?", (item_id,))
+    row = cur.fetchone()
+    if not row:
+        logger.error("mod_id=%s не найден в moderation_queue", item_id)
+        return None
+    row = dict(row)
+
+    existing = row.get("channel_message_id")
+    if existing:
+        conn.close()
+        return str(existing)
+
+    chat_id = str(cfg.CHANNEL_ID or "")
+    if not chat_id:
+        logger.error("CHANNEL_ID пуст — публикация невозможна")
+        return None
+
+    title = row.get("title") or ""
+    body = text_override if text_override is not None else (row.get("content") or "")
+    url = row.get("url") or ""
+    image_url = row.get("image_url") or ""
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
 
-    if getattr(cfg, "ALLOW_IMAGES", False) and image_url:
-        img = _download_image(image_url, cfg)
-        if img:
-            img_data, mime = img
-            if parse_mode == "MARKDOWNV2":
-                caption = f"{_escape_markdown_v2(title)}\n\n{_escape_url_md_v2(url)}"
+    item = {"title": title, "content": body, "url": url}
+    rewritten = rewrite.maybe_rewrite_item(item, cfg)
+    body_current = rewritten.get("content", "") or ""
+    message = _build_message(title or "", body_current, url or "", parse_mode)
+
+    cache = conn.execute(
+        "SELECT tg_file_id, channel_message_id FROM images_cache WHERE item_id = ?",
+        (item_id,),
+    ).fetchone()
+    if cache and cache["channel_message_id"]:
+        conn.close()
+        return str(cache["channel_message_id"])
+    tg_file_id = cache["tg_file_id"] if cache else None
+
+    retries = int(getattr(cfg, "RETRY_LIMIT", 3))
+    delay = 1.0
+    mid: Optional[str] = None
+    for attempt in range(retries):
+        try:
+            if image_url:
+                photo = tg_file_id or image_url
+                res = _send_photo(chat_id, photo, message, parse_mode)
+                if res:
+                    mid, new_file_id = res
+                    if new_file_id:
+                        tg_file_id = new_file_id
+                    break
             else:
+                mid = _send_text(chat_id, message, parse_mode)
+                if mid:
+                    break
+        except Exception as ex:
+            logger.warning("Ошибка отправки в канал: %s", ex)
+        time.sleep(delay)
+        delay *= 2
+
+    if not mid:
+        logger.error("Не удалось отправить сообщение mod_id=%s", item_id)
+        conn.close()
+        return None
+
+    conn.execute(
+        "INSERT INTO images_cache (item_id, tg_file_id, channel_message_id) VALUES (?, ?, ?) "
+        "ON CONFLICT(item_id) DO UPDATE SET tg_file_id=COALESCE(excluded.tg_file_id, tg_file_id), "
+        "channel_message_id=excluded.channel_message_id",
+        (item_id, tg_file_id, mid),
+    )
+    conn.execute(
+        "UPDATE moderation_queue SET channel_message_id = ? WHERE id = ?",
+        (mid, item_id),
+    )
+    conn.commit()
+    conn.close()
+    return mid
                 caption = f"{_escape_html(title)}\n\n{_escape_html(url)}"
             mid = _send_photo_file(chat_id, img_data, mime, caption, parse_mode)
             if mid:

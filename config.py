@@ -3,6 +3,7 @@ import os
 # === Базовые настройки бота ===
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", "").strip()  # пример: "@my_news_channel" или числовой ID
+RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === Флаги и режимы ===
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}

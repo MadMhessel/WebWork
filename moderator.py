@@ -36,6 +36,22 @@ def already_pending(conn: sqlite3.Connection, url: str) -> Optional[int]:
 def insert_pending(conn: sqlite3.Connection, item: Dict[str, str]) -> int:
     cur = conn.execute(
         """
+        INSERT OR IGNORE INTO moderation_queue (source, guid, url, title, content, published_at, image_url, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+        """,
+        (
+            item.get("source", ""),
+            item.get("guid"),
+            item.get("url", ""),
+            item.get("title", ""),
+            item.get("content", ""),
+            item.get("published_at", ""),
+            item.get("image_url", ""),
+        ),
+    )
+def insert_pending(conn: sqlite3.Connection, item: Dict[str, str]) -> int:
+    cur = conn.execute(
+        """
         INSERT OR IGNORE INTO moderation_queue (source, guid, url, title, content, published_at, status)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
@@ -60,6 +76,16 @@ def insert_pending(conn: sqlite3.Connection, item: Dict[str, str]) -> int:
 def set_status(conn: sqlite3.Connection, mod_id: int, status: str) -> None:
     conn.execute("UPDATE moderation_queue SET status = ? WHERE id = ?", (status, mod_id))
 
+def set_tg_message_id(conn: sqlite3.Connection, mod_id: int, message_id: str) -> None:
+    conn.execute("UPDATE moderation_queue SET tg_message_id = ? WHERE id = ?", (message_id, mod_id))
+    conn.commit()
+
+def set_channel_message_id(conn: sqlite3.Connection, mod_id: int, message_id: str) -> None:
+    conn.execute(
+        "UPDATE moderation_queue SET channel_message_id = ? WHERE id = ?",
+        (message_id, mod_id),
+    )
+    conn.commit()
 def set_tg_message_id(conn: sqlite3.Connection, mod_id: int, message_id: str) -> None:
     conn.execute("UPDATE moderation_queue SET tg_message_id = ? WHERE id = ?", (message_id, mod_id))
 
@@ -232,6 +258,36 @@ def handle_callback(cb: Dict[str, Any], conn: sqlite3.Connection) -> None:
             publisher.answer_callback_query(cq_id, text="Запись не найдена.", show_alert=True)
         return
 
+    title = it.get("title","") or ""
+    url   = it.get("url","") or ""
+    body  = it.get("content","") or ""
+    source= it.get("source","") or ""
+
+    if action == "approve":
+        # Публикуем в канал
+        channel_mid = publisher.publish_to_channel(mod_id)
+        if channel_mid:
+            # Запись в антидубль и смена статуса
+            dedup.mark_published(
+                url=url,
+                guid=it.get("guid"),
+                title=title,
+                published_at=it.get("published_at") or "",
+                source=source,
+                image_url=it.get("image_url"),
+                db_conn=conn,
+            )
+            set_status(conn, mod_id, "approved")
+            set_channel_message_id(conn, mod_id, channel_mid)
+            publisher.answer_callback_query(cq_id, text="Опубликовано ✅", show_alert=False)
+            publisher.edit_moderation_message(
+                chat_id,
+                message_id,
+                f"✅ Одобрено и отправлено в канал.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}",
+                cfg=config,
+            )
+        else:
+            publisher.answer_callback_query(cq_id, text="Ошибка отправки в канал.", show_alert=True)
     title = it.get("title", "") or ""
     url = it.get("url", "") or ""
     body = it.get("content", "") or ""

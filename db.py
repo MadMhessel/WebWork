@@ -104,6 +104,20 @@ def init_schema(conn: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(conn, "items", "image_url", "TEXT")
+    try:
+        _ensure_column(conn, "moderation_queue", "image_url", "TEXT")
+        _ensure_column(conn, "moderation_queue", "channel_message_id", "TEXT")
+    except Exception:
+        pass
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS images_cache (
+            item_id INTEGER PRIMARY KEY,
+            tg_file_id TEXT,
+            channel_message_id TEXT
+        );
+        """
+    )
     conn.commit()
     logger.info("Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db"))
 
