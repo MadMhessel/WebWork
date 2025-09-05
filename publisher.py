@@ -1,6 +1,6 @@
 import html, logging, time, json
 from io import BytesIO
-from typing import Optional, Any, Dict, Tuple, List
+from typing import Optional, Any, Dict, Tuple, List, Union
 import requests
 from . import config, rewrite, db
 from .utils import shorten_url
@@ -158,21 +158,53 @@ def _send_text(chat_id: str, text: str, parse_mode: str, reply_markup: Optional[
 
 
 def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
-    """Send a simple text message. Returns message_id or None."""
+    """Send a simple text message. Returns ``message_id`` or ``None``."""
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
     return _send_text(chat_id, text, parse_mode)
 
 
+def _send_photo(
+    chat_id: str,
+    photo: Union[BytesIO, str],
+    caption: str,
+    parse_mode: str,
+    mime: Optional[str] = None,
+    reply_markup: Optional[dict] = None,
+) -> Optional[Tuple[str, Optional[str]]]:
+    """
+    Отправляет фотографию в чат.
+
+    ``photo`` может быть либо ``BytesIO`` с данными изображения для загрузки,
+    либо строкой с уже кешированным ``file_id`` Telegram. В первом случае
+    необходимо передать MIME-тип в параметре ``mime``.
+
+    Возвращает пару ``(message_id, file_id)`` при успехе или ``None`` при
+    ошибке.
+    """
 def _send_photo(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
     """Возвращает message_id при успехе, иначе None."""
 def _send_photo_file(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
     """Send a photo using a file-like object and return the message_id."""
     payload: Dict[str, Any] = {"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode}
-    files = {"photo": ("image", image, mime)}
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+
+    files = None
+    if isinstance(photo, BytesIO):
+        if not mime:
+            raise ValueError("MIME type required for BytesIO upload")
+        files = {"photo": ("image", photo, mime)}
+    else:
+        payload["photo"] = photo
+
     j = _api_post("sendPhoto", payload, files=files)
     if not j:
         return None
-    return str(j.get("result", {}).get("message_id"))
+    result = j.get("result", {})
+    mid = str(result.get("message_id"))
+    photos = result.get("photo") or []
+    file_id = photos[-1].get("file_id") if photos else None
+    return mid, file_id
 
 
 def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
@@ -274,7 +306,13 @@ def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Op
     if image_url:
         logger.debug("Картинка для публикации: %s", shorten_url(image_url))
         try:
-            res = _send_photo(chat_id, image_url, message, parse_mode)
+            img = _download_image(image_url, cfg)
+            res = None
+            if img:
+                img_data, mime = img
+                res = _send_photo(chat_id, img_data, message, parse_mode, mime=mime)
+            else:
+                logger.debug("Изображение не загружено")
             if res:
                 mid, _ = res
                 logger.info(
@@ -387,8 +425,14 @@ def publish_to_channel(item_id: int, text_override: Optional[str] = None, cfg=co
     for attempt in range(retries):
         try:
             if image_url:
-                photo = tg_file_id or image_url
-                res = _send_photo(chat_id, photo, message, parse_mode)
+                if tg_file_id:
+                    res = _send_photo(chat_id, tg_file_id, message, parse_mode)
+                else:
+                    img = _download_image(image_url, cfg)
+                    res = None
+                    if img:
+                        img_data, mime = img
+                        res = _send_photo(chat_id, img_data, message, parse_mode, mime=mime)
                 if res:
                     mid, new_file_id = res
                     if new_file_id:
@@ -421,6 +465,7 @@ def publish_to_channel(item_id: int, text_override: Optional[str] = None, cfg=co
     conn.commit()
     conn.close()
     return mid
+
     # The code below was previously misplaced and caused indentation errors.
     # It appears to be an alternative flow for sending images before falling back
     # to text, but the surrounding context is unclear. Commented out to maintain
@@ -535,15 +580,17 @@ def send_moderation_preview(
                 )
             return mid
         else:
-            mid = _send_photo(chat_id, imgs[0], caption_text, parse_mode, reply_markup=reply_markup)
-            if mid:
+            res = _send_photo(chat_id, imgs[0], caption_text, parse_mode, reply_markup=reply_markup)
+            if res:
+                mid, _ = res
                 logger.info(
                     "Модерация отправлена: chat_id=%s, message_id=%s, mod_id=%d (photo)",
                     chat_id,
                     mid,
                     mod_id,
                 )
-            return mid
+                return mid
+            return None
 
     mid = _send_text(chat_id, message_text, parse_mode, reply_markup=reply_markup)
     if mid:
