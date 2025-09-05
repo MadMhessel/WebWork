@@ -141,6 +141,21 @@ def send_preview(item: Dict[str, str], mod_id: int, conn: sqlite3.Connection) ->
         logger.error("ADMIN_CHAT_ID не задан — модерация невозможна.")
         return None
 
+    # не ставим дубль в pending
+    existed = already_pending(conn, item.get("url",""))
+    if existed:
+        logger.info("[QUEUE] уже в модерации (id=%d): %s", existed, item.get("title","")[:140])
+        return existed
+
+    mod_id = insert_pending(conn, item)
+    title = item.get("title","") or ""
+    body  = item.get("content","") or ""
+    url   = item.get("url","") or ""
+    images = item.get("image_file_ids") or item.get("tg_file_ids") or item.get("image_tg_file_ids") or []
+    if isinstance(images, str):
+        images = [images]
+    header = f"Предмодерация #{mod_id}"
+    mid = publisher.send_moderation_preview(admin_chat, header, title, body, url, mod_id, images=images, cfg=config)
     title = item.get("title", "") or ""
     body = item.get("content", "") or ""
     url = item.get("url", "") or ""
@@ -222,6 +237,43 @@ def handle_callback(cb: Dict[str, Any], conn: sqlite3.Connection) -> None:
     body = it.get("content", "") or ""
     source = it.get("source", "") or ""
 
+    if action == "publish":
+        # Публикуем в канал
+        ok = publisher.publish_message(
+            chat_id=config.CHANNEL_ID,
+            title=title,
+            body=body,
+            url=url,
+            cfg=config,
+        )
+        if ok:
+            # Запись в антидубль и смена статуса
+            from . import db as dbmod
+            dedup.mark_published(
+                url=url,
+                guid=it.get("guid"),
+                title=title,
+                published_at=it.get("published_at") or "",
+                source=source,
+                image_url=it.get("image_url"),
+                db_conn=conn,
+            )
+            set_status(conn, mod_id, "approved")
+            publisher.answer_callback_query(cq_id, text="Опубликовано ✅", show_alert=False)
+            publisher.edit_moderation_message(chat_id, message_id, f"✅ Одобрено и отправлено в канал.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}", cfg=config)
+        else:
+            publisher.answer_callback_query(cq_id, text="Ошибка отправки в канал.", show_alert=True)
+    elif action == "reject":
+        set_status(conn, mod_id, "rejected")
+        publisher.answer_callback_query(cq_id, text="Отклонено ❌", show_alert=False)
+        publisher.edit_moderation_message(chat_id, message_id, f"❌ Отклонено.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}", cfg=config)
+    elif action == "snooze":
+        publisher.answer_callback_query(cq_id, text="Отложено ⏰", show_alert=False)
+        publisher.edit_moderation_message(chat_id, message_id, f"⏰ Отложено.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}", cfg=config)
+    elif action == "edit":
+        publisher.answer_callback_query(cq_id, text="Редактирование не поддерживается", show_alert=True)
+    else:
+        publisher.answer_callback_query(cq_id, text="Неизвестное действие.", show_alert=False)
     if action == "approve":
         with conn:
             set_status(conn, mod_id, APPROVED)
