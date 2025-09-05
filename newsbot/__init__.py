@@ -3,4 +3,5 @@
 __all__ = [
     "config",
     "bot",
+    "storage",
 ]

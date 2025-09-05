@@ -8,6 +8,7 @@ import time
 from typing import Iterable, Dict
 
 from .config import KEYWORDS, SOURCES
+from . import storage
 
 
 def fetch_from_sources(use_mock: bool = False) -> Iterable[Dict[str, str]]:
@@ -30,12 +31,21 @@ def filter_items(items: Iterable[Dict[str, str]]) -> Iterable[Dict[str, str]]:
 
 
 def publish_items(items: Iterable[Dict[str, str]], dry_run: bool = False) -> None:
-    """Publish items or print them in dry-run mode."""
+    """Publish items or print them in dry-run mode with deduplication."""
     for item in items:
+        url = item.get("url")
+        guid = item.get("guid")
+        title = item.get("title")
+
+        if storage.is_published(url=url, guid=guid, title=title):
+            print(f"[DUP-DB] {title}")
+            continue
+
         if dry_run:
-            print(f"[DRY-RUN] Would publish: {item['title']}")
+            print(f"[DRY-RUN: READY] {title}")
         else:
-            print(f"Published: {item['title']}")
+            print(f"[PUBLISHED] {title}")
+            storage.mark_published(url=url, guid=guid, title=title)
 
 
 def run_once(dry_run: bool = False, use_mock: bool = False) -> None:
