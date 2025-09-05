@@ -53,37 +53,56 @@ def get_item(conn: sqlite3.Connection, mod_id: int) -> Optional[Dict[str, Any]]:
 
 # --------------- Moderation sending ----------------
 
-def enqueue_and_notify(item: Dict[str, str], conn: sqlite3.Connection) -> Optional[int]:
-    """
-    Ставит новость в очередь модерации (если ещё не стоит) и отправляет предпросмотр модератору.
-    Возвращает mod_id или None при ошибке/отключенной модерации.
-    """
+def enqueue_item(item: Dict[str, str], conn: sqlite3.Connection) -> Optional[int]:
+    """Поместить новость в очередь модерации со статусом ``pending``."""
+
     if not config.ENABLE_MODERATION:
         return None
+
+    existed = already_pending(conn, item.get("url", ""))
+    if existed:
+        logger.info("[QUEUE] уже в модерации (id=%d): %s", existed, item.get("title", "")[:140])
+        return existed
+
+    try:
+        mod_id = insert_pending(conn, item)
+        logger.info("[QUEUED] id=%d | %s", mod_id, (item.get("title", "") or "")[:140])
+        return mod_id
+    except Exception as ex:  # pragma: no cover
+        logger.exception("Ошибка постановки в очередь модерации: %s", ex)
+        return None
+
+
+def send_preview(item: Dict[str, str], mod_id: int, conn: sqlite3.Connection) -> Optional[str]:
+    """Отправить предпросмотр модератору для записи из очереди."""
+
+    if not config.ENABLE_MODERATION:
+        return None
+
     admin_chat = (getattr(config, "ADMIN_CHAT_ID", "") or "").strip()
     if not admin_chat:
         logger.error("ADMIN_CHAT_ID не задан — модерация невозможна.")
         return None
 
-    # не ставим дубль в pending
-    existed = already_pending(conn, item.get("url",""))
-    if existed:
-        logger.info("[QUEUE] уже в модерации (id=%d): %s", existed, item.get("title","")[:140])
-        return existed
-
-    mod_id = insert_pending(conn, item)
-    title = item.get("title","") or ""
-    body  = item.get("content","") or ""
-    url   = item.get("url","") or ""
+    title = item.get("title", "") or ""
+    body = item.get("content", "") or ""
+    url = item.get("url", "") or ""
     header = f"Предмодерация #{mod_id}"
+
     mid = publisher.send_moderation_preview(admin_chat, header, title, body, url, mod_id, cfg=config)
     if mid:
         set_tg_message_id(conn, mod_id, mid)
-        logger.info("[QUEUED] id=%d | %s", mod_id, title[:140])
-        return mod_id
-    else:
-        logger.error("Не удалось отправить предпросмотр модератору (id=%d).", mod_id)
-        return mod_id  # оставим в очереди pending, можно будет переслать позже
+        return mid
+    logger.error("Не удалось отправить предпросмотр модератору (id=%d).", mod_id)
+    return None
+
+
+def enqueue_and_notify(item: Dict[str, str], conn: sqlite3.Connection) -> Optional[int]:
+    """Совместная функция для обратной совместимости."""
+    mod_id = enqueue_item(item, conn)
+    if mod_id:
+        send_preview(item, mod_id, conn)
+    return mod_id
 
 
 # --------------- Updates processing ----------------
