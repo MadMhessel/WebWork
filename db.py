@@ -63,6 +63,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             content TEXT,
             source TEXT,
             published_at TEXT,
+            image_url TEXT,
             added_ts INTEGER DEFAULT (strftime('%s','now'))
         );
 
@@ -74,6 +75,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "items", "image_url", "TEXT")
     conn.commit()
     logger.info("Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db"))
+
+    # Добавляем столбец image_url, если он отсутствует
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN image_url TEXT")
+        conn.commit()
+    except Exception:
+        pass
 
 # ---------- Existence checks used by dedup ----------
 
@@ -103,6 +111,7 @@ def insert_item(conn: sqlite3.Connection, item: Dict[str, Any]) -> Optional[int]
     Returns row id or None if ignored due to UNIQUE(url) conflict.
     Expected keys: url, guid, title, title_hash, content, source, published_at, image_url
     """
+    fields = ("url","guid","title","title_hash","content","source","published_at","image_url")
     fields = (
         "url",
         "guid",

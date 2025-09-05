@@ -147,7 +147,15 @@ def _handle_callback_query(cb: Dict[str, Any], conn: sqlite3.Connection) -> None
         if ok:
             # Запись в антидубль и смена статуса
             from . import db as dbmod
-            dedup.mark_published(url=url, guid=it.get("guid"), title=title, published_at=it.get("published_at") or "", source=source, db_conn=conn)
+            dedup.mark_published(
+                url=url,
+                guid=it.get("guid"),
+                title=title,
+                published_at=it.get("published_at") or "",
+                source=source,
+                image_url=it.get("image_url"),
+                db_conn=conn,
+            )
             set_status(conn, mod_id, "approved")
             publisher.answer_callback_query(cq_id, text="Опубликовано ✅", show_alert=False)
             publisher.edit_moderation_message(chat_id, message_id, f"✅ Одобрено и отправлено в канал.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}", cfg=config)
