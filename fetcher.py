@@ -200,17 +200,7 @@ def _validate_image_url(url: str) -> str:
                 r.close()
         except Exception:
             pass
-def _extract_html_image_url(soup, base_url: str) -> str:
-    """Attempt to extract main image URL from HTML."""
-    if not soup:
-        return ""
-    og = soup.find("meta", attrs={"property": "og:image"})
-    if og and og.get("content"):
-        return urljoin(base_url, og["content"].strip())
-    img = soup.find("img")
-    if img and img.get("src"):
-        return urljoin(base_url, img.get("src").strip())
-def _extract_html_image_url(soup) -> str:
+def _extract_html_image_url_basic(soup) -> str:
     if not soup:
         return ""
     # meta tags: OpenGraph and Twitter cards
@@ -248,13 +238,14 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
             published_at = _extract_html_published_at(soup)
             content = _extract_html_content(soup)
             img_candidate = _extract_html_image_url(soup, url)
-            image_url = _validate_image_url(img_candidate)
-            if image_url:
+            validated_url = _validate_image_url(img_candidate)
+            if validated_url:
+                image_url = validated_url
                 logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
-            image_url = _extract_html_image_url(soup, url)
-            img = _extract_html_image_url(soup)
-            if img:
-                image_url = urljoin(url, img)
+            else:
+                img = _extract_html_image_url_basic(soup)
+                if img:
+                    image_url = urljoin(url, img)
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
             soup = None
@@ -286,7 +277,6 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
         "content": content,
         "published_at": published_at,
         "image_url": image_url or "",
-        "image_url": image_url,
     }
 
 # -------------------- RSS --------------------
