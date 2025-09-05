@@ -24,10 +24,20 @@ def already_pending(conn: sqlite3.Connection, url: str) -> Optional[int]:
     return int(row["id"]) if row else None
 
 def insert_pending(conn: sqlite3.Connection, item: Dict[str, str]) -> int:
-    cur = conn.execute("""
-        INSERT OR IGNORE INTO moderation_queue (source, guid, url, title, content, published_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-        (item.get("source",""), item.get("guid"), item.get("url",""), item.get("title",""), item.get("content",""), item.get("published_at",""))
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO moderation_queue (source, guid, url, title, content, published_at, image_url, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+        """,
+        (
+            item.get("source", ""),
+            item.get("guid"),
+            item.get("url", ""),
+            item.get("title", ""),
+            item.get("content", ""),
+            item.get("published_at", ""),
+            item.get("image_url", ""),
+        ),
     )
     if cur.rowcount == 0:
         # запись уже есть (скорее всего из-за UNIQUE(url)); вернём существующий id
@@ -43,6 +53,13 @@ def set_status(conn: sqlite3.Connection, mod_id: int, status: str) -> None:
 
 def set_tg_message_id(conn: sqlite3.Connection, mod_id: int, message_id: str) -> None:
     conn.execute("UPDATE moderation_queue SET tg_message_id = ? WHERE id = ?", (message_id, mod_id))
+    conn.commit()
+
+def set_channel_message_id(conn: sqlite3.Connection, mod_id: int, message_id: str) -> None:
+    conn.execute(
+        "UPDATE moderation_queue SET channel_message_id = ? WHERE id = ?",
+        (message_id, mod_id),
+    )
     conn.commit()
 
 def get_item(conn: sqlite3.Connection, mod_id: int) -> Optional[Dict[str, Any]]:
@@ -137,16 +154,9 @@ def _handle_callback_query(cb: Dict[str, Any], conn: sqlite3.Connection) -> None
 
     if action == "approve":
         # Публикуем в канал
-        ok = publisher.publish_message(
-            chat_id=config.CHANNEL_ID,
-            title=title,
-            body=body,
-            url=url,
-            cfg=config,
-        )
-        if ok:
+        channel_mid = publisher.publish_to_channel(mod_id)
+        if channel_mid:
             # Запись в антидубль и смена статуса
-            from . import db as dbmod
             dedup.mark_published(
                 url=url,
                 guid=it.get("guid"),
@@ -157,8 +167,14 @@ def _handle_callback_query(cb: Dict[str, Any], conn: sqlite3.Connection) -> None
                 db_conn=conn,
             )
             set_status(conn, mod_id, "approved")
+            set_channel_message_id(conn, mod_id, channel_mid)
             publisher.answer_callback_query(cq_id, text="Опубликовано ✅", show_alert=False)
-            publisher.edit_moderation_message(chat_id, message_id, f"✅ Одобрено и отправлено в канал.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}", cfg=config)
+            publisher.edit_moderation_message(
+                chat_id,
+                message_id,
+                f"✅ Одобрено и отправлено в канал.\n\n<b>{html_escape(title)}</b>\n{html_escape(url)}",
+                cfg=config,
+            )
         else:
             publisher.answer_callback_query(cq_id, text="Ошибка отправки в канал.", show_alert=True)
     elif action == "reject":
