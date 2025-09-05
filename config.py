@@ -3,12 +3,14 @@ import os
 # === Базовые настройки бота ===
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", "").strip()  # пример: "@my_news_channel" или числовой ID
+RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === Флаги и режимы ===
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}
 STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "true").lower() in {"1", "true", "yes"}
 ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", "false").lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
+MODERATOR_IDS = [s.strip() for s in os.getenv("MODERATOR_IDS", "").split(",") if s.strip()]
 ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "true").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
 MIN_IMAGE_BYTES: int = int(os.getenv("MIN_IMAGE_BYTES", "10000"))  # минимальный размер файла изображения
 IMAGE_TIMEOUT: int = int(os.getenv("IMAGE_TIMEOUT", "15"))  # таймаут загрузки изображений (сек)
@@ -21,6 +23,27 @@ IMAGE_MIN_RATIO: float = float(os.getenv("IMAGE_MIN_RATIO", "0.2"))
 IMAGE_MAX_RATIO: float = float(os.getenv("IMAGE_MAX_RATIO", "3.0"))
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# === Параметры модерации и медиа ===
+REVIEW_CHAT_ID: str = os.getenv("REVIEW_CHAT_ID", "").strip()
+CHANNEL_CHAT_ID: str = os.getenv("CHANNEL_CHAT_ID", CHANNEL_ID).strip()
+MODERATOR_IDS = set(
+    int(x)
+    for x in os.getenv("MODERATOR_IDS", "").split(",")
+    if x.strip()
+)
+ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "true").lower() in {"1", "true", "yes"}
+MAX_MEDIA_PER_POST: int = int(os.getenv("MAX_MEDIA_PER_POST", "10"))
+IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "320"))
+IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", str(320 * 320)))
+IMAGE_DOMAINS_DENYLIST = set(
+    d.strip().lower()
+    for d in os.getenv("IMAGE_DOMAINS_DENYLIST", "").split(",")
+    if d.strip()
+)
+SNOOZE_MINUTES: int = int(os.getenv("SNOOZE_MINUTES", "0"))
+REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
+RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === Регулируемые параметры фильтра ===
 FILTER_HEAD_CHARS: int = int(os.getenv("FILTER_HEAD_CHARS", "400"))

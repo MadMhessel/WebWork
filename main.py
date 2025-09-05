@@ -6,6 +6,8 @@ import time
 from typing import Dict, List, Tuple
 
 from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
+from . import config, logging_setup, fetcher, filters, dedup, db
+from . import moderator as moderation
 from .utils import normalize_whitespace, compute_title_hash
 
 logger = logging.getLogger(__name__)
@@ -112,8 +114,16 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             sent = _publisher_send(item_clean)
             if sent:
                 cnt_published += 1
+            mod_id = moderation.enqueue_item(item_clean, conn)
+            if mod_id:
+                cnt_queued += 1
+                moderation.send_preview(item_clean, mod_id, conn)
             else:
-                cnt_not_sent += 1
+                sent = _publisher_send(item_clean)
+                if sent:
+                    cnt_published += 1
+                else:
+                    cnt_not_sent += 1
 
             # запоминаем в БД
             dedup.remember(conn, item_clean)

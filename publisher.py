@@ -1,8 +1,8 @@
 import html, logging, time, json
 from io import BytesIO
-from typing import Optional, Any, Dict, Tuple
+from typing import Optional, Any, Dict, Tuple, List
 import requests
-from . import config, rewrite
+from . import config, rewrite, db
 from .utils import shorten_url
 
 logger = logging.getLogger(__name__)
@@ -157,6 +157,13 @@ def _send_text(chat_id: str, text: str, parse_mode: str, reply_markup: Optional[
     return str(j.get("result", {}).get("message_id"))
 
 
+def _send_photo_file(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
+def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
+    """Send a simple text message. Returns message_id or None."""
+    parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
+    return _send_text(chat_id, text, parse_mode)
+
+
 def _send_photo(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
     """Возвращает message_id при успехе, иначе None."""
     payload: Dict[str, Any] = {"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode}
@@ -191,17 +198,42 @@ def answer_callback_query(callback_query_id: str, text: Optional[str] = None, sh
     return bool(j)
 
 
-def _send_photo(chat_id: str, photo_url: str, caption: str, parse_mode: str) -> Optional[str]:
+def _send_photo(chat_id: str, photo: str, caption: str, parse_mode: str) -> Optional[Tuple[str, Optional[str]]]:
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
-        "photo": photo_url,
+        "photo": photo,
+def _send_photo(chat_id: str, photo_id: str, caption: str, parse_mode: str, reply_markup: Optional[dict] = None) -> Optional[str]:
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "photo": photo_id,
         "caption": caption,
         "parse_mode": parse_mode,
     }
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
     j = _api_post("sendPhoto", payload)
     if not j:
         return None
-    return str(j.get("result", {}).get("message_id"))
+    result = j.get("result", {})
+    mid = str(result.get("message_id"))
+    photos = result.get("photo") or []
+    file_id = None
+    if photos:
+        file_id = photos[-1].get("file_id")
+    return mid, file_id
+
+
+def _send_media_group(chat_id: str, file_ids: List[str], caption: str, parse_mode: str) -> bool:
+    media = []
+    for i, fid in enumerate(file_ids):
+        obj: Dict[str, Any] = {"type": "photo", "media": fid}
+        if i == 0 and caption:
+            obj["caption"] = caption
+            obj["parse_mode"] = parse_mode
+        media.append(obj)
+    payload: Dict[str, Any] = {"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)}
+    j = _api_post("sendMediaGroup", payload)
+    return bool(j)
 
 
 def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Optional[str] = None, cfg=config) -> bool:
@@ -239,8 +271,9 @@ def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Op
     if image_url:
         logger.debug("Картинка для публикации: %s", shorten_url(image_url))
         try:
-            mid = _send_photo(chat_id, image_url, message, parse_mode)
-            if mid:
+            res = _send_photo(chat_id, image_url, message, parse_mode)
+            if res:
+                mid, _ = res
                 logger.info(
                     "Сообщение с картинкой отправлено: chat_id=%s, message_id=%s, len=%d",
                     chat_id,
@@ -300,17 +333,93 @@ def publish_item(item: Dict[str, Any], cfg=config) -> bool:
     image_url = item.get("image_url") or ""
     return publish_message(chat_id, title, body, url, image_url=image_url, cfg=cfg)
 
+
+def publish_to_channel(item_id: int, text_override: Optional[str] = None, cfg=config) -> Optional[str]:
+    """Публикует элемент из moderation_queue в канал.
+
+    Возвращает channel_message_id при успехе, иначе None. Повторные вызовы
+    не создают дубль, а возвращают уже сохранённый message_id.
+    """
+    conn = db.connect()
+    cur = conn.execute("SELECT * FROM moderation_queue WHERE id = ?", (item_id,))
+    row = cur.fetchone()
+    if not row:
+        logger.error("mod_id=%s не найден в moderation_queue", item_id)
+        return None
+    row = dict(row)
+
+    existing = row.get("channel_message_id")
+    if existing:
+        conn.close()
+        return str(existing)
+
+    chat_id = str(cfg.CHANNEL_ID or "")
+    if not chat_id:
+        logger.error("CHANNEL_ID пуст — публикация невозможна")
+        return None
+
+    title = row.get("title") or ""
+    body = text_override if text_override is not None else (row.get("content") or "")
+    url = row.get("url") or ""
+    image_url = row.get("image_url") or ""
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
 
-    if getattr(cfg, "ALLOW_IMAGES", False) and image_url:
-        img = _download_image(image_url, cfg)
-        if img:
-            img_data, mime = img
-            if parse_mode == "MARKDOWNV2":
-                caption = f"{_escape_markdown_v2(title)}\n\n{_escape_url_md_v2(url)}"
+    item = {"title": title, "content": body, "url": url}
+    rewritten = rewrite.maybe_rewrite_item(item, cfg)
+    body_current = rewritten.get("content", "") or ""
+    message = _build_message(title or "", body_current, url or "", parse_mode)
+
+    cache = conn.execute(
+        "SELECT tg_file_id, channel_message_id FROM images_cache WHERE item_id = ?",
+        (item_id,),
+    ).fetchone()
+    if cache and cache["channel_message_id"]:
+        conn.close()
+        return str(cache["channel_message_id"])
+    tg_file_id = cache["tg_file_id"] if cache else None
+
+    retries = int(getattr(cfg, "RETRY_LIMIT", 3))
+    delay = 1.0
+    mid: Optional[str] = None
+    for attempt in range(retries):
+        try:
+            if image_url:
+                photo = tg_file_id or image_url
+                res = _send_photo(chat_id, photo, message, parse_mode)
+                if res:
+                    mid, new_file_id = res
+                    if new_file_id:
+                        tg_file_id = new_file_id
+                    break
             else:
+                mid = _send_text(chat_id, message, parse_mode)
+                if mid:
+                    break
+        except Exception as ex:
+            logger.warning("Ошибка отправки в канал: %s", ex)
+        time.sleep(delay)
+        delay *= 2
+
+    if not mid:
+        logger.error("Не удалось отправить сообщение mod_id=%s", item_id)
+        conn.close()
+        return None
+
+    conn.execute(
+        "INSERT INTO images_cache (item_id, tg_file_id, channel_message_id) VALUES (?, ?, ?) "
+        "ON CONFLICT(item_id) DO UPDATE SET tg_file_id=COALESCE(excluded.tg_file_id, tg_file_id), "
+        "channel_message_id=excluded.channel_message_id",
+        (item_id, tg_file_id, mid),
+    )
+    conn.execute(
+        "UPDATE moderation_queue SET channel_message_id = ? WHERE id = ?",
+        (mid, item_id),
+    )
+    conn.commit()
+    conn.close()
+    return mid
                 caption = f"{_escape_html(title)}\n\n{_escape_html(url)}"
-            mid = _send_photo(chat_id, img_data, mime, caption, parse_mode)
+            mid = _send_photo_file(chat_id, img_data, mime, caption, parse_mode)
             if mid:
                 logger.info(
                     "Фото отправлено: chat_id=%s, message_id=%s, bytes=%d", chat_id, mid, img_data.getbuffer().nbytes
@@ -336,28 +445,108 @@ def publish(item: Dict[str, Any], cfg=config) -> bool:
     return publish_item(item, cfg=cfg)
 
 
-def send_moderation_preview(chat_id: str, mod_title: str, title: str, body: str, url: str, mod_id: int, cfg=config) -> Optional[str]:
-    """
-    Отправляет модератору предпросмотр новости + инлайн-кнопки.
-    Возвращает message_id, либо None при ошибке.
-    """
+
+
+
+
+def send_moderation_preview(
+    chat_id: str,
+    mod_title: str,
+    title: str,
+    body: str,
+    url: str,
+    mod_id: int,
+    images: Optional[List[str]] = None,
+    cfg=config,
+) -> Optional[str]:
+    """Отправляет предпросмотр новости модератору с кнопками и картинками."""
+
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
     item = {"title": title, "content": body, "url": url}
     rewritten = rewrite.maybe_rewrite_item(item, cfg)
     body_rewritten = rewritten.get("content", "") or ""
-    header = _escape_html(mod_title)
-    preview = _build_message_html(title, body_rewritten, url)
-    text = f"<b>{header}</b>\n\n{preview}"
+
+    if parse_mode == "MARKDOWNV2":
+        header = f"*{_escape_markdown_v2(mod_title)}*"
+    else:
+        header = f"<b>{_escape_html(mod_title)}</b>"
+
+    def _build_full(limit: int) -> str:
+        body_current = body_rewritten
+        preview = _build_message(title, body_current, url, parse_mode)
+        text = f"{header}\n\n{preview}".strip()
+        attempt = 0
+        while len(text) > limit and attempt < 4:
+            overflow = len(text) - limit
+            cut_by = max(overflow + 32, 64)
+            target_len = max(0, len(body_current) - cut_by)
+            body_current = _smart_trim(body_current, target_len)
+            preview = _build_message(title, body_current, url, parse_mode)
+            text = f"{header}\n\n{preview}".strip()
+            attempt += 1
+        if len(text) > limit:
+            allowed = max(0, len(body_current) - (len(text) - limit + 32))
+            body_current = _smart_trim(body_current, allowed)
+            preview = _build_message(title, body_current, url, parse_mode)
+            text = f"{header}\n\n{preview}".strip()
+        return text
+
+    message_text = _build_full(int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096)))
+    caption_text = _build_full(1024)
+
     reply_markup = {
-        "inline_keyboard": [[
-            {"text": "✅ Одобрить", "callback_data": f"approve:{mod_id}"},
-            {"text": "❌ Отклонить", "callback_data": f"reject:{mod_id}"},
-        ]]
+        "inline_keyboard": [
+            [
+                {"text": "✅ Publish", "callback_data": f"publish:{mod_id}"},
+                {"text": "❌ Reject", "callback_data": f"reject:{mod_id}"},
+            ],
+            [
+                {"text": "😴 Snooze", "callback_data": f"snooze:{mod_id}"},
+                {"text": "✏️ Edit", "callback_data": f"edit:{mod_id}"},
+            ],
+            [
+                {"text": "🔗 Source", "url": url},
+                {"text": "✅ Одобрить", "callback_data": f"approve:{mod_id}"},
+                {"text": "❌ Отклонить", "callback_data": f"reject:{mod_id}"},
+            ],
+            [
+                {"text": "🕐 Отложить", "callback_data": f"snooze:{mod_id}"},
+                {"text": "✏️ Править", "callback_data": f"edit:{mod_id}"},
+            ],
+        ]
     }
-    mid = _send_text(chat_id, text, parse_mode, reply_markup=reply_markup)
+
+    imgs = [i for i in (images or []) if i]
+    if imgs:
+        if len(imgs) > 1 and getattr(cfg, "ALLOW_MEDIA_GROUPS", False):
+            ok = _send_media_group(chat_id, imgs, caption_text, parse_mode)
+            if not ok:
+                return None
+            mid = _send_text(chat_id, message_text, parse_mode, reply_markup=reply_markup)
+            if mid:
+                logger.info(
+                    "Модерация отправлена: chat_id=%s, message_id=%s, mod_id=%d (media group)",
+                    chat_id,
+                    mid,
+                    mod_id,
+                )
+            return mid
+        else:
+            mid = _send_photo(chat_id, imgs[0], caption_text, parse_mode, reply_markup=reply_markup)
+            if mid:
+                logger.info(
+                    "Модерация отправлена: chat_id=%s, message_id=%s, mod_id=%d (photo)",
+                    chat_id,
+                    mid,
+                    mod_id,
+                )
+            return mid
+
+    mid = _send_text(chat_id, message_text, parse_mode, reply_markup=reply_markup)
     if mid:
         logger.info("Модерация отправлена: chat_id=%s, message_id=%s, mod_id=%d", chat_id, mid, mod_id)
     return mid
+
 
 
 def edit_moderation_message(chat_id: str, message_id: str, text: str, cfg=config) -> bool:
