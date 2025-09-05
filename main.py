@@ -98,7 +98,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 cnt_not_sent += 1
 
             # запоминаем в БД
-            dedup.remember(it, conn)
+            dedup.remember(conn, it)
 
         except KeyboardInterrupt:
             raise
