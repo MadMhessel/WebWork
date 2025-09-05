@@ -19,11 +19,51 @@ except Exception:
 
 # --- Мок-набор для локального теста ---
 MOCK_ITEMS: List[Dict[str, str]] = [
-    {"source":"MOCK","guid":"mock-1","url":"https://example.com/news/nn-construction-school","title":"В Нижнем Новгороде началось строительство новой школы","content":"Проект реализуется в рамках нацпрограммы. Подрядчик приступил к работам на площадке.","published_at":"2025-09-04T10:00:00+03:00"},
-    {"source":"MOCK","guid":"mock-2","url":"https://example.com/news/kazan-bridge","title":"В Казани стартовало строительство моста","content":"Работы начались на участке через реку, подрядчик определён.","published_at":"2025-09-04T10:05:00+03:00"},
-    {"source":"MOCK","guid":"mock-3","url":"https://example.com/news/nn-festival","title":"В Нижнем Новгороде прошёл городской фестиваль","content":"Жители посетили концерт и выставки на набережной.","published_at":"2025-09-04T10:10:00+03:00"},
-    {"source":"MOCK","guid":"mock-4","url":"https://example.com/news/nn-construction-school","title":"Началось строительство школы в Нижнем Новгороде","content":"Генподрядчик вывел технику, подготовительные работы начаты.","published_at":"2025-09-04T10:15:00+03:00"},
-    {"source":"MOCK","guid":"mock-5","url":"https://example.com/news/nn-school-project-started","title":"Строительство школы стартовало в Нижнем Новгороде","content":"Объект планируют сдать в 2026 году, предусмотрена инфраструктура.","published_at":"2025-09-04T10:20:00+03:00"},
+    {
+        "source": "MOCK",
+        "guid": "mock-1",
+        "url": "https://example.com/news/nn-construction-school",
+        "title": "В Нижнем Новгороде началось строительство новой школы",
+        "content": "Проект реализуется в рамках нацпрограммы. Подрядчик приступил к работам на площадке.",
+        "published_at": "2025-09-04T10:00:00+03:00",
+        "image_url": "",
+    },
+    {
+        "source": "MOCK",
+        "guid": "mock-2",
+        "url": "https://example.com/news/kazan-bridge",
+        "title": "В Казани стартовало строительство моста",
+        "content": "Работы начались на участке через реку, подрядчик определён.",
+        "published_at": "2025-09-04T10:05:00+03:00",
+        "image_url": "",
+    },
+    {
+        "source": "MOCK",
+        "guid": "mock-3",
+        "url": "https://example.com/news/nn-festival",
+        "title": "В Нижнем Новгороде прошёл городской фестиваль",
+        "content": "Жители посетили концерт и выставки на набережной.",
+        "published_at": "2025-09-04T10:10:00+03:00",
+        "image_url": "",
+    },
+    {
+        "source": "MOCK",
+        "guid": "mock-4",
+        "url": "https://example.com/news/nn-construction-school",
+        "title": "Началось строительство школы в Нижнем Новгороде",
+        "content": "Генподрядчик вывел технику, подготовительные работы начаты.",
+        "published_at": "2025-09-04T10:15:00+03:00",
+        "image_url": "",
+    },
+    {
+        "source": "MOCK",
+        "guid": "mock-5",
+        "url": "https://example.com/news/nn-school-project-started",
+        "title": "Строительство школы стартовало в Нижнем Новгороде",
+        "content": "Объект планируют сдать в 2026 году, предусмотрена инфраструктура.",
+        "published_at": "2025-09-04T10:20:00+03:00",
+        "image_url": "",
+    },
 ]
 
 # -------------------- HTTP helpers --------------------
@@ -97,17 +137,30 @@ def _extract_html_content(soup) -> str:
         content = content[:8000].rsplit(" ", 1)[0].strip()
     return content
 
+def _extract_html_image_url(soup, base_url: str) -> str:
+    """Attempt to extract main image URL from HTML."""
+    if not soup:
+        return ""
+    og = soup.find("meta", attrs={"property": "og:image"})
+    if og and og.get("content"):
+        return urljoin(base_url, og["content"].strip())
+    img = soup.find("img")
+    if img and img.get("src"):
+        return urljoin(base_url, img.get("src").strip())
+    return ""
+
 def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
     html_text = _requests_get(url)
     if not html_text:
         return None
-    title, content, published_at = "", "", ""
+    title, content, published_at, image_url = "", "", "", ""
     if BeautifulSoup is not None:
         try:
             soup = BeautifulSoup(html_text, "html.parser")
             title = _extract_html_title(soup)
             published_at = _extract_html_published_at(soup)
             content = _extract_html_content(soup)
+            image_url = _extract_html_image_url(soup, url)
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
     # грубые фолбэки
@@ -138,6 +191,7 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
         "title": title,
         "content": content,
         "published_at": published_at,
+        "image_url": image_url or "",
     }
 
 # -------------------- RSS --------------------
@@ -150,6 +204,7 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     title = getattr(entry, "title", "") or ""
     published_at = getattr(entry, "published", "") or getattr(entry, "updated", "") or ""
     content_val = ""
+    image_url = ""
     try:
         if getattr(entry, "content", None):
             blocks = []
@@ -160,6 +215,19 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
             content_val = "\n\n".join(blocks)
         if not content_val:
             content_val = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
+        if getattr(entry, "media_content", None):
+            for m in entry.media_content:
+                url = getattr(m, "url", "") or ""
+                if url:
+                    image_url = url
+                    break
+        if not image_url and getattr(entry, "links", None):
+            for l in entry.links:
+                if getattr(l, "rel", "") == "enclosure" and str(getattr(l, "type", "")).startswith("image"):
+                    href = getattr(l, "href", "") or ""
+                    if href:
+                        image_url = href
+                        break
     except Exception:
         pass
     title = normalize_whitespace(title)
@@ -173,6 +241,7 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
         "title": title,
         "content": content_val,
         "published_at": published_at,
+        "image_url": image_url or "",
     }
 
 def fetch_rss(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
@@ -319,6 +388,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
                 "title": title_list or "(без заголовка)",
                 "content": "",
                 "published_at": date_text or "",
+                "image_url": "",
             })
             continue
 
@@ -331,6 +401,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
             "title": title_final,
             "content": detail.get("content") or "",
             "published_at": detail.get("published_at") or date_text or "",
+            "image_url": detail.get("image_url") or "",
         })
 
     logger.info("Получено %d записей из HTML-листа: %s", len(out), name)
@@ -361,4 +432,7 @@ def fetch_all(sources: Iterable[Dict[str, str]], limit_per_source: Optional[int]
             time.sleep(0.2)
         except Exception as ex:
             logger.exception("Необработанная ошибка источника %s: %s", s, ex)
+    for it in result:
+        if "image_url" not in it:
+            it["image_url"] = ""
     return result

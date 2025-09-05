@@ -44,6 +44,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             content TEXT,
             source TEXT,
             published_at TEXT,
+            image_url TEXT,
             added_ts INTEGER DEFAULT (strftime('%s','now'))
         );
 
@@ -54,6 +55,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
     logger.info("Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db"))
+
+    # Добавляем столбец image_url, если он отсутствует
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN image_url TEXT")
+        conn.commit()
+    except Exception:
+        pass
 
 # ---------- Existence checks used by dedup ----------
 
@@ -83,12 +91,12 @@ def insert_item(conn: sqlite3.Connection, item: Dict[str, Any]) -> Optional[int]
     Returns row id or None if ignored due to UNIQUE(url) conflict.
     Expected keys: url, guid, title, title_hash, content, source, published_at
     """
-    fields = ("url","guid","title","title_hash","content","source","published_at")
+    fields = ("url","guid","title","title_hash","content","source","published_at","image_url")
     values = tuple(item.get(k) for k in fields)
     cur = conn.execute(
         """
-        INSERT OR IGNORE INTO items (url, guid, title, title_hash, content, source, published_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO items (url, guid, title, title_hash, content, source, published_at, image_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         values,
     )
@@ -133,7 +141,8 @@ def _update_existing(conn: sqlite3.Connection, item_id: int, item: Dict[str, Any
                title_hash = COALESCE(?, title_hash),
                content = COALESCE(?, content),
                source = COALESCE(?, source),
-               published_at = COALESCE(?, published_at)
+               published_at = COALESCE(?, published_at),
+               image_url = COALESCE(?, image_url)
          WHERE id = ?
         """,
         (
@@ -143,6 +152,7 @@ def _update_existing(conn: sqlite3.Connection, item_id: int, item: Dict[str, Any
             item.get("content"),
             item.get("source"),
             item.get("published_at"),
+            item.get("image_url"),
             item_id,
         ),
     )
