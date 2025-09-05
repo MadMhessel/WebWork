@@ -9,6 +9,12 @@ import asyncio
 import os
 import time
 from typing import Dict, Iterable
+from typing import Iterable, Dict
+from urllib.parse import urljoin
+
+import feedparser
+import requests
+from bs4 import BeautifulSoup
 
 from telegram import Bot
 from telegram.error import TelegramError
@@ -17,14 +23,59 @@ from .config import KEYWORDS, SOURCES
 from . import storage
 
 
-def fetch_from_sources(use_mock: bool = False) -> Iterable[Dict[str, str]]:
-    """Yield dummy items from configured sources."""
+def fetch_from_sources(use_mock: bool = False, limit: int = 10) -> Iterable[Dict[str, str]]:
+    """Fetch and yield items from configured sources.
+
+    Uses ``requests`` to retrieve content from each URL in ``SOURCES`` and
+    attempts to parse it as RSS/Atom using ``feedparser``. If no feed entries
+    are found, it falls back to basic HTML parsing with ``BeautifulSoup``.
+
+    Each yielded item contains ``title``, ``url`` and ``guid`` keys. Network
+    errors are caught and reported to avoid crashing the bot.
+
+    Parameters
+    ----------
+    use_mock: bool
+        When True, mock items are yielded without performing network requests.
+    limit: int
+        Maximum number of items to yield per source.
+    """
+
     for src in SOURCES:
         if use_mock:
-            title = f"Нижегородская область строительство news from {src}"
-        else:
-            title = f"Fetched news from {src}"
-        yield {"title": title, "url": src}
+            yield {
+                "title": f"Нижегородская область строительство news from {src}",
+                "url": src,
+                "guid": src,
+            }
+            continue
+
+        try:
+            response = requests.get(src, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            print(f"Error fetching {src}: {exc}")
+            continue
+
+        feed = feedparser.parse(response.content)
+        entries = getattr(feed, "entries", [])
+
+        if entries:
+            for entry in entries[:limit]:
+                title = entry.get("title", "").strip()
+                link = entry.get("link", src).strip()
+                guid = entry.get("id") or entry.get("guid") or link
+                yield {"title": title, "url": link, "guid": guid}
+            continue
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        links = soup.find_all("a", href=True)
+        for tag in links[:limit]:
+            title = tag.get_text(strip=True)
+            if not title:
+                continue
+            link = urljoin(src, tag["href"])
+            yield {"title": title, "url": link, "guid": link}
 
 
 def filter_items(items: Iterable[Dict[str, str]]) -> Iterable[Dict[str, str]]:
