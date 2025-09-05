@@ -4,8 +4,9 @@ These functions are placeholders demonstrating how the CLI might
 interact with the rest of the system.
 """
 
+import logging
 import time
-from typing import Iterable, Dict
+from typing import Dict, Iterable
 
 from .config import KEYWORDS, SOURCES
 
@@ -38,18 +39,26 @@ def publish_items(items: Iterable[Dict[str, str]], dry_run: bool = False) -> Non
             print(f"Published: {item['title']}")
 
 
-def run_once(dry_run: bool = False, use_mock: bool = False) -> None:
+def run_once(
+    dry_run: bool = False, use_mock: bool = False, log_level: str = "INFO"
+) -> None:
     """Run a single iteration of fetching, filtering and publishing."""
+    logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO))
     items = fetch_from_sources(use_mock=use_mock)
     items = list(filter_items(items))
     publish_items(items, dry_run=dry_run)
 
 
-def run_loop(dry_run: bool = False, use_mock: bool = False, interval: int = 60) -> None:
+def run_loop(
+    dry_run: bool = False,
+    use_mock: bool = False,
+    interval: int = 60,
+    log_level: str = "INFO",
+) -> None:
     """Continuously run the bot with a delay between iterations."""
     try:
         while True:
-            run_once(dry_run=dry_run, use_mock=use_mock)
+            run_once(dry_run=dry_run, use_mock=use_mock, log_level=log_level)
             time.sleep(interval)
     except KeyboardInterrupt:
         print("Loop interrupted. Exiting...")
