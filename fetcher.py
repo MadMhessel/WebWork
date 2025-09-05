@@ -301,6 +301,7 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     content_val = ""
     image_url = ""
     html_blobs: List[str] = []
+    summary_raw = ""
     try:
         if getattr(entry, "content", None):
             blocks = []
@@ -341,24 +342,8 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     image_url = _validate_image_url(image_url)
     if image_url:
         logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
-        if getattr(entry, "media_content", None):
-            for m in entry.media_content:
-                url = getattr(m, "url", "") or ""
-                if url:
-                    image_url = url
-                    break
-        if not image_url and getattr(entry, "links", None):
-            for l in entry.links:
-                if getattr(l, "rel", "") == "enclosure" and str(getattr(l, "type", "")).startswith("image"):
-                    href = getattr(l, "href", "") or ""
-                    if href:
-                        image_url = href
-                        break
-            content_val = summary_raw
-        if summary_raw:
-            html_blobs.append(summary_raw)
-    except Exception:
-        pass
+    if summary_raw:
+        html_blobs.append(summary_raw)
     candidates: List[str] = []
     for m in getattr(entry, "media_content", []) or []:
         url = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
