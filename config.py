@@ -9,6 +9,9 @@ ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "tru
 STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "true").lower() in {"1", "true", "yes"}
 ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", "false").lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
+ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "true").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
+MIN_IMAGE_BYTES: int = int(os.getenv("MIN_IMAGE_BYTES", "10000"))  # минимальный размер файла изображения
+IMAGE_TIMEOUT: int = int(os.getenv("IMAGE_TIMEOUT", "15"))  # таймаут загрузки изображений (сек)
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
