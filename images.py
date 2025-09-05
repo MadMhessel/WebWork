@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover
 
 import sqlite3
 from . import config, db
+from . import config
 from .fetcher import HTTP_SESSION, DEFAULT_TIMEOUT
 
 log = logging.getLogger(__name__)
@@ -111,6 +112,7 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
             return row["tg_file_id"], row["hash"]
 
     try:
+        # HEAD check for type and length
         head = HTTP_SESSION.head(image_url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
         ctype = head.headers.get("Content-Type", "")
         if head.status_code != 200 or not ctype.startswith("image/"):
