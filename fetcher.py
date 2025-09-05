@@ -312,6 +312,18 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
         # 5) загрузим карточку материала
         detail = _parse_html_article(name, link_abs)
         if not detail:
+            img_el = None
+            img_css = sels.get("image") or "img"
+            img_attr = (sels.get("image_attr") or "src").strip()
+            try:
+                img_el = node.select_one(img_css)
+            except Exception:
+                img_el = None
+            img_src = ""
+            if img_el and img_el.get(img_attr):
+                raw_src = img_el.get(img_attr).strip()
+                img_src = urljoin(base_url, raw_src)
+
             out.append({
                 "source": name,
                 "guid": link_abs,
@@ -319,6 +331,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
                 "title": title_list or "(без заголовка)",
                 "content": "",
                 "published_at": date_text or "",
+                "image_url": img_src,
             })
             continue
 
@@ -331,6 +344,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
             "title": title_final,
             "content": detail.get("content") or "",
             "published_at": detail.get("published_at") or date_text or "",
+            "image_url": detail.get("image_url") or "",
         })
 
     logger.info("Получено %d записей из HTML-листа: %s", len(out), name)
