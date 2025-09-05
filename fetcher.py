@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import time
+import re
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import urljoin
 
@@ -16,6 +17,17 @@ try:
     from bs4 import BeautifulSoup  # type: ignore
 except Exception:
     BeautifulSoup = None
+
+
+def _first_http_url(candidates: Iterable[str]) -> str:
+    """Return first URL starting with http(s) from iterable."""
+    for url in candidates:
+        if not url:
+            continue
+        url = url.strip()
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+    return ""
 
 # --- Мок-набор для локального теста ---
 MOCK_ITEMS: List[Dict[str, str]] = [
@@ -147,6 +159,29 @@ def _extract_html_image_url(soup, base_url: str) -> str:
     img = soup.find("img")
     if img and img.get("src"):
         return urljoin(base_url, img.get("src").strip())
+def _extract_html_image_url(soup) -> str:
+    if not soup:
+        return ""
+    # meta tags: OpenGraph and Twitter cards
+    for attrs in [
+        {"property": "og:image"},
+        {"property": "og:image:url"},
+        {"name": "twitter:image"},
+        {"name": "twitter:image:src"},
+        {"property": "twitter:image"},
+        {"property": "twitter:image:src"},
+    ]:
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content"):
+            return tag["content"].strip()
+    # link rel="image_src"
+    link = soup.find("link", attrs={"rel": "image_src"})
+    if link and link.get("href"):
+        return link["href"].strip()
+    # first <img>
+    img = soup.find("img")
+    if img and img.get("src"):
+        return img["src"].strip()
     return ""
 
 def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
@@ -161,6 +196,9 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
             published_at = _extract_html_published_at(soup)
             content = _extract_html_content(soup)
             image_url = _extract_html_image_url(soup, url)
+            img = _extract_html_image_url(soup)
+            if img:
+                image_url = urljoin(url, img)
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
     # грубые фолбэки
@@ -192,6 +230,7 @@ def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
         "content": content,
         "published_at": published_at,
         "image_url": image_url or "",
+        "image_url": image_url,
     }
 
 # -------------------- RSS --------------------
@@ -205,6 +244,7 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     published_at = getattr(entry, "published", "") or getattr(entry, "updated", "") or ""
     content_val = ""
     image_url = ""
+    html_blobs: List[str] = []
     try:
         if getattr(entry, "content", None):
             blocks = []
@@ -212,7 +252,9 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
                 val = getattr(c, "value", "") or ""
                 if val:
                     blocks.append(val)
+                    html_blobs.append(val)
             content_val = "\n\n".join(blocks)
+        summary_raw = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
         if not content_val:
             content_val = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
         if getattr(entry, "media_content", None):
@@ -228,8 +270,39 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
                     if href:
                         image_url = href
                         break
+            content_val = summary_raw
+        if summary_raw:
+            html_blobs.append(summary_raw)
     except Exception:
         pass
+    candidates: List[str] = []
+    for m in getattr(entry, "media_content", []) or []:
+        url = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
+        if url:
+            candidates.append(url)
+    for m in getattr(entry, "media_thumbnail", []) or []:
+        url = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
+        if url:
+            candidates.append(url)
+    for en in getattr(entry, "enclosures", []) or []:
+        url = getattr(en, "href", "") or getattr(en, "url", "")
+        if isinstance(en, dict):
+            url = en.get("href") or en.get("url") or url
+        if url:
+            candidates.append(url)
+    for ln in getattr(entry, "links", []) or []:
+        rel = getattr(ln, "rel", "") or (ln.get("rel") if isinstance(ln, dict) else "")
+        type_ = getattr(ln, "type", "") or (ln.get("type") if isinstance(ln, dict) else "")
+        href = getattr(ln, "href", "") or getattr(ln, "url", "")
+        if isinstance(ln, dict):
+            href = ln.get("href") or ln.get("url") or href
+        if rel == "enclosure" and type_.startswith("image/") and href:
+            candidates.append(href)
+    img_re = re.compile(r'''<img[^>]+src=['"]([^'"]+)['"]''', flags=re.I)
+    for blob in html_blobs:
+        for img in img_re.findall(blob):
+            candidates.append(img)
+    image_url = _first_http_url(candidates)
     title = normalize_whitespace(title)
     content_val = normalize_whitespace(content_val)
     if not title:
@@ -242,6 +315,7 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
         "content": content_val,
         "published_at": published_at,
         "image_url": image_url or "",
+        "image_url": image_url,
     }
 
 def fetch_rss(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
@@ -381,6 +455,18 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
         # 5) загрузим карточку материала
         detail = _parse_html_article(name, link_abs)
         if not detail:
+            img_el = None
+            img_css = sels.get("image") or "img"
+            img_attr = (sels.get("image_attr") or "src").strip()
+            try:
+                img_el = node.select_one(img_css)
+            except Exception:
+                img_el = None
+            img_src = ""
+            if img_el and img_el.get(img_attr):
+                raw_src = img_el.get(img_attr).strip()
+                img_src = urljoin(base_url, raw_src)
+
             out.append({
                 "source": name,
                 "guid": link_abs,
@@ -389,6 +475,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
                 "content": "",
                 "published_at": date_text or "",
                 "image_url": "",
+                "image_url": img_src,
             })
             continue
 
