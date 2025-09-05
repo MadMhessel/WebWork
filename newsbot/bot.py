@@ -17,71 +17,84 @@ from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.error import TelegramError
 
-from .config import KEYWORDS, SOURCES
+from .config import (
+    CONSTRUCTION_KEYWORDS,
+    REGION_KEYWORDS,
+    SOURCES,
+)
 from . import storage
 
 
 def fetch_from_sources(use_mock: bool = False, limit: int = 10) -> Iterable[Dict[str, str]]:
     """Fetch and yield items from configured sources.
 
-    Uses ``requests`` to retrieve content from each URL in ``SOURCES`` and
-    attempts to parse it as RSS/Atom using ``feedparser``. If no feed entries
-    are found, it falls back to basic HTML parsing with ``BeautifulSoup``.
+    Each source in ``SOURCES`` is a dictionary with ``type`` and ``url`` keys.
+    ``type`` may be ``rss``, ``html_list`` or ``html`` and optional CSS
+    selectors can be supplied via the ``selectors`` dictionary.
 
-    Each yielded item contains ``title``, ``url`` and ``guid`` keys. Network
-    errors are caught and reported to avoid crashing the bot.
-
-    Parameters
-    ----------
-    use_mock: bool
-        When True, mock items are yielded without performing network requests.
-    limit: int
-        Maximum number of items to yield per source.
+    When ``use_mock`` is True, mock items are generated without performing
+    network requests.
     """
 
     for src in SOURCES:
+        url = src["url"] if isinstance(src, dict) else src
+        src_type = src.get("type", "rss") if isinstance(src, dict) else "rss"
+        selectors = src.get("selectors", {}) if isinstance(src, dict) else {}
+
         if use_mock:
             yield {
-                "title": f"Нижегородская область строительство news from {src}",
-                "url": src,
-                "guid": src,
+                "title": f"Нижегородская область строительство news from {url}",
+                "url": url,
+                "guid": url,
             }
             continue
 
         try:
-            response = requests.get(src, timeout=10)
+            response = requests.get(url, timeout=10)
             response.raise_for_status()
         except requests.RequestException as exc:
-            print(f"Error fetching {src}: {exc}")
+            print(f"Error fetching {url}: {exc}")
             continue
 
-        feed = feedparser.parse(response.content)
-        entries = getattr(feed, "entries", [])
-
-        if entries:
+        if src_type == "rss":
+            feed = feedparser.parse(response.content)
+            entries = getattr(feed, "entries", [])
             for entry in entries[:limit]:
                 title = entry.get("title", "").strip()
-                link = entry.get("link", src).strip()
+                link = entry.get("link", url).strip()
                 guid = entry.get("id") or entry.get("guid") or link
                 yield {"title": title, "url": link, "guid": guid}
             continue
 
         soup = BeautifulSoup(response.text, "html.parser")
-        links = soup.find_all("a", href=True)
-        for tag in links[:limit]:
-            title = tag.get_text(strip=True)
-            if not title:
-                continue
-            link = urljoin(src, tag["href"])
+
+        if src_type == "html_list":
+            item_selector = selectors.get("items", "a")
+            for tag in soup.select(item_selector)[:limit]:
+                title = tag.get_text(strip=True)
+                if not title:
+                    continue
+                link = urljoin(url, tag.get("href", ""))
+                yield {"title": title, "url": link, "guid": link}
+        elif src_type == "html":
+            title_selector = selectors.get("title")
+            link_selector = selectors.get("link")
+            title_tag = soup.select_one(title_selector) if title_selector else soup.title
+            link_tag = soup.select_one(link_selector) if link_selector else None
+            title = title_tag.get_text(strip=True) if title_tag else url
+            link = urljoin(url, link_tag.get("href", "")) if link_tag and link_tag.get("href") else url
             yield {"title": title, "url": link, "guid": link}
 
 
 def filter_items(items: Iterable[Dict[str, str]]) -> Iterable[Dict[str, str]]:
-    """Filter items that contain all keywords in their title."""
-    keywords = [k.lower() for k in KEYWORDS]
+    """Filter items containing regional and construction keywords."""
+    region_kw = [k.lower() for k in REGION_KEYWORDS]
+    construction_kw = [k.lower() for k in CONSTRUCTION_KEYWORDS]
     for item in items:
         title = item["title"].lower()
-        if all(k in title for k in keywords):
+        if any(k in title for k in region_kw) and any(
+            k in title for k in construction_kw
+        ):
             yield item
 
 def publish_items(items: Iterable[Dict[str, str]], dry_run: bool = False) -> None:
