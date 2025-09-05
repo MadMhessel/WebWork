@@ -18,6 +18,13 @@ pip install beautifulsoup4
 - `POLL_INTERVAL_SECONDS`, `FETCH_LIMIT_PER_SOURCE`
 - ключевые слова и источники в `newsbot/config.py`
 
+## Инициализация базы данных
+Перед первым запуском создайте пустую SQLite-базу `newsbot.db` в корне проекта:
+```bash
+sqlite3 newsbot.db ''  # или просто: touch newsbot.db
+```
+Файл базы данных добавлен в `.gitignore` и не хранится в репозитории.
+
 ## Запуск
 Разово:
 ```bash
