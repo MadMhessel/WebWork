@@ -13,6 +13,7 @@ from telegram import Bot
 from telegram.error import TelegramError
 
 from .config import KEYWORDS, SOURCES
+from . import storage
 
 
 def fetch_from_sources(use_mock: bool = False) -> Iterable[Dict[str, str]]:
@@ -33,8 +34,24 @@ def filter_items(items: Iterable[Dict[str, str]]) -> Iterable[Dict[str, str]]:
         if all(k in title for k in keywords):
             yield item
 
-
 def publish_items(items: Iterable[Dict[str, str]], dry_run: bool = False) -> None:
+
+    """Publish items or print them in dry-run mode with deduplication."""
+    for item in items:
+        url = item.get("url")
+        guid = item.get("guid")
+        title = item.get("title")
+
+        if storage.is_published(url=url, guid=guid, title=title):
+            print(f"[DUP-DB] {title}")
+            continue
+
+        if dry_run:
+            print(f"[DRY-RUN: READY] {title}")
+        else:
+            print(f"[PUBLISHED] {title}")
+            storage.mark_published(url=url, guid=guid, title=title)
+            
     """Publish items to a Telegram channel.
 
     BOT_TOKEN and CHANNEL_ID are read from the environment. When ``dry_run``
