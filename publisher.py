@@ -158,6 +158,13 @@ def _send_text(chat_id: str, text: str, parse_mode: str, reply_markup: Optional[
 
 
 def _send_photo_file(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
+def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
+    """Send a simple text message. Returns message_id or None."""
+    parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
+    return _send_text(chat_id, text, parse_mode)
+
+
+def _send_photo(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
     """Возвращает message_id при успехе, иначе None."""
     payload: Dict[str, Any] = {"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode}
     files = {"photo": ("image", image, mime)}
@@ -412,6 +419,12 @@ def send_moderation_preview(
             ],
             [
                 {"text": "🔗 Source", "url": url},
+                {"text": "✅ Одобрить", "callback_data": f"approve:{mod_id}"},
+                {"text": "❌ Отклонить", "callback_data": f"reject:{mod_id}"},
+            ],
+            [
+                {"text": "🕐 Отложить", "callback_data": f"snooze:{mod_id}"},
+                {"text": "✏️ Править", "callback_data": f"edit:{mod_id}"},
             ],
         ]
     }
