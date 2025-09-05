@@ -79,6 +79,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
             title TEXT,
             content TEXT,
             published_at TEXT,
+            image_url TEXT,
+            status TEXT,
+            tg_message_id TEXT
+        );
+        """
+    )
+    _ensure_column(conn, "items", "image_url", "TEXT")
+    _ensure_column(conn, "moderation_queue", "image_url", "TEXT")
             status TEXT,
             tg_message_id TEXT
         );

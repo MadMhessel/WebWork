@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any, List
 import requests
 import sqlite3
 
-from . import config, publisher, dedup
+from . import config, publisher, dedup, images, rewrite
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,19 @@ def already_pending(conn: sqlite3.Connection, url: str) -> Optional[int]:
     return int(row["id"]) if row else None
 
 def insert_pending(conn: sqlite3.Connection, item: Dict[str, str]) -> int:
+    cur = conn.execute("""
+        INSERT OR IGNORE INTO moderation_queue (source, guid, url, title, content, published_at, image_url, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+        (
+            item.get("source",""),
+            item.get("guid"),
+            item.get("url",""),
+            item.get("title",""),
+            item.get("content",""),
+            item.get("published_at",""),
+            item.get("image_url"),
+        )
+    )
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO moderation_queue (source, guid, url, title, content, published_at, image_url, status)
@@ -173,6 +186,12 @@ def send_preview(item: Dict[str, str], mod_id: int, conn: sqlite3.Connection) ->
         logger.info("[QUEUE] уже в модерации (id=%d): %s", existed, item.get("title","")[:140])
         return existed
 
+    item = rewrite.maybe_rewrite_item(item, config)
+    candidates = images.extract_candidates(item)
+    best = images.pick_best(candidates)
+    tg_file_id = images.ensure_tg_file_id(best.url) if best else None
+    item["image_url"] = tg_file_id or ""
+
     mod_id = insert_pending(conn, item)
     title = item.get("title","") or ""
     body  = item.get("content","") or ""
@@ -265,6 +284,14 @@ def handle_callback(cb: Dict[str, Any], conn: sqlite3.Connection) -> None:
 
     if action == "approve":
         # Публикуем в канал
+        ok = publisher.publish_message(
+            chat_id=config.CHANNEL_ID,
+            title=title,
+            body=body,
+            url=url,
+            image_url=it.get("image_url"),
+            cfg=config,
+        )
         channel_mid = publisher.publish_to_channel(mod_id)
         if channel_mid:
             # Запись в антидубль и смена статуса

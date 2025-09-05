@@ -14,6 +14,13 @@ MODERATOR_IDS = [s.strip() for s in os.getenv("MODERATOR_IDS", "").split(",") if
 ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "true").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
 MIN_IMAGE_BYTES: int = int(os.getenv("MIN_IMAGE_BYTES", "10000"))  # минимальный размер файла изображения
 IMAGE_TIMEOUT: int = int(os.getenv("IMAGE_TIMEOUT", "15"))  # таймаут загрузки изображений (сек)
+IMAGE_ALLOWED_DOMAINS = set(
+    s.strip().lower()
+    for s in os.getenv("IMAGE_ALLOWED_DOMAINS", "").split(",")
+    if s.strip()
+)
+IMAGE_MIN_RATIO: float = float(os.getenv("IMAGE_MIN_RATIO", "0.2"))
+IMAGE_MAX_RATIO: float = float(os.getenv("IMAGE_MAX_RATIO", "3.0"))
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
