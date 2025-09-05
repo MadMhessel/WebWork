@@ -165,12 +165,20 @@ def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
 
 def _send_photo(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
     """Возвращает message_id при успехе, иначе None."""
+def _send_photo_file(chat_id: str, image: BytesIO, mime: str, caption: str, parse_mode: str) -> Optional[str]:
+    """Send a photo using a file-like object and return the message_id."""
     payload: Dict[str, Any] = {"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode}
     files = {"photo": ("image", image, mime)}
     j = _api_post("sendPhoto", payload, files=files)
     if not j:
         return None
     return str(j.get("result", {}).get("message_id"))
+
+
+def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
+    """Send a simple text message. Returns message_id or None."""
+    parse_mode = (cfg.TELEGRAM_PARSE_MODE or "HTML").upper()
+    return _send_text(chat_id, text, parse_mode)
 
 
 def _edit_message_text(chat_id: str, message_id: str, text: str, parse_mode: str, reply_markup: Optional[dict] = None) -> bool:
@@ -413,6 +421,30 @@ def publish_to_channel(item_id: int, text_override: Optional[str] = None, cfg=co
     conn.commit()
     conn.close()
     return mid
+    # The code below was previously misplaced and caused indentation errors.
+    # It appears to be an alternative flow for sending images before falling back
+    # to text, but the surrounding context is unclear. Commented out to maintain
+    # module importability.
+    #             caption = f"{_escape_html(title)}\n\n{_escape_html(url)}"
+    #         mid = _send_photo_file(chat_id, img_data, mime, caption, parse_mode)
+    #         if mid:
+    #             logger.info(
+    #                 "Фото отправлено: chat_id=%s, message_id=%s, bytes=%d", chat_id, mid, img_data.getbuffer().nbytes
+    #             )
+    #             slp = float(cfg.PUBLISH_SLEEP_BETWEEN_SEC or 0)
+    #             if slp > 0:
+    #                 time.sleep(slp)
+    #             return True
+    #         logger.debug("Отправка фото не удалась, fallback на текст.")
+    #     else:
+    #         logger.debug("Изображение не загружено, fallback на текст.")
+    # else:
+    #     if not getattr(cfg, "ALLOW_IMAGES", False):
+    #         logger.debug("Отправка изображений отключена.")
+    #     elif not image_url:
+    #         logger.debug("image_url отсутствует, отправляем текст.")
+
+    return publish_message(chat_id, title, body, url, cfg=cfg)
 
 
 def publish(item: Dict[str, Any], cfg=config) -> bool:
