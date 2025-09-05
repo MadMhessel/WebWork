@@ -4,8 +4,13 @@ These functions are placeholders demonstrating how the CLI might
 interact with the rest of the system.
 """
 
+import asyncio
+import os
 import time
 from typing import Iterable, Dict
+
+from telegram import Bot
+from telegram.error import TelegramError
 
 from .config import KEYWORDS, SOURCES
 
@@ -30,12 +35,36 @@ def filter_items(items: Iterable[Dict[str, str]]) -> Iterable[Dict[str, str]]:
 
 
 def publish_items(items: Iterable[Dict[str, str]], dry_run: bool = False) -> None:
-    """Publish items or print them in dry-run mode."""
-    for item in items:
-        if dry_run:
-            print(f"[DRY-RUN] Would publish: {item['title']}")
-        else:
-            print(f"Published: {item['title']}")
+    """Publish items to a Telegram channel.
+
+    BOT_TOKEN and CHANNEL_ID are read from the environment. When ``dry_run``
+    is true, messages are printed instead of being sent. Errors during
+    sending are caught and reported.
+    """
+
+    token = os.getenv("BOT_TOKEN")
+    channel_id = os.getenv("CHANNEL_ID")
+
+    if dry_run or not token or not channel_id:
+        for item in items:
+            text = f"{item['title']}\n{item['url']}"
+            print(f"[DRY-RUN] Would publish: {text}")
+        if not token or not channel_id:
+            print("BOT_TOKEN or CHANNEL_ID is not set; running in dry-run mode")
+        return
+
+    bot = Bot(token=token)
+
+    async def _send_all() -> None:
+        for item in items:
+            text = f"{item['title']}\n{item['url']}"
+            try:
+                await bot.send_message(chat_id=channel_id, text=text)
+                print(f"Published: {item['title']}")
+            except TelegramError as exc:
+                print(f"Failed to publish {item['title']}: {exc}")
+
+    asyncio.run(_send_all())
 
 
 def run_once(dry_run: bool = False, use_mock: bool = False) -> None:
