@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any
 import requests
 import sqlite3
 
-from . import config, publisher, dedup
+from . import config, publisher, dedup, images, rewrite
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +25,17 @@ def already_pending(conn: sqlite3.Connection, url: str) -> Optional[int]:
 
 def insert_pending(conn: sqlite3.Connection, item: Dict[str, str]) -> int:
     cur = conn.execute("""
-        INSERT OR IGNORE INTO moderation_queue (source, guid, url, title, content, published_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-        (item.get("source",""), item.get("guid"), item.get("url",""), item.get("title",""), item.get("content",""), item.get("published_at",""))
+        INSERT OR IGNORE INTO moderation_queue (source, guid, url, title, content, published_at, image_url, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+        (
+            item.get("source",""),
+            item.get("guid"),
+            item.get("url",""),
+            item.get("title",""),
+            item.get("content",""),
+            item.get("published_at",""),
+            item.get("image_url"),
+        )
     )
     if cur.rowcount == 0:
         # запись уже есть (скорее всего из-за UNIQUE(url)); вернём существующий id
@@ -70,6 +78,12 @@ def enqueue_and_notify(item: Dict[str, str], conn: sqlite3.Connection) -> Option
     if existed:
         logger.info("[QUEUE] уже в модерации (id=%d): %s", existed, item.get("title","")[:140])
         return existed
+
+    item = rewrite.maybe_rewrite_item(item, config)
+    candidates = images.extract_candidates(item)
+    best = images.pick_best(candidates)
+    tg_file_id = images.ensure_tg_file_id(best.url) if best else None
+    item["image_url"] = tg_file_id or ""
 
     mod_id = insert_pending(conn, item)
     title = item.get("title","") or ""
@@ -142,6 +156,7 @@ def _handle_callback_query(cb: Dict[str, Any], conn: sqlite3.Connection) -> None
             title=title,
             body=body,
             url=url,
+            image_url=it.get("image_url"),
             cfg=config,
         )
         if ok:

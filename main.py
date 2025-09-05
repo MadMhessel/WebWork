@@ -5,7 +5,7 @@ import sys
 import time
 from typing import Dict, List, Tuple
 
-from . import config, logging_setup, fetcher, filters, dedup, db
+from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
 from .utils import normalize_whitespace, compute_title_hash
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,14 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "published_at": it.get("published_at") or "",
                 "image_url": image_url,
             }
+
+            item_clean = rewrite.maybe_rewrite_item(item_clean, config)
+
+            candidates = images.extract_candidates(item_clean)
+            best = images.pick_best(candidates)
+            tg_file_id = images.ensure_tg_file_id(best.url) if best else None
+            item_clean["image_url"] = tg_file_id or ""
+
             sent = _publisher_send(item_clean)
             if sent:
                 cnt_published += 1

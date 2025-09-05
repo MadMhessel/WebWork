@@ -70,9 +70,23 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_items_guid ON items(guid);
         CREATE INDEX IF NOT EXISTS idx_items_title_hash ON items(title_hash);
         CREATE INDEX IF NOT EXISTS idx_items_source ON items(source);
+
+        CREATE TABLE IF NOT EXISTS moderation_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT,
+            guid TEXT,
+            url TEXT UNIQUE,
+            title TEXT,
+            content TEXT,
+            published_at TEXT,
+            image_url TEXT,
+            status TEXT,
+            tg_message_id TEXT
+        );
         """
     )
     _ensure_column(conn, "items", "image_url", "TEXT")
+    _ensure_column(conn, "moderation_queue", "image_url", "TEXT")
     conn.commit()
     logger.info("Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db"))
 
