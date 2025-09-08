@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 import logging  # стандартный модуль логирования
 import sys
-from . import config
+try:
+    from . import config
+except ImportError:  # pragma: no cover
+    import config  # type: ignore
 
 _FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 

@@ -6,16 +6,25 @@ import time
 import threading
 from typing import Dict, List, Tuple
 
-from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
-from . import moderator as moderation, bot_updates
-from .utils import normalize_whitespace, compute_title_hash
+try:
+    from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
+    from . import moderator as moderation, bot_updates
+    from .utils import normalize_whitespace, compute_title_hash
+    try:
+        from . import publisher  # type: ignore
+    except Exception:  # pragma: no cover
+        publisher = None  # type: ignore
+except ImportError:  # pragma: no cover
+    import config, logging_setup, fetcher, filters, dedup, db, rewrite, images  # type: ignore
+    import moderator as moderation  # type: ignore
+    import bot_updates  # type: ignore
+    from utils import normalize_whitespace, compute_title_hash  # type: ignore
+    try:
+        import publisher  # type: ignore
+    except Exception:  # pragma: no cover
+        publisher = None  # type: ignore
 
 logger = logging.getLogger(__name__)
-
-try:
-    from . import publisher  # type: ignore
-except Exception:  # pragma: no cover
-    publisher = None  # type: ignore
 
 
 def _publisher_init() -> None:

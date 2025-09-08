@@ -4,7 +4,10 @@ import logging
 import re
 from typing import Optional
 
-from . import db, utils, config
+try:
+    from . import db, utils, config
+except ImportError:  # pragma: no cover
+    import db, utils, config  # type: ignore
 
 logger = logging.getLogger(__name__)
 

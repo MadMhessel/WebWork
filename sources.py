@@ -1,5 +1,8 @@
 from typing import Iterable, Dict
-from . import config
+try:
+    from . import config
+except ImportError:  # pragma: no cover
+    import config  # type: ignore
 
 def iter_sources() -> Iterable[Dict[str, str]]:
     for s in config.SOURCES:

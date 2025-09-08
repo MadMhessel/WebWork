@@ -2,7 +2,10 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from . import config
+try:
+    from . import config
+except ImportError:  # pragma: no cover
+    import config  # type: ignore
 
 _session = None
 

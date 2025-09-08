@@ -3,7 +3,10 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-from . import config, publisher, db
+try:
+    from . import config, publisher, db
+except ImportError:  # pragma: no cover
+    import config, publisher, db  # type: ignore
 
 logger = logging.getLogger(__name__)
 

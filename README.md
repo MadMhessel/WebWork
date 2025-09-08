@@ -37,15 +37,36 @@ python -m config init
 ## Запуск
 Разово:
 ```bash
-python -m newsbot.main --once
+python main.py
 ```
 Цикл:
 ```bash
-python -m newsbot.main --loop
+python main.py --loop
 ```
-DRY-RUN + мок-набор:
-```bash
-python -m newsbot.main --once --dry-run --mock
+
+## Запуск через PowerShell
+Полный пример для Windows:
+
+```powershell
+# клонирование и переход в каталог проекта
+git clone <URL_репозитория>
+cd WebWork
+
+# при желании создаём виртуальное окружение
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# установка зависимостей
+pip install -r requirements.txt
+
+# однократная инициализация конфигурации (.env создастся в профиле пользователя)
+python -m config init
+
+# запуск одного прохода
+python .\main.py
+
+# запуск в бесконечном цикле
+python .\main.py --loop
 ```
 
 ## Формат логов

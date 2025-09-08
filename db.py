@@ -4,7 +4,10 @@ import os
 import sqlite3
 from typing import Any, Dict, Optional
 
-from . import config
+try:
+    from . import config
+except ImportError:  # pragma: no cover
+    import config  # type: ignore
 
 logger = logging.getLogger(__name__)
 

@@ -8,8 +8,12 @@ from urllib.parse import urljoin
 import feedparser
 from requests import Response
 
-from . import config, http_client
-from .utils import normalize_whitespace, shorten_url
+try:
+    from . import config, http_client
+    from .utils import normalize_whitespace, shorten_url
+except ImportError:  # pragma: no cover
+    import config, http_client  # type: ignore
+    from utils import normalize_whitespace, shorten_url  # type: ignore
 
 logger = logging.getLogger(__name__)
 

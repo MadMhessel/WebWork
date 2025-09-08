@@ -2,7 +2,10 @@ import logging
 import time
 from typing import Optional
 
-from . import config, http_client, moderator, publisher, db
+try:
+    from . import config, http_client, moderator, publisher, db
+except ImportError:  # pragma: no cover
+    import config, http_client, moderator, publisher, db  # type: ignore
 
 logger = logging.getLogger(__name__)
 
