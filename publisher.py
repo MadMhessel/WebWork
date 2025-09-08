@@ -8,8 +8,12 @@ import sqlite3
 
 import requests
 
-from . import config, db, rewrite, http_client, images
-from .utils import shorten_url
+try:
+    from . import config, db, rewrite, http_client, images
+    from .utils import shorten_url
+except ImportError:  # pragma: no cover
+    import config, db, rewrite, http_client, images  # type: ignore
+    from utils import shorten_url  # type: ignore
 
 logger = logging.getLogger(__name__)
 

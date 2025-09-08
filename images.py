@@ -15,7 +15,10 @@ except Exception:  # pragma: no cover
 
 import sqlite3
 from collections import Counter
-from . import config, db, http_client
+try:
+    from . import config, db, http_client
+except ImportError:  # pragma: no cover
+    import config, db, http_client  # type: ignore
 
 HTTP_SESSION = http_client.get_session()
 
