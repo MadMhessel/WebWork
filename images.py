@@ -151,6 +151,44 @@ def select_image_with_fallback(item: dict) -> Optional[str]:
     return None
 
 
+def resolve_image(item: dict, conn: Optional[sqlite3.Connection] = None) -> dict:
+    """Resolve image URL and Telegram file id for ``item``.
+
+    The function first tries to pick the best candidate from the article
+    itself (levels A–B). If validation via ``ensure_tg_file_id`` fails, it
+    retries with the configured fallback image to guarantee that at least some
+    visual is attached to the post (SLA 100%).
+
+    Returns a dict that may contain ``image_url``, ``tg_file_id`` and
+    ``image_hash`` keys depending on which steps succeeded. ``image_url`` is
+    always present when a fallback is configured.
+    """
+
+    best_url = select_image_with_fallback(item)
+    fallback_url = getattr(config, "FALLBACK_IMAGE_URL", "")
+
+    urls_to_try: List[str] = []
+    if best_url:
+        urls_to_try.append(best_url)
+    if fallback_url and fallback_url not in urls_to_try:
+        urls_to_try.append(fallback_url)
+
+    result: dict = {}
+    for url in urls_to_try:
+        res = ensure_tg_file_id(url, conn)
+        if res:
+            fid, ihash = res
+            result = {"image_url": url, "tg_file_id": fid, "image_hash": ihash}
+            break
+
+    if not result:
+        if fallback_url:
+            result = {"image_url": fallback_url}
+        elif urls_to_try:
+            result = {"image_url": urls_to_try[0]}
+    return result
+
+
 def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None) -> Optional[tuple[str, str]]:
     """Ensure Telegram file id for image, applying filters and caching by hash.
 

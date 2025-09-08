@@ -20,3 +20,15 @@ def test_select_image_fallback(monkeypatch):
     url = images.select_image_with_fallback(item)
     assert url == "http://fallback/img.png"
 
+
+def test_resolve_image_uses_fallback_when_candidate_invalid(monkeypatch):
+    monkeypatch.setattr(config, "FALLBACK_IMAGE_URL", "http://fallback/img.png")
+
+    # ensure_tg_file_id returns None for any URL to emulate validation failure
+    monkeypatch.setattr(images, "ensure_tg_file_id", lambda url, conn=None: None)
+
+    item = {"title": "t", "content": '<img src="http://bad/img.png">'}
+    info = images.resolve_image(item)
+    assert info["image_url"] == "http://fallback/img.png"
+    assert "tg_file_id" not in info
+
