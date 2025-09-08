@@ -217,19 +217,24 @@ def _extract_html_image_url(soup, base_url: str = "") -> str:
 
 
 def _validate_image_url(url: str) -> str:
+    """Fast-check that URL points to an image.
+
+    Использует HEAD-запрос, чтобы не скачивать сам файл. Возвращает исходный URL,
+    если Content-Type начинается с ``image/`` и статус 200, иначе пустую строку.
+    """
     if not url:
         return ""
-    r = None
+    resp: Response | None = None
     try:
-        r = HTTP_SESSION.get(url, timeout=DEFAULT_TIMEOUT, stream=True)
-        if r.status_code != 200:
+        resp = HTTP_SESSION.head(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        if resp.status_code != 200:
             logger.warning(
                 "Отказ скачивания картинки %s: HTTP %s",
                 shorten_url(url),
-                r.status_code,
+                resp.status_code,
             )
             return ""
-        ctype = r.headers.get("Content-Type", "")
+        ctype = resp.headers.get("Content-Type", "")
         if not ctype.startswith("image/"):
             logger.warning(
                 "Отказ скачивания картинки %s: тип %s",
@@ -246,11 +251,11 @@ def _validate_image_url(url: str) -> str:
         )
         return ""
     finally:
-        try:
-            if r is not None:
-                r.close()
-        except Exception:
-            pass
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
 def _extract_html_image_url_basic(soup) -> str:
     if not soup:
         return ""
@@ -345,12 +350,12 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     title = getattr(entry, "title", "") or ""
     published_at = getattr(entry, "published", "") or getattr(entry, "updated", "") or ""
     content_val = ""
-    image_url = ""
     html_blobs: List[str] = []
     summary_raw = ""
+    candidates: List[str] = []
     try:
         if getattr(entry, "content", None):
-            blocks = []
+            blocks: List[str] = []
             for c in entry.content:
                 val = getattr(c, "value", "") or ""
                 if val:
@@ -359,65 +364,44 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
             content_val = "\n\n".join(blocks)
         summary_raw = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
         if not content_val:
-            content_val = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
+            content_val = summary_raw
 
-        if getattr(entry, "media_content", None):
-            for m in entry.media_content:
-                u = getattr(m, "url", "") or ""
-                if u:
-                    image_url = u
-                    break
-        if not image_url and getattr(entry, "media_thumbnail", None):
-            for m in entry.media_thumbnail:
-                u = getattr(m, "url", "") or ""
-                if u:
-                    image_url = u
-                    break
-        if not image_url:
-            links = getattr(entry, "links", []) or []
-            for l in links:
-                rel = getattr(l, "rel", "") or ""
-                typ = getattr(l, "type", "") or ""
-                if rel == "enclosure" and typ.startswith("image/"):
-                    u = getattr(l, "href", "") or ""
-                    if u:
-                        image_url = u
-                        break
+        for m in getattr(entry, "media_content", []) or []:
+            u = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
+            if u:
+                candidates.append(u)
+        for m in getattr(entry, "media_thumbnail", []) or []:
+            u = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
+            if u:
+                candidates.append(u)
+        for en in getattr(entry, "enclosures", []) or []:
+            u = getattr(en, "href", "") or getattr(en, "url", "")
+            if isinstance(en, dict):
+                u = en.get("href") or en.get("url") or u
+            if u:
+                candidates.append(u)
+        for ln in getattr(entry, "links", []) or []:
+            rel = getattr(ln, "rel", "") or (ln.get("rel") if isinstance(ln, dict) else "")
+            type_ = getattr(ln, "type", "") or (ln.get("type") if isinstance(ln, dict) else "")
+            href = getattr(ln, "href", "") or getattr(ln, "url", "")
+            if isinstance(ln, dict):
+                href = ln.get("href") or ln.get("url") or href
+            if rel == "enclosure" and type_.startswith("image/") and href:
+                candidates.append(href)
     except Exception as ex:
         logger.warning("Отказ извлечения картинки из RSS: %s", ex)
-    image_url = _validate_image_url(image_url)
-    if image_url:
-        logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
+
     if summary_raw:
         html_blobs.append(summary_raw)
-    candidates: List[str] = []
-    for m in getattr(entry, "media_content", []) or []:
-        url = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
-        if url:
-            candidates.append(url)
-    for m in getattr(entry, "media_thumbnail", []) or []:
-        url = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
-        if url:
-            candidates.append(url)
-    for en in getattr(entry, "enclosures", []) or []:
-        url = getattr(en, "href", "") or getattr(en, "url", "")
-        if isinstance(en, dict):
-            url = en.get("href") or en.get("url") or url
-        if url:
-            candidates.append(url)
-    for ln in getattr(entry, "links", []) or []:
-        rel = getattr(ln, "rel", "") or (ln.get("rel") if isinstance(ln, dict) else "")
-        type_ = getattr(ln, "type", "") or (ln.get("type") if isinstance(ln, dict) else "")
-        href = getattr(ln, "href", "") or getattr(ln, "url", "")
-        if isinstance(ln, dict):
-            href = ln.get("href") or ln.get("url") or href
-        if rel == "enclosure" and type_.startswith("image/") and href:
-            candidates.append(href)
-    img_re = re.compile(r'''<img[^>]+src=['"]([^'"]+)['"]''', flags=re.I)
+    img_re = re.compile(r"""<img[^>]+src=['\"]([^'\"]+)['\"]""", flags=re.I)
     for blob in html_blobs:
         for img in img_re.findall(blob):
             candidates.append(img)
-    image_url = _first_http_url(candidates)
+
+    image_url = _validate_image_url(_first_http_url(candidates))
+    if image_url:
+        logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
+
     title = normalize_whitespace(title)
     content_val = normalize_whitespace(content_val)
     if not title:
