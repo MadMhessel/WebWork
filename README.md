@@ -11,7 +11,16 @@ pip install beautifulsoup4
 ```
 
 ## Настройка
-Через `.env` (см. `.env.example`) или переменные окружения:
+Настройка выполняется один раз через `.env` в директории профиля пользователя
+(`%APPDATA%/NewsBot/.env` на Windows). Создать файл можно командой:
+
+```bash
+python -m config init
+```
+
+Можно также скопировать шаблон `.env.example` и заполнить его.
+
+Поддерживаются следующие переменные:
 - `BOT_TOKEN`, `CHANNEL_ID`, `REVIEW_CHAT_ID`, `CHANNEL_CHAT_ID`
 - `MODERATOR_IDS`, `ATTACH_IMAGES`, `MAX_MEDIA_PER_POST`, `IMAGE_MIN_EDGE`, `IMAGE_MIN_AREA`, `IMAGE_DOMAINS_DENYLIST`
 - `SNOOZE_MINUTES`, `REVIEW_TTL_HOURS`, `RETRY_LIMIT`
