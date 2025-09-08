@@ -7,11 +7,20 @@ from urllib.parse import urljoin
 
 import requests
 import feedparser
+from urllib3.util.retry import Retry
 
-from . import config
+from . import config, http_client
 from .utils import normalize_whitespace, shorten_url
 
 logger = logging.getLogger(__name__)
+
+
+# Reuse global HTTP session
+HTTP_SESSION = http_client.get_session()
+DEFAULT_TIMEOUT = (
+    getattr(config, "HTTP_TIMEOUT_CONNECT", 5),
+    getattr(config, "HTTP_TIMEOUT_READ", 15),
+)
 
 try:
     from bs4 import BeautifulSoup  # type: ignore
@@ -80,19 +89,40 @@ MOCK_ITEMS: List[Dict[str, str]] = [
 
 # -------------------- HTTP helpers --------------------
 
-def _requests_get(url: str, timeout: int = 20) -> Optional[str]:
-    headers = {
-        "User-Agent": "newsbot/1.0 (+https://example.com)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
+def _requests_get(
+    url: str,
+    timeout: Optional[tuple] = None,
+    *,
+    retry: Optional[dict] = None,
+) -> Optional[str]:
+    sess = HTTP_SESSION
+    if retry is not None:
+        # build a temporary session with custom retry params
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        rcfg = Retry(**retry)
+        temp = requests.Session()
+        temp.trust_env = False
+        temp.headers.update({"User-Agent": "newsbot/1.0 (+https://example.com)"})
+        adapter = HTTPAdapter(max_retries=rcfg)
+        temp.mount("http://", adapter)
+        temp.mount("https://", adapter)
+        sess = temp
     try:
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = sess.get(url, timeout=timeout or DEFAULT_TIMEOUT)
         r.raise_for_status()
         r.encoding = r.encoding or "utf-8"
         return r.text
     except Exception as ex:
         logger.warning("Ошибка HTTP при загрузке %s: %s", url, ex)
         return None
+    finally:
+        if retry is not None:
+            try:
+                sess.close()
+            except Exception:
+                pass
 
 # -------------------- HTML article --------------------
 
@@ -181,7 +211,7 @@ def _validate_image_url(url: str) -> str:
         return ""
     r = None
     try:
-        r = requests.get(url, timeout=10, stream=True)
+        r = HTTP_SESSION.get(url, timeout=DEFAULT_TIMEOUT, stream=True)
         if r.status_code != 200:
             logger.warning(
                 "Отказ скачивания картинки %s: HTTP %s",
@@ -236,8 +266,14 @@ def _extract_html_image_url_basic(soup) -> str:
         return img["src"].strip()
     return ""
 
-def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
-    html_text = _requests_get(url)
+def _parse_html_article(
+    source_name: str,
+    url: str,
+    *,
+    timeout: Optional[tuple] = None,
+    retry: Optional[dict | Retry] = None,
+) -> Optional[Dict[str, str]]:
+    html_text = _requests_get(url, timeout=timeout, retry=retry)
     if not html_text:
         return None
     title, content, published_at, image_url = "", "", "", ""
@@ -385,17 +421,25 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
         "content": content_val,
         "published_at": published_at,
         "image_url": image_url or "",
-        "image_url": image_url,
     }
 
-def fetch_rss(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
+def fetch_rss(
+    source: Dict[str, str],
+    limit: int = 30,
+    *,
+    timeout: Optional[tuple] = None,
+    retry: Optional[dict | Retry] = None,
+) -> List[Dict[str, str]]:
     url = source.get("url", "")
     name = source.get("name", "")
     if not url:
         return []
     logger.info("Загрузка RSS: %s (%s)", name, url)
     try:
-        fp = feedparser.parse(url)
+        text = _requests_get(url, timeout=timeout, retry=retry)
+        if text is None:
+            return []
+        fp = feedparser.parse(text)
         items: List[Dict[str, str]] = []
         for e in fp.entries[:limit]:
             item = _entry_to_item_rss(name, e)
@@ -409,14 +453,16 @@ def fetch_rss(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
 
 # -------------------- HTML single --------------------
 
-def fetch_html(source: Dict[str, str]) -> List[Dict[str, str]]:
+def fetch_html(
+    source: Dict[str, str], *, timeout: Optional[tuple] = None, retry: Optional[dict | Retry] = None
+) -> List[Dict[str, str]]:
     url = source.get("url", "")
     name = source.get("name", "")
     if not url:
         return []
     logger.info("Загрузка HTML: %s (%s)", name, url)
     try:
-        item = _parse_html_article(name, url)
+        item = _parse_html_article(name, url, timeout=timeout, retry=retry)
         return [item] if item else []
     except Exception as ex:
         logger.exception("Ошибка HTML источника %s: %s", name, ex)
@@ -440,7 +486,13 @@ def _text_or_empty(node) -> str:
     except Exception:
         return ""
 
-def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
+def fetch_html_list(
+    source: Dict[str, str],
+    limit: int = 30,
+    *,
+    timeout: Optional[tuple] = None,
+    retry: Optional[dict | Retry] = None,
+) -> List[Dict[str, str]]:
     """
     Универсальный парсер листинга.
     Поддерживает произвольные селекторы из source['selectors'], но все поля опциональны.
@@ -455,7 +507,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
         return []
 
     logger.info("Загрузка HTML-листа: %s (%s)", name, base_url)
-    html = _requests_get(base_url)
+    html = _requests_get(base_url, timeout=timeout, retry=retry)
     if not html:
         return []
 
@@ -475,6 +527,12 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
             if part:
                 candidates.extend(part)
         items_nodes = candidates or soup.find_all("a")
+    if not items_nodes:
+        logger.warning(
+            "Источник '%s': не найдено карточек (selectors=%s)",
+            name,
+            sels.get("item"),
+        )
 
     out: List[Dict[str, str]] = []
     seen_links: set[str] = set()
@@ -523,7 +581,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
             date_text = date_el.get(date_attr) or _text_or_empty(date_el)
 
         # 5) загрузим карточку материала
-        detail = _parse_html_article(name, link_abs)
+        detail = _parse_html_article(name, link_abs, timeout=timeout, retry=retry)
         if not detail:
             img_el = None
             img_css = sels.get("image") or "img"
@@ -544,7 +602,6 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
                 "title": title_list or "(без заголовка)",
                 "content": "",
                 "published_at": date_text or "",
-                "image_url": "",
                 "image_url": img_src,
             })
             continue
@@ -572,20 +629,30 @@ def fetch_mock(source: Dict[str, str]) -> List[Dict[str, str]]:
 
 # -------------------- Multiplexer --------------------
 
-def fetch_all(sources: Iterable[Dict[str, str]], limit_per_source: Optional[int] = None) -> List[Dict[str, str]]:
+def fetch_all(
+    sources: Iterable[Dict[str, str]],
+    limit_per_source: Optional[int] = None,
+) -> List[Dict[str, str]]:
     limit = int(limit_per_source or getattr(config, "FETCH_LIMIT_PER_SOURCE", 30))
     result: List[Dict[str, str]] = []
     for s in sources:
+        if not s.get("enabled", True):
+            logger.info("Источник '%s' отключен конфигом", s.get("name"))
+            continue
         stype = (s.get("type") or "rss").strip().lower()
+        timeout = s.get("timeout")
+        retry = s.get("retry")
         try:
             if stype == "html":
-                result.extend(fetch_html(s))
+                result.extend(fetch_html(s, timeout=timeout, retry=retry))
             elif stype == "html_list":
-                result.extend(fetch_html_list(s, limit=limit))
+                result.extend(
+                    fetch_html_list(s, limit=limit, timeout=timeout, retry=retry)
+                )
             elif stype == "mock":
                 result.extend(fetch_mock(s))
             else:
-                result.extend(fetch_rss(s, limit=limit))
+                result.extend(fetch_rss(s, limit=limit, timeout=timeout, retry=retry))
             time.sleep(0.2)
         except Exception as ex:
             logger.exception("Необработанная ошибка источника %s: %s", s, ex)
