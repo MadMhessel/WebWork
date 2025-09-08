@@ -2,7 +2,7 @@
 import logging
 import time
 import re
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional
 from urllib.parse import urljoin
 
 import feedparser
@@ -627,9 +627,14 @@ def fetch_mock(source: Dict[str, str]) -> List[Dict[str, str]]:
 def fetch_all(
     sources: Iterable[Dict[str, str]],
     limit_per_source: Optional[int] = None,
-) -> List[Dict[str, str]]:
+) -> Iterator[Dict[str, str]]:
+    """Yield items from all enabled sources one by one.
+
+    Раньше функция возвращала список, и публикация начиналась лишь после
+    обработки всех источников. Теперь элементы выдаются по мере получения,
+    чтобы подходящие новости сразу отправлялись на модерацию.
+    """
     limit = int(limit_per_source or getattr(config, "FETCH_LIMIT_PER_SOURCE", 30))
-    result: List[Dict[str, str]] = []
     for s in sources:
         if not s.get("enabled", True):
             logger.info("Источник '%s' отключен конфигом", s.get("name"))
@@ -638,19 +643,19 @@ def fetch_all(
         timeout = s.get("timeout")
         try:
             if stype == "html":
-                result.extend(fetch_html(s, timeout=timeout))
+                items = fetch_html(s, timeout=timeout)
             elif stype == "html_list":
-                result.extend(
-                    fetch_html_list(s, limit=limit, timeout=timeout)
-                )
+                items = fetch_html_list(s, limit=limit, timeout=timeout)
             elif stype == "mock":
-                result.extend(fetch_mock(s))
+                items = fetch_mock(s)
             else:
-                result.extend(fetch_rss(s, limit=limit, timeout=timeout))
+                items = fetch_rss(s, limit=limit, timeout=timeout)
+
+            for it in items:
+                if "image_url" not in it:
+                    it["image_url"] = ""
+                yield it
             time.sleep(0.2)
         except Exception as ex:
             logger.exception("Необработанная ошибка источника %s: %s", s, ex)
-    for it in result:
-        if "image_url" not in it:
-            it["image_url"] = ""
-    return result
+
