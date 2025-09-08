@@ -3,43 +3,39 @@ import argparse
 import logging
 import sys
 import time
+import threading
 from typing import Dict, List, Tuple
 
 from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
-from . import config, logging_setup, fetcher, filters, dedup, db
-from . import moderator as moderation
+from . import moderator as moderation, bot_updates
 from .utils import normalize_whitespace, compute_title_hash
 
 logger = logging.getLogger(__name__)
 
-# Паблишер необязательный: если модуль есть — используем, нет — просто логируем.
 try:
     from . import publisher  # type: ignore
 except Exception:  # pragma: no cover
     publisher = None  # type: ignore
 
-def _publisher_init() -> None:
-    if not publisher:
-        return
-    for fn in ("init", "setup", "initialize"):
-        if hasattr(publisher, fn):
-            getattr(publisher, fn)()
-            break
-    logger.info("Telegram клиент инициализирован.")
 
-def _publisher_send(item: Dict) -> bool:
+def _publisher_init() -> None:
+    if publisher and hasattr(publisher, "init_telegram_client"):
+        publisher.init_telegram_client()
+        logger.info("Telegram клиент инициализирован.")
+
+
+def _publisher_send_direct(item: Dict) -> bool:
     if not publisher:
         return False
-    # пробуем несколько известных сигнатур
-    for fn in ("publish", "send", "enqueue", "queue_send", "push"):
-        if hasattr(publisher, fn):
-            try:
-                getattr(publisher, fn)(item)  # type: ignore
-                return True
-            except Exception as ex:  # pragma: no cover
-                logger.exception("Ошибка отправки (%s): %s", fn, ex)
-                return False
-    return False
+    chat_id = getattr(config, "CHANNEL_CHAT_ID", "") or getattr(config, "CHANNEL_ID", "")
+    return publisher.publish_message(
+        chat_id,
+        item.get("title", ""),
+        item.get("content", ""),
+        item.get("url", ""),
+        item.get("image_url"),
+        cfg=config,
+    )
 
 def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     items = fetcher.fetch_all(config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE)
@@ -56,6 +52,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     cnt_published = 0
     cnt_not_sent = 0
     cnt_errors = 0
+    image_start = images.image_stats["with_image"]
 
     for it in items:
         try:
@@ -96,10 +93,12 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             # отправка
             item_clean = {
                 "source": src,
+                "source_id": src,
                 "guid": guid,
                 "url": url,
                 "title": title,
                 "content": content,
+                "summary": it.get("summary") or "",
                 "published_at": it.get("published_at") or "",
                 "image_url": image_url,
             }
@@ -108,18 +107,26 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
 
             candidates = images.extract_candidates(item_clean)
             best = images.pick_best(candidates)
-            tg_file_id = images.ensure_tg_file_id(best.url) if best else None
-            item_clean["image_url"] = tg_file_id or ""
-
-            sent = _publisher_send(item_clean)
-            if sent:
-                cnt_published += 1
-            mod_id = moderation.enqueue_item(item_clean, conn)
-            if mod_id:
-                cnt_queued += 1
-                moderation.send_preview(item_clean, mod_id, conn)
+            if best:
+                res = images.ensure_tg_file_id(best.url, conn)
+                if res:
+                    tg_file_id, ihash = res
+                    item_clean["image_url"] = best.url
+                    item_clean["tg_file_id"] = tg_file_id
+                    item_clean["image_hash"] = ihash
+                else:
+                    item_clean["image_url"] = ""
             else:
-                sent = _publisher_send(item_clean)
+                item_clean["image_url"] = ""
+
+            if getattr(config, "ENABLE_MODERATION", False):
+                mod_id = moderation.enqueue_and_preview(item_clean, conn)
+                if mod_id:
+                    cnt_queued += 1
+                else:
+                    cnt_not_sent += 1
+            else:
+                sent = _publisher_send_direct(item_clean)
                 if sent:
                     cnt_published += 1
                 else:
@@ -134,17 +141,19 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             cnt_errors += 1
             logger.exception("[ERROR] url=%s | %s", it.get("url", ""), ex)
 
+    with_image = images.image_stats["with_image"] - image_start
     logger.info(
         "ИТОГО: получено=%d, релевантные=%d, дублей_в_пакете_URL=%d, почти_дублей_в_пакете=%d, "
-        "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d",
+        "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d, с_картинкой=%d",
         len(items), cnt_relevant, cnt_dup_inpack_url, cnt_dup_inpack_title,
-        cnt_dup_db, cnt_queued, cnt_published, cnt_errors, cnt_not_sent
+        cnt_dup_db, cnt_queued, cnt_published, cnt_errors, cnt_not_sent, with_image
     )
     return (len(items), cnt_relevant, cnt_dup_inpack_url, cnt_dup_inpack_title,
             cnt_dup_db, cnt_queued, cnt_published, cnt_errors)
 
 def main() -> int:
     logging_setup.setup_logging()
+    config.validate_config()
 
     # Поднимаем БД
     conn = db.connect()
@@ -152,6 +161,12 @@ def main() -> int:
 
     # Инициализируем паблишер (если он есть)
     _publisher_init()
+
+    stop_event = threading.Event()
+    updates_thread = None
+    if getattr(config, "ENABLE_MODERATION", False):
+        updates_thread = threading.Thread(target=bot_updates.run, args=(stop_event,), daemon=True)
+        updates_thread.start()
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--loop", action="store_true", help="Бесконечный цикл с паузой")
@@ -164,8 +179,6 @@ def main() -> int:
     logger.info("Старт бесконечного цикла. Пауза: %d сек.", config.LOOP_DELAY_SECS)
     while True:
         try:
-            db.init_schema(conn)  # на всякий случай
-            _publisher_init()
             run_once(conn)
             time.sleep(config.LOOP_DELAY_SECS)
         except KeyboardInterrupt:
@@ -175,6 +188,9 @@ def main() -> int:
             logger.exception("Неожиданная ошибка цикла: %s", ex)
             time.sleep(15)
 
+    stop_event.set()
+    if updates_thread is not None:
+        updates_thread.join(timeout=5)
     return 0
 
 if __name__ == "__main__":

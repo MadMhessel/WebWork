@@ -18,7 +18,12 @@ pip install beautifulsoup4
 - `ENABLE_REWRITE`, `STRICT_FILTER`, `LOG_LEVEL`
 - `ON_SEND_ERROR`, `PUBLISH_MAX_RETRIES`, `RETRY_BACKOFF_SECONDS`
 - `POLL_INTERVAL_SECONDS`, `FETCH_LIMIT_PER_SOURCE`
+- `HTTP_TIMEOUT_CONNECT`, `HTTP_TIMEOUT_READ`, `HTTP_RETRY_TOTAL`, `HTTP_BACKOFF`
+- `IMAGE_ALLOWED_EXT`, `IMAGE_DENYLIST_DOMAINS`, `MIN_IMAGE_BYTES`
 - ключевые слова и источники в `newsbot/config.py`
+
+В блоке `SOURCES` у каждого источника теперь есть флаг `enabled` и опциональные
+поля `timeout`/`retry` для индивидуальных сетевых настроек.
 
 ## Запуск
 Разово:
