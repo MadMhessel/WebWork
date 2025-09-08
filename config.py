@@ -103,10 +103,16 @@ LOOP_DELAY_SECS: int = int(os.getenv("LOOP_DELAY_SECS", "600"))
 
 
 def validate_config() -> None:
-    if not BOT_TOKEN:
+    invalid_token = {"", "YOUR_TELEGRAM_BOT_TOKEN"}
+    if BOT_TOKEN in invalid_token:
         raise ValueError("BOT_TOKEN is required")
-    if not (CHANNEL_ID or CHANNEL_CHAT_ID):
+    invalid_channel = {"", "@your_main_channel"}
+    if (CHANNEL_ID in invalid_channel) and (str(CHANNEL_CHAT_ID) in invalid_channel):
         raise ValueError("CHANNEL_CHAT_ID or CHANNEL_ID is required")
+    if ENABLE_MODERATION:
+        invalid_review = {"", "@your_review_channel"}
+        if str(REVIEW_CHAT_ID) in invalid_review:
+            raise ValueError("REVIEW_CHAT_ID is required when moderation is enabled")
     if not isinstance(MODERATOR_IDS, set) or not all(isinstance(x, int) for x in MODERATOR_IDS):
         raise ValueError("MODERATOR_IDS must be a set of ints")
 

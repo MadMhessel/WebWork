@@ -31,6 +31,10 @@ python -m config init
 - `IMAGE_ALLOWED_EXT`, `IMAGE_DENYLIST_DOMAINS`, `MIN_IMAGE_BYTES`
 - ключевые слова и источники в `newsbot/config.py`
 
+Переменные `CHANNEL_ID`/`CHANNEL_CHAT_ID` и `REVIEW_CHAT_ID` должны быть заполнены
+реальными идентификаторами каналов или чатов. Иначе попытка отправить сообщение
+в Telegram завершится ошибкой вида `Bad Request: chat not found`.
+
 В блоке `SOURCES` у каждого источника теперь есть флаг `enabled` и опциональные
 поля `timeout`/`retry` для индивидуальных сетевых настроек.
 
