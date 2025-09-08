@@ -51,7 +51,9 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
     return out
 
 
+
 def is_reasonable_image_url(url: str) -> bool:
+
     """Filter URL by scheme, denylist patterns and extension."""
     try:
         parsed = urlparse(url)
@@ -149,6 +151,7 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
             or h < int(getattr(config, "IMAGE_MIN_EDGE", 0))
             or w * h < int(getattr(config, "IMAGE_MIN_AREA", 0))
         ):
+
             image_stats["reasons"]["bad_dimensions"] += 1
             return None
         ratio = w / float(h or 1)

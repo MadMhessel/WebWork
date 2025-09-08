@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 
 import requests
 import feedparser
+from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from . import config, http_client
@@ -17,6 +18,29 @@ logger = logging.getLogger(__name__)
 
 # Reuse global HTTP session
 HTTP_SESSION = http_client.get_session()
+def _build_session(retry_cfg: Optional[Retry] = None) -> requests.Session:
+    """Create a requests session with common settings."""
+    sess = requests.Session()
+    sess.trust_env = False
+    sess.headers.update({"User-Agent": "newsbot/1.0 (+https://example.com)"})
+    if isinstance(retry_cfg, dict):
+        retry = Retry(**retry_cfg)
+    elif isinstance(retry_cfg, Retry):
+        retry = retry_cfg
+    else:
+        retry = Retry(
+            total=getattr(config, "HTTP_RETRY_TOTAL", 3),
+            backoff_factor=getattr(config, "HTTP_BACKOFF", 0.5),
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "HEAD"],
+        )
+    adapter = HTTPAdapter(max_retries=retry)
+    sess.mount("http://", adapter)
+    sess.mount("https://", adapter)
+    return sess
+
+
+HTTP_SESSION = _build_session()
 DEFAULT_TIMEOUT = (
     getattr(config, "HTTP_TIMEOUT_CONNECT", 5),
     getattr(config, "HTTP_TIMEOUT_READ", 15),
@@ -109,6 +133,9 @@ def _requests_get(
         temp.mount("http://", adapter)
         temp.mount("https://", adapter)
         sess = temp
+    retry: Optional[dict | Retry] = None,
+) -> Optional[str]:
+    sess = HTTP_SESSION if retry is None else _build_session(retry)
     try:
         r = sess.get(url, timeout=timeout or DEFAULT_TIMEOUT)
         r.raise_for_status()
