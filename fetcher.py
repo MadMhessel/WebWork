@@ -6,8 +6,7 @@ from typing import Dict, Iterable, List, Optional
 from urllib.parse import urljoin
 
 import feedparser
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from requests import Response
 
 from . import config, http_client
 from .utils import normalize_whitespace, shorten_url
@@ -89,22 +88,51 @@ MOCK_ITEMS: List[Dict[str, str]] = [
 
 # -------------------- HTTP helpers --------------------
 
-def _requests_get(url: str, timeout: Optional[tuple] = None) -> Optional[str]:
-    """Simple GET helper using shared HTTP session."""
-    try:
-        r = HTTP_SESSION.get(url, timeout=timeout or DEFAULT_TIMEOUT)
+def _requests_get(
+    url: str,
+    *,
+    timeout: Optional[tuple[int, int]] = None,
+    allow_redirects: bool = True,
+) -> str:
+    """GET страницу как текст, с общим Session и стандартными таймаутами"""
+    resp: Response = HTTP_SESSION.get(
+        url,
+        timeout=timeout or DEFAULT_TIMEOUT,
+        allow_redirects=allow_redirects,
+    )
+    resp.raise_for_status()
+    return resp.text  # requests сам подберёт encoding по заголовкам/контенту
+
+
+def _requests_head(
+    url: str,
+    *,
+    timeout: Optional[tuple[int, int]] = None,
+    allow_redirects: bool = True,
+) -> Response:
+    """HEAD-запрос для быстрой проверки доступности и заголовков"""
+    resp: Response = HTTP_SESSION.head(
+        url,
+        timeout=timeout or DEFAULT_TIMEOUT,
+        allow_redirects=allow_redirects,
+    )
+    resp.raise_for_status()
+    return resp
+
+
+def _download_bytes(
+    url: str,
+    *,
+    timeout: Optional[tuple[int, int]] = None,
+) -> bytes:
+    """Скачать бинарные данные (если понадобятся), корректно закрывая респонс"""
+    with HTTP_SESSION.get(
+        url,
+        timeout=timeout or DEFAULT_TIMEOUT,
+        stream=True,
+    ) as r:
         r.raise_for_status()
-        r.encoding = r.encoding or "utf-8"
-        return r.text
-    except Exception as ex:
-        logger.warning("Ошибка HTTP при загрузке %s: %s", url, ex)
-        return None
-    finally:
-        if retry is not None:
-            try:
-                sess.close()
-            except Exception:
-                pass
+        return r.content
 
 # -------------------- HTML article --------------------
 
