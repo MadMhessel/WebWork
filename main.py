@@ -139,13 +139,12 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
 
-            candidates = images.extract_candidates(item_clean)
-            best = images.pick_best(candidates)
-            if best:
-                res = images.ensure_tg_file_id(best.url, conn)
+            best_url = images.select_image_with_fallback(item_clean)
+            if best_url:
+                res = images.ensure_tg_file_id(best_url, conn)
                 if res:
                     tg_file_id, ihash = res
-                    item_clean["image_url"] = best.url
+                    item_clean["image_url"] = best_url
                     item_clean["tg_file_id"] = tg_file_id
                     item_clean["image_hash"] = ihash
                 else:

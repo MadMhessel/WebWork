@@ -28,6 +28,7 @@ try:  # pragma: no cover - simple fallback handling
         ENABLE_MODERATION as DEFAULT_ENABLE_MODERATION,
         REVIEW_CHAT_ID as DEFAULT_REVIEW_CHAT_ID,
         MODERATOR_IDS as DEFAULT_MODERATOR_IDS,
+        FALLBACK_IMAGE_URL as DEFAULT_FALLBACK_IMAGE_URL,
     )
 except Exception:  # pragma: no cover - executed only when defaults missing
     DEFAULT_BOT_TOKEN = ""
@@ -35,6 +36,7 @@ except Exception:  # pragma: no cover - executed only when defaults missing
     DEFAULT_ENABLE_MODERATION = False
     DEFAULT_REVIEW_CHAT_ID = ""
     DEFAULT_MODERATOR_IDS: set[int] = set()
+    DEFAULT_FALLBACK_IMAGE_URL = "https://example.com/placeholder.png"
 
 # === Базовые настройки бота ===
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", DEFAULT_BOT_TOKEN).strip()
@@ -72,6 +74,11 @@ IMAGE_DENYLIST_DOMAINS = set(
     for d in os.getenv("IMAGE_DENYLIST_DOMAINS", "mc.yandex.ru,top-fwz1.mail.ru,counter,logo,pixel").split(",")
     if d.strip()
 )
+
+FALLBACK_IMAGE_URL: str = os.getenv(
+    "FALLBACK_IMAGE_URL",
+    DEFAULT_FALLBACK_IMAGE_URL,
+).strip()
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
