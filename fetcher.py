@@ -10,12 +10,14 @@ import feedparser
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from . import config
+from . import config, http_client
 from .utils import normalize_whitespace, shorten_url
 
 logger = logging.getLogger(__name__)
 
 
+# Reuse global HTTP session
+HTTP_SESSION = http_client.get_session()
 def _build_session(retry_cfg: Optional[Retry] = None) -> requests.Session:
     """Create a requests session with common settings."""
     sess = requests.Session()
@@ -115,6 +117,22 @@ def _requests_get(
     url: str,
     timeout: Optional[tuple] = None,
     *,
+    retry: Optional[dict] = None,
+) -> Optional[str]:
+    sess = HTTP_SESSION
+    if retry is not None:
+        # build a temporary session with custom retry params
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        rcfg = Retry(**retry)
+        temp = requests.Session()
+        temp.trust_env = False
+        temp.headers.update({"User-Agent": "newsbot/1.0 (+https://example.com)"})
+        adapter = HTTPAdapter(max_retries=rcfg)
+        temp.mount("http://", adapter)
+        temp.mount("https://", adapter)
+        sess = temp
     retry: Optional[dict | Retry] = None,
 ) -> Optional[str]:
     sess = HTTP_SESSION if retry is None else _build_session(retry)

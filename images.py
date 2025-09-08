@@ -14,14 +14,16 @@ except Exception:  # pragma: no cover
     Image = None  # type: ignore
 
 import sqlite3
-from . import config, db
-from . import config
-from .fetcher import HTTP_SESSION, DEFAULT_TIMEOUT
+from collections import Counter
+from . import config, db, http_client
+
+HTTP_SESSION = http_client.get_session()
 
 log = logging.getLogger(__name__)
 
 # simple in-memory cache: image_hash -> tg_file_id
 images_cache: dict[str, str] = {}
+image_stats = {"with_image": 0, "reasons": Counter()}
 
 
 @dataclass
@@ -44,12 +46,14 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
         if not u or u in seen:
             continue
         seen.add(u)
-        if _url_allowed(u):
+        if is_reasonable_image_url(u):
             out.append(ImageCandidate(url=u))
     return out
 
 
-def _url_allowed(url: str) -> bool:
+
+def is_reasonable_image_url(url: str) -> bool:
+
     """Filter URL by scheme, denylist patterns and extension."""
     try:
         parsed = urlparse(url)
@@ -111,21 +115,33 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
         if row:
             return row["tg_file_id"], row["hash"]
 
+    session = HTTP_SESSION
     try:
-        # HEAD check for type and length
-        head = HTTP_SESSION.head(image_url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
-        ctype = head.headers.get("Content-Type", "")
-        if head.status_code != 200 or not ctype.startswith("image/"):
-            return None
-        clen = int(head.headers.get("Content-Length", "0") or "0")
-        if clen < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
-            return None
-        r = HTTP_SESSION.get(image_url, timeout=DEFAULT_TIMEOUT)
-        if r.status_code != 200:
-            return None
-        data = r.content
-        if len(data) < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
-            return None
+        head = session.head(image_url, timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ), allow_redirects=True)
+        try:
+            ctype = head.headers.get("Content-Type", "")
+            if head.status_code != 200 or not ctype.startswith("image/"):
+                image_stats["reasons"]["invalid_content_type"] += 1
+                return None
+            clen = int(head.headers.get("Content-Length", "0") or "0")
+            if clen < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
+                image_stats["reasons"]["too_small"] += 1
+                return None
+        finally:
+            if hasattr(head, "close"):
+                head.close()
+        r = session.get(image_url, timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ))
+        try:
+            if r.status_code != 200:
+                image_stats["reasons"][str(r.status_code)] += 1
+                return None
+            data = r.content
+            if len(data) < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
+                image_stats["reasons"]["too_small"] += 1
+                return None
+        finally:
+            if hasattr(r, "close"):
+                r.close()
         if Image is None:
             return None
         with Image.open(BytesIO(data)) as im:
@@ -135,11 +151,14 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
             or h < int(getattr(config, "IMAGE_MIN_EDGE", 0))
             or w * h < int(getattr(config, "IMAGE_MIN_AREA", 0))
         ):
+
+            image_stats["reasons"]["bad_dimensions"] += 1
             return None
         ratio = w / float(h or 1)
         min_ratio = float(getattr(config, "IMAGE_MIN_RATIO", 0.0))
         max_ratio = float(getattr(config, "IMAGE_MAX_RATIO", 10.0))
         if ratio < min_ratio or ratio > max_ratio:
+            image_stats["reasons"]["bad_ratio"] += 1
             return None
         ihash = hashlib.sha256(data).hexdigest()
         cached = images_cache.get(ihash)
@@ -153,6 +172,7 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
                 (image_url, ihash, w, h, file_id),
             )
             conn.commit()
+        image_stats["with_image"] += 1
         return file_id, ihash
     except Exception as ex:  # pragma: no cover
         log.debug("ensure_tg_file_id failed for %s: %s", image_url, ex)

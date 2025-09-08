@@ -104,6 +104,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
             tg_file_id TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS editor_state (
+            user_id INTEGER PRIMARY KEY,
+            item_id INTEGER,
+            started_at INTEGER DEFAULT (strftime('%s','now'))
+        );
+
         CREATE TABLE IF NOT EXISTS dedup (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             url TEXT UNIQUE,

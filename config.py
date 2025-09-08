@@ -16,7 +16,6 @@ ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "tru
 STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "true").lower() in {"1", "true", "yes"}
 ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", "false").lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
-MODERATOR_IDS = [s.strip() for s in os.getenv("MODERATOR_IDS", "").split(",") if s.strip()]
 ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "true").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
 MIN_IMAGE_BYTES: int = int(os.getenv("MIN_IMAGE_BYTES", "10000"))  # минимальный размер файла изображения
 IMAGE_TIMEOUT: int = int(os.getenv("IMAGE_TIMEOUT", "15"))  # таймаут загрузки изображений (сек)
@@ -41,19 +40,24 @@ IMAGE_DENYLIST_DOMAINS = set(
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # === Параметры модерации и медиа ===
-REVIEW_CHAT_ID: str = os.getenv("REVIEW_CHAT_ID", "").strip()
-CHANNEL_CHAT_ID: str = os.getenv("CHANNEL_CHAT_ID", CHANNEL_ID).strip()
-MODERATOR_IDS = set(
+REVIEW_CHAT_ID: str | int = os.getenv("REVIEW_CHAT_ID", "").strip()
+CHANNEL_CHAT_ID: str | int = os.getenv("CHANNEL_CHAT_ID", CHANNEL_ID).strip()
+MODERATOR_IDS: set[int] = {
     int(x)
     for x in os.getenv("MODERATOR_IDS", "").split(",")
     if x.strip()
-)
+}
 ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "true").lower() in {"1", "true", "yes"}
 MAX_MEDIA_PER_POST: int = int(os.getenv("MAX_MEDIA_PER_POST", "10"))
 IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "320"))
 IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", str(320 * 320)))
 SNOOZE_MINUTES: int = int(os.getenv("SNOOZE_MINUTES", "0"))
 REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
+CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))
+TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
+PREVIEW_MODE: str = os.getenv("PREVIEW_MODE", "auto")
+TELEGRAM_PARSE_MODE: str = os.getenv("TELEGRAM_PARSE_MODE", "HTML")
+TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = os.getenv("TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", "true").lower() in {"1","true","yes"}
 
 # === Регулируемые параметры фильтра ===
 FILTER_HEAD_CHARS: int = int(os.getenv("FILTER_HEAD_CHARS", "400"))
@@ -65,6 +69,15 @@ WHITELIST_SOURCES = set(
 WHITELIST_RELAX: bool = os.getenv("WHITELIST_RELAX", "true").lower() in {"1", "true", "yes"}
 FETCH_LIMIT_PER_SOURCE: int = int(os.getenv("FETCH_LIMIT_PER_SOURCE", "30"))
 LOOP_DELAY_SECS: int = int(os.getenv("LOOP_DELAY_SECS", "600"))
+
+
+def validate_config() -> None:
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN is required")
+    if not (CHANNEL_ID or CHANNEL_CHAT_ID):
+        raise ValueError("CHANNEL_CHAT_ID or CHANNEL_ID is required")
+    if not isinstance(MODERATOR_IDS, set) or not all(isinstance(x, int) for x in MODERATOR_IDS):
+        raise ValueError("MODERATOR_IDS must be a set of ints")
 
 # === Ключевые слова ===
 REGION_KEYWORDS = [

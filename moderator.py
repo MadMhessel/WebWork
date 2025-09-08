@@ -3,7 +3,7 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-from . import config, publisher
+from . import config, publisher, db
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +12,7 @@ REJECTED = "REJECTED"
 SNOOZED = "SNOOZED"
 APPROVED = "APPROVED"
 PUBLISHED = "PUBLISHED"
+EDITING = "EDITING"
 
 
 def is_moderator(user_id: int) -> bool:
@@ -84,10 +85,13 @@ def enqueue_and_preview(item: Dict[str, Any], conn: sqlite3.Connection) -> Optio
 def approve(conn: sqlite3.Connection, mod_id: int, moderator_id: int, text_override: Optional[str] = None) -> bool:
     if not is_moderator(moderator_id):
         return False
-    conn.execute(
-        "UPDATE moderation_queue SET status = ?, reviewed_at = strftime('%s','now'), moderator_user_id = ? WHERE id = ?",
+    cur = conn.execute(
+        "UPDATE moderation_queue SET status = ?, reviewed_at = strftime('%s','now'), moderator_user_id = ? WHERE id = ? AND status IN ('PENDING_REVIEW','SNOOZED')",
         (APPROVED, moderator_id, mod_id),
     )
+    if cur.rowcount == 0:
+        conn.commit()
+        return False
     conn.commit()
     mid = publisher.publish_from_queue(conn, mod_id, text_override=text_override, cfg=config)
     return bool(mid)
@@ -96,20 +100,102 @@ def approve(conn: sqlite3.Connection, mod_id: int, moderator_id: int, text_overr
 def reject(conn: sqlite3.Connection, mod_id: int, moderator_id: int, comment: str = "") -> bool:
     if not is_moderator(moderator_id):
         return False
-    conn.execute(
-        "UPDATE moderation_queue SET status = ?, reviewed_at = strftime('%s','now'), moderator_user_id = ?, moderator_comment = ? WHERE id = ?",
+    cur = conn.execute(
+        "UPDATE moderation_queue SET status = ?, reviewed_at = strftime('%s','now'), moderator_user_id = ?, moderator_comment = ? WHERE id = ? AND status IN ('PENDING_REVIEW','SNOOZED')",
         (REJECTED, moderator_id, comment, mod_id),
     )
     conn.commit()
-    return True
+    return cur.rowcount > 0
 
 
 def snooze(conn: sqlite3.Connection, mod_id: int, moderator_id: int) -> bool:
     if not is_moderator(moderator_id):
         return False
-    conn.execute(
-        "UPDATE moderation_queue SET status = ?, reviewed_at = strftime('%s','now'), moderator_user_id = ?, attempts = attempts + 1 WHERE id = ?",
+    cur = conn.execute(
+        "UPDATE moderation_queue SET status = ?, reviewed_at = strftime('%s','now'), moderator_user_id = ?, attempts = attempts + 1 WHERE id = ? AND status IN ('PENDING_REVIEW','SNOOZED')",
         (SNOOZED, moderator_id, mod_id),
     )
     conn.commit()
+    return cur.rowcount > 0
+
+
+def start_edit(conn: sqlite3.Connection, mod_id: int, moderator_id: int) -> bool:
+    if not is_moderator(moderator_id):
+        return False
+    conn.execute(
+        "INSERT OR REPLACE INTO editor_state(user_id, item_id, started_at) VALUES (?,?,strftime('%s','now'))",
+        (moderator_id, mod_id),
+    )
+    conn.commit()
     return True
+
+
+def apply_edit_message(conn: sqlite3.Connection, user_id: int, text: str) -> bool:
+    cur = conn.execute("SELECT item_id FROM editor_state WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    if not row:
+        return False
+    mod_id = int(row["item_id"])
+    conn.execute(
+        "UPDATE moderation_queue SET content = ?, status = ? WHERE id = ?",
+        (text, PENDING_REVIEW, mod_id),
+    )
+    conn.execute("DELETE FROM editor_state WHERE user_id = ?", (user_id,))
+    conn.commit()
+    send_preview(conn, mod_id)
+    return True
+
+
+def handle_callback(conn: sqlite3.Connection, update: dict) -> None:
+    cb = update.get("callback_query") or {}
+    data = cb.get("data", "")
+    user_id = int(cb.get("from", {}).get("id", 0))
+    if not data.startswith("mod:"):
+        return
+    try:
+        _, sid, action = data.split(":", 2)
+        mod_id = int(sid)
+    except Exception:
+        return
+    if not is_moderator(user_id):
+        return
+    if action == "approve":
+        approve(conn, mod_id, user_id)
+    elif action == "reject":
+        reject(conn, mod_id, user_id)
+    elif action == "snooze":
+        snooze(conn, mod_id, user_id)
+    elif action == "edit":
+        start_edit(conn, mod_id, user_id)
+
+
+def cmd_queue(conn: sqlite3.Connection, chat_id: str, page: int = 1) -> None:
+    limit = 10
+    offset = (page - 1) * limit
+    cur = conn.execute(
+        "SELECT id, title FROM moderation_queue WHERE status IN (?,?) ORDER BY id LIMIT ? OFFSET ?",
+        (PENDING_REVIEW, SNOOZED, limit, offset),
+    )
+    rows = cur.fetchall()
+    lines = [f"{r['id']}: {r['title'] or ''}" for r in rows]
+    text = "\n".join(lines) or "Очередь пуста"
+    publisher.send_message(str(chat_id), text, cfg=config)
+
+
+def cmd_approve(conn: sqlite3.Connection, mod_id: int, user_id: int) -> None:
+    if approve(conn, mod_id, user_id):
+        publisher.send_message(str(user_id), f"Approved {mod_id}", cfg=config)
+
+
+def cmd_reject(conn: sqlite3.Connection, mod_id: int, user_id: int, reason: Optional[str] = None) -> None:
+    if reject(conn, mod_id, user_id, reason or ""):
+        publisher.send_message(str(user_id), f"Rejected {mod_id}", cfg=config)
+
+
+def cmd_stats(conn: sqlite3.Connection, chat_id: str) -> None:
+    cur = conn.execute(
+        "SELECT status, COUNT(*) as cnt FROM moderation_queue GROUP BY status",
+    )
+    parts = [f"{row['status']}: {row['cnt']}" for row in cur.fetchall()]
+    text = "\n".join(parts)
+    publisher.send_message(str(chat_id), text, cfg=config)

@@ -8,7 +8,7 @@ import sqlite3
 
 import requests
 
-from . import config, db, rewrite
+from . import config, db, rewrite, http_client
 from .utils import shorten_url
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,17 @@ def _smart_trim(text: str, max_chars: int) -> str:
     cut = text[:max_chars].rstrip()
     pos = cut.rfind(" ")
     return (cut[:pos] if pos > 0 else cut) + "…"
+
+
+def compose_preview(title: str, body: str, url: str, parse_mode: str) -> tuple[str, Optional[str]]:
+    full = _build_message(title, body, url, parse_mode)
+    caption_limit = int(getattr(config, "CAPTION_LIMIT", 1024))
+    msg_limit = int(getattr(config, "TELEGRAM_MESSAGE_LIMIT", 4096))
+    if len(full) <= caption_limit:
+        return full, None
+    caption = _smart_trim(full, caption_limit)
+    long_text = _smart_trim(full, msg_limit)
+    return caption, long_text
 
 
 # ---------------------------------------------------------------------------
@@ -154,27 +165,28 @@ def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
 
 
 def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
-    timeout = float(getattr(cfg, "IMAGE_DOWNLOAD_TIMEOUT", 10))
+    timeout = (config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ)
     max_bytes = int(getattr(cfg, "IMAGE_MAX_BYTES", 5 * 1024 * 1024))
+    session = http_client.get_session()
     try:
-        r = requests.get(url, timeout=timeout, stream=True)
-        if r.status_code != 200:
-            return None
-        ctype = (r.headers.get("Content-Type") or "").split(";")[0]
-        if not ctype.startswith("image/"):
-            return None
-        cl = r.headers.get("Content-Length")
-        if cl and int(cl) > max_bytes:
-            return None
-        data = BytesIO()
-        for chunk in r.iter_content(8192):
-            if not chunk:
-                continue
-            data.write(chunk)
-            if data.tell() > max_bytes:
+        with session.get(url, timeout=timeout, stream=True) as r:
+            if r.status_code != 200:
                 return None
-        data.seek(0)
-        return data, ctype
+            ctype = (r.headers.get("Content-Type") or "").split(";")[0]
+            if not ctype.startswith("image/"):
+                return None
+            cl = r.headers.get("Content-Length")
+            if cl and int(cl) > max_bytes:
+                return None
+            data = BytesIO()
+            for chunk in r.iter_content(8192):
+                if not chunk:
+                    continue
+                data.write(chunk)
+                if data.tell() > max_bytes:
+                    return None
+            data.seek(0)
+            return data, ctype
     except Exception:  # pragma: no cover
         return None
 
@@ -222,7 +234,9 @@ def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Op
 def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config) -> Optional[str]:
     """Send preview message with inline buttons for moderation."""
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
-    text = _build_message(item.get("title", ""), item.get("content", ""), item.get("url", ""), parse_mode)
+    caption, long_text = compose_preview(
+        item.get("title", ""), item.get("content", ""), item.get("url", ""), parse_mode
+    )
     keyboard = {
         "inline_keyboard": [
             [
@@ -235,10 +249,14 @@ def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg
         ]
     }
     photo = item.get("tg_file_id") or item.get("image_url")
+    mid = None
     if getattr(cfg, "ATTACH_IMAGES", True) and photo:
-        res = _send_photo(chat_id, photo, text, parse_mode, reply_markup=keyboard)
-        return res[0] if res else None
-    return _send_text(chat_id, text, parse_mode, reply_markup=keyboard)
+        res = _send_photo(chat_id, photo, caption, parse_mode, reply_markup=keyboard)
+        mid = res[0] if res else None
+        if mid and long_text:
+            _send_text(chat_id, long_text, parse_mode)
+        return mid
+    return _send_text(chat_id, caption, parse_mode, reply_markup=keyboard)
 
 
 def publish_from_queue(conn: sqlite3.Connection, mod_id: int, text_override: Optional[str] = None, cfg=config) -> Optional[str]:
@@ -250,16 +268,18 @@ def publish_from_queue(conn: sqlite3.Connection, mod_id: int, text_override: Opt
     body = text_override or row["content"] or ""
     url = row["url"] or ""
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
-    message = _build_message(title, body, url, parse_mode)
+    caption, long_text = compose_preview(title, body, url, parse_mode)
     chat_id = getattr(cfg, "CHANNEL_CHAT_ID", "") or getattr(cfg, "CHANNEL_ID", "")
     mid: Optional[str] = None
     photo = row["tg_file_id"]
     if getattr(cfg, "ATTACH_IMAGES", True) and photo:
-        res = _send_photo(chat_id, photo, message, parse_mode)
+        res = _send_photo(chat_id, photo, caption, parse_mode)
         if res:
             mid = res[0]
+            if long_text:
+                _send_text(chat_id, long_text, parse_mode)
     if mid is None:
-        mid = _send_text(chat_id, message, parse_mode)
+        mid = _send_text(chat_id, caption if not long_text else long_text, parse_mode)
     if mid:
         conn.execute(
             "UPDATE moderation_queue SET status = ?, channel_message_id = ?, published_at = strftime('%s','now') WHERE id = ?",

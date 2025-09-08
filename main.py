@@ -51,6 +51,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     cnt_published = 0
     cnt_not_sent = 0
     cnt_errors = 0
+    image_start = images.image_stats["with_image"]
 
     for it in items:
         try:
@@ -139,17 +140,19 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             cnt_errors += 1
             logger.exception("[ERROR] url=%s | %s", it.get("url", ""), ex)
 
+    with_image = images.image_stats["with_image"] - image_start
     logger.info(
         "ИТОГО: получено=%d, релевантные=%d, дублей_в_пакете_URL=%d, почти_дублей_в_пакете=%d, "
-        "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d",
+        "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d, с_картинкой=%d",
         len(items), cnt_relevant, cnt_dup_inpack_url, cnt_dup_inpack_title,
-        cnt_dup_db, cnt_queued, cnt_published, cnt_errors, cnt_not_sent
+        cnt_dup_db, cnt_queued, cnt_published, cnt_errors, cnt_not_sent, with_image
     )
     return (len(items), cnt_relevant, cnt_dup_inpack_url, cnt_dup_inpack_title,
             cnt_dup_db, cnt_queued, cnt_published, cnt_errors)
 
 def main() -> int:
     logging_setup.setup_logging()
+    config.validate_config()
 
     # Поднимаем БД
     conn = db.connect()
