@@ -7,7 +7,7 @@ import threading
 from typing import Dict, List, Tuple
 
 try:
-    from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
+    from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images, tagging
     from . import moderator as moderation, bot_updates
     from .utils import normalize_whitespace, compute_title_hash
     try:
@@ -15,7 +15,7 @@ try:
     except Exception:  # pragma: no cover
         publisher = None  # type: ignore
 except ImportError:  # pragma: no cover
-    import config, logging_setup, fetcher, filters, dedup, db, rewrite, images  # type: ignore
+    import config, logging_setup, fetcher, filters, dedup, db, rewrite, images, tagging  # type: ignore
     import moderator as moderation  # type: ignore
     import bot_updates  # type: ignore
     from utils import normalize_whitespace, compute_title_hash  # type: ignore
@@ -79,6 +79,12 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             if not ok:
                 logger.info("[SKIP] %s | %s | причина: %s", src, title, reason)
                 continue
+
+            # дополнительные теги и глобальные стоп-слова
+            tags, has_neg = tagging.extract_tags(f"{title}\n{content}")
+            if has_neg:
+                logger.info("[SKIP] %s | %s | причина: нежелательная тематика", src, title)
+                continue
             cnt_relevant += 1
 
             # дубликаты в пакете
@@ -113,6 +119,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "summary": it.get("summary") or "",
                 "published_at": it.get("published_at") or "",
                 "image_url": image_url,
+                "tags": list(tags),
             }
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
