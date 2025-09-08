@@ -7,7 +7,7 @@ import threading
 from typing import Dict, List, Tuple
 
 try:
-    from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
+    from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images, tagging
     from . import moderator as moderation, bot_updates
     from .utils import normalize_whitespace, compute_title_hash
     try:
@@ -15,7 +15,7 @@ try:
     except Exception:  # pragma: no cover
         publisher = None  # type: ignore
 except ImportError:  # pragma: no cover
-    import config, logging_setup, fetcher, filters, dedup, db, rewrite, images  # type: ignore
+    import config, logging_setup, fetcher, filters, dedup, db, rewrite, images, tagging  # type: ignore
     import moderator as moderation  # type: ignore
     import bot_updates  # type: ignore
     from utils import normalize_whitespace, compute_title_hash  # type: ignore
@@ -47,12 +47,14 @@ def _publisher_send_direct(item: Dict) -> bool:
     )
 
 def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
-    items = fetcher.fetch_all(config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE)
-    logger.info("Всего получено материалов: %d", len(items))
+    items_iter = fetcher.fetch_all(
+        config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE
+    )
 
     seen_urls: set = set()
     seen_title_hashes: set = set()
 
+    cnt_total = 0
     cnt_relevant = 0
     cnt_dup_inpack_url = 0
     cnt_dup_inpack_title = 0
@@ -63,7 +65,8 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     cnt_errors = 0
     image_start = images.image_stats["with_image"]
 
-    for it in items:
+    for it in items_iter:
+        cnt_total += 1
         try:
             src = it.get("source") or ""
             url = (it.get("url") or "").strip()
@@ -75,6 +78,12 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             ok, region_ok, topic_ok, reason = filters.is_relevant_for_source(title, content, src, config)
             if not ok:
                 logger.info("[SKIP] %s | %s | причина: %s", src, title, reason)
+                continue
+
+            # дополнительные теги и глобальные стоп-слова
+            tags, has_neg = tagging.extract_tags(f"{title}\n{content}")
+            if has_neg:
+                logger.info("[SKIP] %s | %s | причина: нежелательная тематика", src, title)
                 continue
             cnt_relevant += 1
 
@@ -110,6 +119,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "summary": it.get("summary") or "",
                 "published_at": it.get("published_at") or "",
                 "image_url": image_url,
+                "tags": list(tags),
             }
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
@@ -154,11 +164,27 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     logger.info(
         "ИТОГО: получено=%d, релевантные=%d, дублей_в_пакете_URL=%d, почти_дублей_в_пакете=%d, "
         "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d, с_картинкой=%d",
-        len(items), cnt_relevant, cnt_dup_inpack_url, cnt_dup_inpack_title,
-        cnt_dup_db, cnt_queued, cnt_published, cnt_errors, cnt_not_sent, with_image
+        cnt_total,
+        cnt_relevant,
+        cnt_dup_inpack_url,
+        cnt_dup_inpack_title,
+        cnt_dup_db,
+        cnt_queued,
+        cnt_published,
+        cnt_errors,
+        cnt_not_sent,
+        with_image,
     )
-    return (len(items), cnt_relevant, cnt_dup_inpack_url, cnt_dup_inpack_title,
-            cnt_dup_db, cnt_queued, cnt_published, cnt_errors)
+    return (
+        cnt_total,
+        cnt_relevant,
+        cnt_dup_inpack_url,
+        cnt_dup_inpack_title,
+        cnt_dup_db,
+        cnt_queued,
+        cnt_published,
+        cnt_errors,
+    )
 
 def main() -> int:
     logging_setup.setup_logging()
