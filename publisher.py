@@ -235,6 +235,28 @@ def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Op
 # Moderation helpers
 # ---------------------------------------------------------------------------
 
+def answer_callback_query(
+    callback_query_id: str, text: Optional[str] = None, show_alert: bool = False
+) -> None:
+    """Acknowledge a button callback to stop the Telegram client's spinner."""
+    payload: Dict[str, Any] = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    if show_alert:
+        payload["show_alert"] = "true"
+    _api_post("answerCallbackQuery", payload)
+
+
+def remove_moderation_buttons(chat_id: str, message_id: Union[int, str]) -> None:
+    """Remove inline keyboard from moderation preview message."""
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "reply_markup": json.dumps({"inline_keyboard": []}),
+    }
+    _api_post("editMessageReplyMarkup", payload)
+
+
 def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config) -> Optional[str]:
     """Send preview message with inline buttons for moderation."""
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()

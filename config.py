@@ -4,6 +4,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 from platformdirs import user_config_dir
 
+try:  # pragma: no cover - список источников региона
+    from sources_nn import SOURCES_NN
+except Exception:  # pragma: no cover - файл может отсутствовать
+    SOURCES_NN: list[dict] = []
+
 
 # Load environment variables from user configuration directory and optional local .env
 APP_NAME = "NewsBot"
@@ -44,7 +49,7 @@ HTTP_BACKOFF: float = float(os.getenv("HTTP_BACKOFF", "0.5"))
 
 # === Флаги и режимы ===
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}
-STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "true").lower() in {"1", "true", "yes"}
+STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "false").lower() in {"1", "true", "yes"}
 ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", str(DEFAULT_ENABLE_MODERATION)).lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
 ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "true").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
@@ -461,7 +466,21 @@ SOURCES = [
         "date": "time, .date",
         "date_attr": "datetime"
      }},
+
+    # --- Дополнительные медиа-источники (RSS) ---
+    {"name": "ГТРК Вести НН", "type": "rss",
+     "url": "https://vestinn.ru/rss/",
+     "enabled": True},
+    {"name": "Аргументы и факты — НН", "type": "rss",
+     "url": "https://aif-nn.ru/feed/",
+     "enabled": True},
+    {"name": "ПроГород Нижний Новгород", "type": "rss",
+     "url": "https://progorodnn.ru/rss.xml",
+     "enabled": True},
 ]
+
+# Дополняем основными источниками региона
+SOURCES.extend(SOURCES_NN)
 
 # === Хранилище ===
 DB_PATH: str = os.getenv("DB_PATH", "newsbot.db")
