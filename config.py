@@ -1,4 +1,19 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+from platformdirs import user_config_dir
+
+
+# Load environment variables from user configuration directory and optional local .env
+APP_NAME = "NewsBot"
+CONFIG_DIR = Path(user_config_dir(APP_NAME))
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+ENV_PATH = CONFIG_DIR / ".env"
+
+# First load persistent config, then allow local .env to override for development
+load_dotenv(ENV_PATH)
+load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
 
 # === Базовые настройки бота ===
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
@@ -454,3 +469,36 @@ CLUSTER_CANDIDATES = int(os.getenv("CLUSTER_CANDIDATES", "200"))
 # === Опрос источников ===
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "600"))
 FETCH_LIMIT_PER_SOURCE = int(os.getenv("FETCH_LIMIT_PER_SOURCE", "30"))
+
+
+def init_config_file(path: Path = ENV_PATH) -> None:
+    """Interactive helper to create the persistent .env file."""
+    if path.exists():
+        print(f"Configuration already exists at {path}")
+        return
+
+    token = input("Enter BOT_TOKEN: ").strip()
+    channel = input("Enter CHANNEL_ID: ").strip()
+    admin = input("Enter ADMIN_CHAT_ID (optional): ").strip()
+
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write(f"BOT_TOKEN={token}\n")
+        fh.write(f"CHANNEL_ID={channel}\n")
+        if admin:
+            fh.write(f"ADMIN_CHAT_ID={admin}\n")
+
+    print(f"Configuration written to {path}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Manage NewsBot configuration")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("init", help="create persistent configuration")
+    args = parser.parse_args()
+
+    if args.command == "init":
+        init_config_file()
+    else:
+        parser.print_help()
