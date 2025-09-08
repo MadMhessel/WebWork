@@ -8,7 +8,7 @@ import sqlite3
 
 import requests
 
-from . import config, db, rewrite, http_client
+from . import config, db, rewrite, http_client, images
 from .utils import shorten_url
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,9 @@ def _send_photo(
     except Exception:
         fid = None
     return str(res.get("message_id")), fid
-
+# ---------------------------------------------------------------------------
+# Public helpers used in tests and pipeline
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Public helpers used in tests and pipeline
@@ -250,13 +252,17 @@ def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg
     }
     photo = item.get("tg_file_id") or item.get("image_url")
     mid = None
-    if getattr(cfg, "ATTACH_IMAGES", True) and photo:
+    if (
+        cfg.PREVIEW_MODE != "text_only"
+        and getattr(cfg, "ATTACH_IMAGES", True)
+        and photo
+    ):
         res = _send_photo(chat_id, photo, caption, parse_mode, reply_markup=keyboard)
         mid = res[0] if res else None
         if mid and long_text:
             _send_text(chat_id, long_text, parse_mode)
         return mid
-    return _send_text(chat_id, caption, parse_mode, reply_markup=keyboard)
+    return _send_text(chat_id, caption if not long_text else long_text, parse_mode, reply_markup=keyboard)
 
 
 def publish_from_queue(conn: sqlite3.Connection, mod_id: int, text_override: Optional[str] = None, cfg=config) -> Optional[str]:
@@ -271,8 +277,25 @@ def publish_from_queue(conn: sqlite3.Connection, mod_id: int, text_override: Opt
     caption, long_text = compose_preview(title, body, url, parse_mode)
     chat_id = getattr(cfg, "CHANNEL_CHAT_ID", "") or getattr(cfg, "CHANNEL_ID", "")
     mid: Optional[str] = None
-    photo = row["tg_file_id"]
-    if getattr(cfg, "ATTACH_IMAGES", True) and photo:
+    photo = row["tg_file_id"] or row["image_url"]
+    if not row["tg_file_id"] and row["image_url"]:
+        try:
+            res = images.ensure_tg_file_id(row["image_url"], conn)
+            if res:
+                fid, ihash = res
+                conn.execute(
+                    "UPDATE moderation_queue SET tg_file_id = ?, image_hash = ? WHERE id = ?",
+                    (fid, ihash, mod_id),
+                )
+                conn.commit()
+                photo = fid
+        except Exception:
+            pass
+    if (
+        cfg.PREVIEW_MODE != "text_only"
+        and getattr(cfg, "ATTACH_IMAGES", True)
+        and photo
+    ):
         res = _send_photo(chat_id, photo, caption, parse_mode)
         if res:
             mid = res[0]

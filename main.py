@@ -3,10 +3,11 @@ import argparse
 import logging
 import sys
 import time
+import threading
 from typing import Dict, List, Tuple
 
 from . import config, logging_setup, fetcher, filters, dedup, db, rewrite, images
-from . import moderator as moderation
+from . import moderator as moderation, bot_updates
 from .utils import normalize_whitespace, compute_title_hash
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,12 @@ def main() -> int:
     # Инициализируем паблишер (если он есть)
     _publisher_init()
 
+    stop_event = threading.Event()
+    updates_thread = None
+    if getattr(config, "ENABLE_MODERATION", False):
+        updates_thread = threading.Thread(target=bot_updates.run, args=(stop_event,), daemon=True)
+        updates_thread.start()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--loop", action="store_true", help="Бесконечный цикл с паузой")
     args = parser.parse_args()
@@ -181,6 +188,9 @@ def main() -> int:
             logger.exception("Неожиданная ошибка цикла: %s", ex)
             time.sleep(15)
 
+    stop_event.set()
+    if updates_thread is not None:
+        updates_thread.join(timeout=5)
     return 0
 
 if __name__ == "__main__":

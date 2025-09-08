@@ -130,6 +130,11 @@ def start_edit(conn: sqlite3.Connection, mod_id: int, moderator_id: int) -> bool
     return True
 
 
+def cancel_edit(conn: sqlite3.Connection, user_id: int) -> None:
+    conn.execute("DELETE FROM editor_state WHERE user_id = ?", (user_id,))
+    conn.commit()
+
+
 def apply_edit_message(conn: sqlite3.Connection, user_id: int, text: str) -> bool:
     cur = conn.execute("SELECT item_id FROM editor_state WHERE user_id = ?", (user_id,))
     row = cur.fetchone()
