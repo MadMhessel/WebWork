@@ -80,8 +80,12 @@ def send_preview(conn: sqlite3.Connection, mod_id: int) -> Optional[str]:
 
 def enqueue_and_preview(item: Dict[str, Any], conn: sqlite3.Connection) -> Optional[int]:
     mod_id = enqueue_item(item, conn)
-    if mod_id:
-        send_preview(conn, mod_id)
+    if not mod_id:
+        return None
+    mid = send_preview(conn, mod_id)
+    if not mid:
+        logger.error("[PREVIEW_FAIL] id=%d", mod_id)
+        return None
     return mod_id
 
 

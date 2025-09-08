@@ -260,10 +260,12 @@ def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg
         and photo
     ):
         res = _send_photo(chat_id, photo, caption, parse_mode, reply_markup=keyboard)
-        mid = res[0] if res else None
-        if mid and long_text:
-            _send_text(chat_id, long_text, parse_mode)
-        return mid
+        if res:
+            mid = res[0]
+            if long_text:
+                _send_text(chat_id, long_text, parse_mode)
+            return mid
+        logger.warning("Failed to send photo preview for mod_id=%s; falling back to text", mod_id)
     return _send_text(chat_id, caption if not long_text else long_text, parse_mode, reply_markup=keyboard)
 
 
