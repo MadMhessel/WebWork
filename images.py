@@ -3,6 +3,8 @@ import hashlib
 import logging
 import os
 import re
+import json
+from html import unescape
 from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional
@@ -29,20 +31,45 @@ images_cache: dict[str, str] = {}
 image_stats = {"with_image": 0, "reasons": Counter()}
 
 
+_JSON_LD_RE = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.I | re.S,
+)
+
+
 @dataclass
 class ImageCandidate:
     url: str
 
 
 def extract_candidates(item: dict) -> List[ImageCandidate]:
-    """Extract potential image URLs from item dict."""
+    """Extract potential image URLs from item dict.
+
+    Combines direct ``image_url`` field, ``<img>`` tags and JSON‑LD blocks
+    into a single list of unique, pre‑filtered candidates. This effectively
+    merges levels A and B of the fallback funnel into one extractor function,
+    simplifying subsequent selection logic.
+    """
+    content = item.get("content") or ""
     urls: List[str] = []
+
+    # explicit field or RSS enclosure
     u0 = item.get("image_url")
     if u0:
         urls.append(u0)
-    content = item.get("content") or ""
-    for u in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', content, flags=re.I):
-        urls.append(u)
+
+    # inline images in article body
+    urls.extend(re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', content, flags=re.I))
+
+    # JSON-LD blocks often contain clean cover images
+    for block in _JSON_LD_RE.findall(content):
+        try:
+            data = json.loads(unescape(block))
+        except Exception:
+            continue
+        for url in _json_ld_image_urls(data):
+            urls.append(url)
+
     seen: set[str] = set()
     out: List[ImageCandidate] = []
     for u in urls:
@@ -52,6 +79,20 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
         if is_reasonable_image_url(u):
             out.append(ImageCandidate(url=u))
     return out
+
+
+def _json_ld_image_urls(obj) -> List[str]:
+    urls: List[str] = []
+    if isinstance(obj, str):
+        urls.append(obj)
+    elif isinstance(obj, dict):
+        img = obj.get("image") or obj.get("url") or obj.get("@id")
+        if isinstance(img, (str, dict, list)):
+            urls.extend(_json_ld_image_urls(img))
+    elif isinstance(obj, list):
+        for it in obj:
+            urls.extend(_json_ld_image_urls(it))
+    return urls
 
 
 def is_reasonable_image_url(url: str) -> bool:
@@ -90,6 +131,62 @@ def pick_best(candidates: List[ImageCandidate]) -> Optional[ImageCandidate]:
         if _domain_allowed(cand.url):
             return cand
     return None
+
+
+def select_image_with_fallback(item: dict) -> Optional[str]:
+    """Try multiple strategies to obtain image URL for news item.
+
+    Implements levels A and B of the fallback funnel and finally returns
+    configured placeholder image (levels F–H) if nothing else matched.
+    """
+    cand = pick_best(extract_candidates(item))
+    if cand:
+        return cand.url
+
+    # TODO: implement levels C–E (official channels, open licenses)
+
+    fallback = getattr(config, "FALLBACK_IMAGE_URL", "")
+    if fallback:
+        return fallback
+    return None
+
+
+def resolve_image(item: dict, conn: Optional[sqlite3.Connection] = None) -> dict:
+    """Resolve image URL and Telegram file id for ``item``.
+
+    The function first tries to pick the best candidate from the article
+    itself (levels A–B). If validation via ``ensure_tg_file_id`` fails, it
+    retries with the configured fallback image to guarantee that at least some
+    visual is attached to the post (SLA 100%).
+
+    Returns a dict that may contain ``image_url``, ``tg_file_id`` and
+    ``image_hash`` keys depending on which steps succeeded. ``image_url`` is
+    always present when a fallback is configured.
+    """
+
+    best_url = select_image_with_fallback(item)
+    fallback_url = getattr(config, "FALLBACK_IMAGE_URL", "")
+
+    urls_to_try: List[str] = []
+    if best_url:
+        urls_to_try.append(best_url)
+    if fallback_url and fallback_url not in urls_to_try:
+        urls_to_try.append(fallback_url)
+
+    result: dict = {}
+    for url in urls_to_try:
+        res = ensure_tg_file_id(url, conn)
+        if res:
+            fid, ihash = res
+            result = {"image_url": url, "tg_file_id": fid, "image_hash": ihash}
+            break
+
+    if not result:
+        if fallback_url:
+            result = {"image_url": fallback_url}
+        elif urls_to_try:
+            result = {"image_url": urls_to_try[0]}
+    return result
 
 
 def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None) -> Optional[tuple[str, str]]:

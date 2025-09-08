@@ -139,19 +139,12 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
 
-            candidates = images.extract_candidates(item_clean)
-            best = images.pick_best(candidates)
-            if best:
-                res = images.ensure_tg_file_id(best.url, conn)
-                if res:
-                    tg_file_id, ihash = res
-                    item_clean["image_url"] = best.url
-                    item_clean["tg_file_id"] = tg_file_id
-                    item_clean["image_hash"] = ihash
-                else:
-                    item_clean["image_url"] = ""
-            else:
-                item_clean["image_url"] = ""
+            img_info = images.resolve_image(item_clean, conn)
+            item_clean["image_url"] = img_info.get("image_url", "")
+            if img_info.get("tg_file_id"):
+                item_clean["tg_file_id"] = img_info["tg_file_id"]
+            if img_info.get("image_hash"):
+                item_clean["image_hash"] = img_info["image_hash"]
 
             if getattr(config, "ENABLE_MODERATION", False):
                 mod_id = moderation.enqueue_and_preview(item_clean, conn)
