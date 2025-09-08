@@ -1,0 +1,118 @@
+filters:
+  classifieds:
+    threshold: 5
+    blocked_domains:
+      - avito.ru
+      - cian.ru
+      - realty.yandex.ru
+      - domofond.ru
+      - irr.ru
+      - youla.ru
+      - domclick.ru
+      - move.ru
+      - kvadroom.ru
+      - mlsn.ru
+      - restate.ru
+      - gidkvartir.ru
+      - n1.ru
+      - bn.ru
+      - sob.ru
+      - realty.rbc.ru
+      - tzan.ru
+      - realty.mail.ru
+      - realty.rambler.ru
+      - etagirealty.ru
+      - kvadrealty.ru
+      - yavito.ru
+      - kvadrometr.ru
+    url_slug_patterns:
+      - "/kupit[-_/]"
+      - "/prodazha[-_/]"
+      - "/prodaja[-_/]"
+      - "/snyat[-_/]"
+      - "/sdat[-_/]"
+      - "/arenda[-_/]"
+      - "/kommercheskaya[-_/]nedvizhimost"
+      - "/ofisy[-_/]"
+      - "/sklady[-_/]"
+      - "/torgovye[-_/]ploshchadi"
+      - "/magaziny[-_/]"
+      - "/kvartiry[-_/]"
+      - "/komnaty[-_/]"
+    title_core_patterns:
+      - "\\b(продажа|прода[её]тся|продам|продамся|продаю|купить|куплю|сдать|сда[её]тся|сдам|сдамся|сдаю|аренда|арендую|арендная ставка|в аренду)\\b"
+      - "\\b(объявлени\\w*|предложени\\w*|прайс\\w*|каталог\\w*|выгодн\\w+ цен\\w+|лучш\\w+ цен\\w+)\\b"
+      - "\\b(сниму|ищу жиль\\w+|поиск\\w+ жиль\\w+)\\b"
+      - "\\b(офис\\w*|склад\\w*|торгов\\w+ площад\\w+|коммерческ\\w+ недвижим\\w+|нежил\\w+ помещен\\w+)\\b"
+      - "\\b(квартир\\w*|комнат\\w*|дом\\w*|коттедж\\w*|таунхаус\\w*|апартамен\\w*)\\b"
+    listing_count_patterns:
+      - "(?:—|-|—)\\s*\\d+\\s+объявлен\\w+"
+      - "\\b\\d+\\s+объявлен\\w+\\b"
+      - "\\b\\d+\\s+предложени\\w+\\b"
+    price_patterns:
+      - "\\b\\d[\\d\\s]{0,3}\\d(?:[\\s\\u00A0]?\\d{3})*(?:[.,]\\d{1,2})?\\s?(?:₽|руб\\.?|рублей)\\b"
+      - "\\b(тыс\\.|млн|млрд)\\s?(?:₽|руб\\.?|рублей)\\b"
+      - "\\bза\\s?м[²2]\\b"
+      - "\\bв\\s?мес(?:яц)?\\b"
+    contact_patterns:
+      - "(?:\\+7|8)\\s?\\(?\\d{3}\\)?[\\s-]?\\d{3}[\\s-]?\\d{2}[\\s-]?\\d{2}"
+      - "\\bтел\\.?\\b"
+      - "\\bwhats?app\\b"
+      - "\\bтелеграм\\b"
+      - "\\bзвонить\\b"
+      - "\\bнаписать\\b"
+    lot_id_patterns:
+      - "\\b(ID|Id|id|лот|№)\\s?[#:]?\\s?\\d{3,}\\b"
+    cta_patterns:
+      - "\\b(перейти|смотреть|показать|развернуть|покажем|оставить заявку|добавить объявление)\\b"
+    whitelist_title_patterns:
+      - "\\b(рынок|аналитика|обзор|итоги|исследовани\\w+|статистик\\w+)\\b"
+      - "\\b(закон|законопроект|постановлени\\w+|регулат\\w+)\\b"
+      - "\\b(строит\\w+|ввод\\w+ в эксплуатаци\\w+|сдан\\w+ объект\\w+)\\b"
+    weights:
+      blocked_domain: 6
+      url_slug: 4
+      title_core: 3
+      listing_count: 5
+      price: 3
+      contact: 4
+      lot_id: 3
+      cta: 2
+  rewriter:
+    enabled: true
+    order: ["llm", "rules", "noop"]
+    target_length: 900
+    llm:
+      provider: "openai"
+      model: "gpt-4o-mini"
+      timeout_sec: 12
+      retries: 2
+      temperature: 0.2
+    rules:
+      drop_cta: true
+      drop_tracking: true
+      normalize_spaces: true
+      ban_words:
+        - "купить"
+        - "продать"
+        - "подписывайтесь"
+        - "скидка"
+  media:
+    enabled: true
+    min_width: 800
+    min_height: 450
+    max_bytes: 5242880
+    allow_types: ["image/jpeg", "image/png", "image/webp"]
+    deny_types: ["image/svg+xml", "image/gif"]
+    ratio:
+      target: 1.78
+      tolerance: 0.3
+    whitelist_domains: ["cdn.", "static.", "images."]
+    blacklist_domains: ["ads.", "tracker."]
+    prefer_sources: ["enclosure", "og", "img", "item"]
+    media_group:
+      enabled: false
+      max_items: 3
+  formatting:
+    parse_mode: "MarkdownV2"
+    hard_wrap: false
