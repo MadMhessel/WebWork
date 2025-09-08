@@ -153,7 +153,9 @@ def _send_photo(
     except Exception:
         fid = None
     return str(res.get("message_id")), fid
-
+# ---------------------------------------------------------------------------
+# Public helpers used in tests and pipeline
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Public helpers used in tests and pipeline

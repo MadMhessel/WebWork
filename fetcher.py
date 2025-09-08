@@ -6,6 +6,8 @@ from typing import Dict, Iterable, List, Optional
 from urllib.parse import urljoin
 
 import feedparser
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from . import config, http_client
 from .utils import normalize_whitespace, shorten_url
@@ -97,6 +99,12 @@ def _requests_get(url: str, timeout: Optional[tuple] = None) -> Optional[str]:
     except Exception as ex:
         logger.warning("Ошибка HTTP при загрузке %s: %s", url, ex)
         return None
+    finally:
+        if retry is not None:
+            try:
+                sess.close()
+            except Exception:
+                pass
 
 # -------------------- HTML article --------------------
 
