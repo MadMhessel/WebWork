@@ -15,9 +15,25 @@ ENV_PATH = CONFIG_DIR / ".env"
 load_dotenv(ENV_PATH)
 load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
 
+# Load hard-coded defaults if available
+try:  # pragma: no cover - simple fallback handling
+    from config_defaults import (
+        BOT_TOKEN as DEFAULT_BOT_TOKEN,
+        CHANNEL_ID as DEFAULT_CHANNEL_ID,
+        ENABLE_MODERATION as DEFAULT_ENABLE_MODERATION,
+        REVIEW_CHAT_ID as DEFAULT_REVIEW_CHAT_ID,
+        MODERATOR_IDS as DEFAULT_MODERATOR_IDS,
+    )
+except Exception:  # pragma: no cover - executed only when defaults missing
+    DEFAULT_BOT_TOKEN = ""
+    DEFAULT_CHANNEL_ID = ""
+    DEFAULT_ENABLE_MODERATION = False
+    DEFAULT_REVIEW_CHAT_ID = ""
+    DEFAULT_MODERATOR_IDS: set[int] = set()
+
 # === Базовые настройки бота ===
-BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
-CHANNEL_ID: str = os.getenv("CHANNEL_ID", "").strip()  # пример: "@my_news_channel" или числовой ID
+BOT_TOKEN: str = os.getenv("BOT_TOKEN", DEFAULT_BOT_TOKEN).strip()
+CHANNEL_ID: str = os.getenv("CHANNEL_ID", DEFAULT_CHANNEL_ID).strip()  # пример: "@my_news_channel" или числовой ID
 RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === HTTP-клиент ===
@@ -29,7 +45,7 @@ HTTP_BACKOFF: float = float(os.getenv("HTTP_BACKOFF", "0.5"))
 # === Флаги и режимы ===
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}
 STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "true").lower() in {"1", "true", "yes"}
-ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", "false").lower() in {"1", "true", "yes"}
+ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", str(DEFAULT_ENABLE_MODERATION)).lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
 ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "true").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
 MIN_IMAGE_BYTES: int = int(os.getenv("MIN_IMAGE_BYTES", "10000"))  # минимальный размер файла изображения
@@ -55,11 +71,11 @@ IMAGE_DENYLIST_DOMAINS = set(
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # === Параметры модерации и медиа ===
-REVIEW_CHAT_ID: str | int = os.getenv("REVIEW_CHAT_ID", "").strip()
+REVIEW_CHAT_ID: str | int = os.getenv("REVIEW_CHAT_ID", DEFAULT_REVIEW_CHAT_ID).strip()
 CHANNEL_CHAT_ID: str | int = os.getenv("CHANNEL_CHAT_ID", CHANNEL_ID).strip()
 MODERATOR_IDS: set[int] = {
     int(x)
-    for x in os.getenv("MODERATOR_IDS", "").split(",")
+    for x in os.getenv("MODERATOR_IDS", ",".join(str(x) for x in DEFAULT_MODERATOR_IDS)).split(",")
     if x.strip()
 }
 ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "true").lower() in {"1", "true", "yes"}
