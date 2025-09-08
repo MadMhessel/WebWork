@@ -5,13 +5,21 @@ import re
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import urljoin
 
-import requests
 import feedparser
+from requests import Response
 
-from . import config
+from . import config, http_client
 from .utils import normalize_whitespace, shorten_url
 
 logger = logging.getLogger(__name__)
+
+
+# Reuse global HTTP session
+HTTP_SESSION = http_client.get_session()
+DEFAULT_TIMEOUT = (
+    getattr(config, "HTTP_TIMEOUT_CONNECT", 5),
+    getattr(config, "HTTP_TIMEOUT_READ", 15),
+)
 
 try:
     from bs4 import BeautifulSoup  # type: ignore
@@ -80,19 +88,51 @@ MOCK_ITEMS: List[Dict[str, str]] = [
 
 # -------------------- HTTP helpers --------------------
 
-def _requests_get(url: str, timeout: int = 20) -> Optional[str]:
-    headers = {
-        "User-Agent": "newsbot/1.0 (+https://example.com)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-    try:
-        r = requests.get(url, headers=headers, timeout=timeout)
+def _requests_get(
+    url: str,
+    *,
+    timeout: Optional[tuple[int, int]] = None,
+    allow_redirects: bool = True,
+) -> str:
+    """GET страницу как текст, с общим Session и стандартными таймаутами"""
+    resp: Response = HTTP_SESSION.get(
+        url,
+        timeout=timeout or DEFAULT_TIMEOUT,
+        allow_redirects=allow_redirects,
+    )
+    resp.raise_for_status()
+    return resp.text  # requests сам подберёт encoding по заголовкам/контенту
+
+
+def _requests_head(
+    url: str,
+    *,
+    timeout: Optional[tuple[int, int]] = None,
+    allow_redirects: bool = True,
+) -> Response:
+    """HEAD-запрос для быстрой проверки доступности и заголовков"""
+    resp: Response = HTTP_SESSION.head(
+        url,
+        timeout=timeout or DEFAULT_TIMEOUT,
+        allow_redirects=allow_redirects,
+    )
+    resp.raise_for_status()
+    return resp
+
+
+def _download_bytes(
+    url: str,
+    *,
+    timeout: Optional[tuple[int, int]] = None,
+) -> bytes:
+    """Скачать бинарные данные (если понадобятся), корректно закрывая респонс"""
+    with HTTP_SESSION.get(
+        url,
+        timeout=timeout or DEFAULT_TIMEOUT,
+        stream=True,
+    ) as r:
         r.raise_for_status()
-        r.encoding = r.encoding or "utf-8"
-        return r.text
-    except Exception as ex:
-        logger.warning("Ошибка HTTP при загрузке %s: %s", url, ex)
-        return None
+        return r.content
 
 # -------------------- HTML article --------------------
 
@@ -177,19 +217,24 @@ def _extract_html_image_url(soup, base_url: str = "") -> str:
 
 
 def _validate_image_url(url: str) -> str:
+    """Fast-check that URL points to an image.
+
+    Использует HEAD-запрос, чтобы не скачивать сам файл. Возвращает исходный URL,
+    если Content-Type начинается с ``image/`` и статус 200, иначе пустую строку.
+    """
     if not url:
         return ""
-    r = None
+    resp: Response | None = None
     try:
-        r = requests.get(url, timeout=10, stream=True)
-        if r.status_code != 200:
+        resp = HTTP_SESSION.head(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        if resp.status_code != 200:
             logger.warning(
                 "Отказ скачивания картинки %s: HTTP %s",
                 shorten_url(url),
-                r.status_code,
+                resp.status_code,
             )
             return ""
-        ctype = r.headers.get("Content-Type", "")
+        ctype = resp.headers.get("Content-Type", "")
         if not ctype.startswith("image/"):
             logger.warning(
                 "Отказ скачивания картинки %s: тип %s",
@@ -206,11 +251,11 @@ def _validate_image_url(url: str) -> str:
         )
         return ""
     finally:
-        try:
-            if r is not None:
-                r.close()
-        except Exception:
-            pass
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
 def _extract_html_image_url_basic(soup) -> str:
     if not soup:
         return ""
@@ -236,8 +281,13 @@ def _extract_html_image_url_basic(soup) -> str:
         return img["src"].strip()
     return ""
 
-def _parse_html_article(source_name: str, url: str) -> Optional[Dict[str, str]]:
-    html_text = _requests_get(url)
+def _parse_html_article(
+    source_name: str,
+    url: str,
+    *,
+    timeout: Optional[tuple] = None,
+) -> Optional[Dict[str, str]]:
+    html_text = _requests_get(url, timeout=timeout)
     if not html_text:
         return None
     title, content, published_at, image_url = "", "", "", ""
@@ -300,12 +350,12 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     title = getattr(entry, "title", "") or ""
     published_at = getattr(entry, "published", "") or getattr(entry, "updated", "") or ""
     content_val = ""
-    image_url = ""
     html_blobs: List[str] = []
     summary_raw = ""
+    candidates: List[str] = []
     try:
         if getattr(entry, "content", None):
-            blocks = []
+            blocks: List[str] = []
             for c in entry.content:
                 val = getattr(c, "value", "") or ""
                 if val:
@@ -314,65 +364,44 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
             content_val = "\n\n".join(blocks)
         summary_raw = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
         if not content_val:
-            content_val = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
+            content_val = summary_raw
 
-        if getattr(entry, "media_content", None):
-            for m in entry.media_content:
-                u = getattr(m, "url", "") or ""
-                if u:
-                    image_url = u
-                    break
-        if not image_url and getattr(entry, "media_thumbnail", None):
-            for m in entry.media_thumbnail:
-                u = getattr(m, "url", "") or ""
-                if u:
-                    image_url = u
-                    break
-        if not image_url:
-            links = getattr(entry, "links", []) or []
-            for l in links:
-                rel = getattr(l, "rel", "") or ""
-                typ = getattr(l, "type", "") or ""
-                if rel == "enclosure" and typ.startswith("image/"):
-                    u = getattr(l, "href", "") or ""
-                    if u:
-                        image_url = u
-                        break
+        for m in getattr(entry, "media_content", []) or []:
+            u = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
+            if u:
+                candidates.append(u)
+        for m in getattr(entry, "media_thumbnail", []) or []:
+            u = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
+            if u:
+                candidates.append(u)
+        for en in getattr(entry, "enclosures", []) or []:
+            u = getattr(en, "href", "") or getattr(en, "url", "")
+            if isinstance(en, dict):
+                u = en.get("href") or en.get("url") or u
+            if u:
+                candidates.append(u)
+        for ln in getattr(entry, "links", []) or []:
+            rel = getattr(ln, "rel", "") or (ln.get("rel") if isinstance(ln, dict) else "")
+            type_ = getattr(ln, "type", "") or (ln.get("type") if isinstance(ln, dict) else "")
+            href = getattr(ln, "href", "") or getattr(ln, "url", "")
+            if isinstance(ln, dict):
+                href = ln.get("href") or ln.get("url") or href
+            if rel == "enclosure" and type_.startswith("image/") and href:
+                candidates.append(href)
     except Exception as ex:
         logger.warning("Отказ извлечения картинки из RSS: %s", ex)
-    image_url = _validate_image_url(image_url)
-    if image_url:
-        logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
+
     if summary_raw:
         html_blobs.append(summary_raw)
-    candidates: List[str] = []
-    for m in getattr(entry, "media_content", []) or []:
-        url = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
-        if url:
-            candidates.append(url)
-    for m in getattr(entry, "media_thumbnail", []) or []:
-        url = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
-        if url:
-            candidates.append(url)
-    for en in getattr(entry, "enclosures", []) or []:
-        url = getattr(en, "href", "") or getattr(en, "url", "")
-        if isinstance(en, dict):
-            url = en.get("href") or en.get("url") or url
-        if url:
-            candidates.append(url)
-    for ln in getattr(entry, "links", []) or []:
-        rel = getattr(ln, "rel", "") or (ln.get("rel") if isinstance(ln, dict) else "")
-        type_ = getattr(ln, "type", "") or (ln.get("type") if isinstance(ln, dict) else "")
-        href = getattr(ln, "href", "") or getattr(ln, "url", "")
-        if isinstance(ln, dict):
-            href = ln.get("href") or ln.get("url") or href
-        if rel == "enclosure" and type_.startswith("image/") and href:
-            candidates.append(href)
-    img_re = re.compile(r'''<img[^>]+src=['"]([^'"]+)['"]''', flags=re.I)
+    img_re = re.compile(r"""<img[^>]+src=['\"]([^'\"]+)['\"]""", flags=re.I)
     for blob in html_blobs:
         for img in img_re.findall(blob):
             candidates.append(img)
-    image_url = _first_http_url(candidates)
+
+    image_url = _validate_image_url(_first_http_url(candidates))
+    if image_url:
+        logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
+
     title = normalize_whitespace(title)
     content_val = normalize_whitespace(content_val)
     if not title:
@@ -385,17 +414,24 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
         "content": content_val,
         "published_at": published_at,
         "image_url": image_url or "",
-        "image_url": image_url,
     }
 
-def fetch_rss(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
+def fetch_rss(
+    source: Dict[str, str],
+    limit: int = 30,
+    *,
+    timeout: Optional[tuple] = None,
+) -> List[Dict[str, str]]:
     url = source.get("url", "")
     name = source.get("name", "")
     if not url:
         return []
     logger.info("Загрузка RSS: %s (%s)", name, url)
     try:
-        fp = feedparser.parse(url)
+        text = _requests_get(url, timeout=timeout)
+        if text is None:
+            return []
+        fp = feedparser.parse(text)
         items: List[Dict[str, str]] = []
         for e in fp.entries[:limit]:
             item = _entry_to_item_rss(name, e)
@@ -409,14 +445,16 @@ def fetch_rss(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
 
 # -------------------- HTML single --------------------
 
-def fetch_html(source: Dict[str, str]) -> List[Dict[str, str]]:
+def fetch_html(
+    source: Dict[str, str], *, timeout: Optional[tuple] = None
+) -> List[Dict[str, str]]:
     url = source.get("url", "")
     name = source.get("name", "")
     if not url:
         return []
     logger.info("Загрузка HTML: %s (%s)", name, url)
     try:
-        item = _parse_html_article(name, url)
+        item = _parse_html_article(name, url, timeout=timeout)
         return [item] if item else []
     except Exception as ex:
         logger.exception("Ошибка HTML источника %s: %s", name, ex)
@@ -440,7 +478,12 @@ def _text_or_empty(node) -> str:
     except Exception:
         return ""
 
-def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, str]]:
+def fetch_html_list(
+    source: Dict[str, str],
+    limit: int = 30,
+    *,
+    timeout: Optional[tuple] = None,
+) -> List[Dict[str, str]]:
     """
     Универсальный парсер листинга.
     Поддерживает произвольные селекторы из source['selectors'], но все поля опциональны.
@@ -455,7 +498,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
         return []
 
     logger.info("Загрузка HTML-листа: %s (%s)", name, base_url)
-    html = _requests_get(base_url)
+    html = _requests_get(base_url, timeout=timeout)
     if not html:
         return []
 
@@ -475,6 +518,12 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
             if part:
                 candidates.extend(part)
         items_nodes = candidates or soup.find_all("a")
+    if not items_nodes:
+        logger.warning(
+            "Источник '%s': не найдено карточек (selectors=%s)",
+            name,
+            sels.get("item"),
+        )
 
     out: List[Dict[str, str]] = []
     seen_links: set[str] = set()
@@ -523,7 +572,7 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
             date_text = date_el.get(date_attr) or _text_or_empty(date_el)
 
         # 5) загрузим карточку материала
-        detail = _parse_html_article(name, link_abs)
+        detail = _parse_html_article(name, link_abs, timeout=timeout)
         if not detail:
             img_el = None
             img_css = sels.get("image") or "img"
@@ -544,7 +593,6 @@ def fetch_html_list(source: Dict[str, str], limit: int = 30) -> List[Dict[str, s
                 "title": title_list or "(без заголовка)",
                 "content": "",
                 "published_at": date_text or "",
-                "image_url": "",
                 "image_url": img_src,
             })
             continue
@@ -572,20 +620,29 @@ def fetch_mock(source: Dict[str, str]) -> List[Dict[str, str]]:
 
 # -------------------- Multiplexer --------------------
 
-def fetch_all(sources: Iterable[Dict[str, str]], limit_per_source: Optional[int] = None) -> List[Dict[str, str]]:
+def fetch_all(
+    sources: Iterable[Dict[str, str]],
+    limit_per_source: Optional[int] = None,
+) -> List[Dict[str, str]]:
     limit = int(limit_per_source or getattr(config, "FETCH_LIMIT_PER_SOURCE", 30))
     result: List[Dict[str, str]] = []
     for s in sources:
+        if not s.get("enabled", True):
+            logger.info("Источник '%s' отключен конфигом", s.get("name"))
+            continue
         stype = (s.get("type") or "rss").strip().lower()
+        timeout = s.get("timeout")
         try:
             if stype == "html":
-                result.extend(fetch_html(s))
+                result.extend(fetch_html(s, timeout=timeout))
             elif stype == "html_list":
-                result.extend(fetch_html_list(s, limit=limit))
+                result.extend(
+                    fetch_html_list(s, limit=limit, timeout=timeout)
+                )
             elif stype == "mock":
                 result.extend(fetch_mock(s))
             else:
-                result.extend(fetch_rss(s, limit=limit))
+                result.extend(fetch_rss(s, limit=limit, timeout=timeout))
             time.sleep(0.2)
         except Exception as ex:
             logger.exception("Необработанная ошибка источника %s: %s", s, ex)
