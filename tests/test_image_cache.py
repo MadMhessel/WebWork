@@ -1,5 +1,5 @@
 import base64
-from types import SimpleNamespace
+import requests
 import sys
 import pathlib
 
@@ -23,33 +23,27 @@ class Resp:
     def iter_content(self, n):
         yield self.content
 
+    def raise_for_status(self):
+        pass
+
 
 def test_no_fake_tg_file_id_generated(monkeypatch):
     calls = {"head": 0, "get": 0}
 
-    def fake_head(url, timeout, allow_redirects=True, headers=None):
+    def fake_head(url, allow_redirects=True, timeout=None, headers=None):
         calls["head"] += 1
         return Resp(PNG_DATA)
 
-    def fake_get(url, timeout, headers=None, allow_redirects=True):
+    def fake_get(url, stream=True, timeout=None, headers=None):
         calls["get"] += 1
         return Resp(PNG_DATA)
 
-    monkeypatch.setattr(images, "HTTP_SESSION", SimpleNamespace(head=fake_head, get=fake_get))
-    monkeypatch.setattr(images.config, "IMAGE_MIN_EDGE", 1)
-    monkeypatch.setattr(images.config, "IMAGE_MIN_AREA", 1)
-    monkeypatch.setattr(images.config, "MIN_IMAGE_BYTES", 0)
-
-    class DummyImg:
-        size = (1, 1)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(images, "Image", SimpleNamespace(open=lambda b: DummyImg()))
+    monkeypatch.setattr(requests, "head", fake_head)
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(images, "MIN_WIDTH", 1)
+    monkeypatch.setattr(images, "MIN_HEIGHT", 1)
+    monkeypatch.setattr(images, "MIN_BYTES", 0)
+    monkeypatch.setattr(images, "_probe_bytes", lambda raw: (1, 1, "image/png"))
 
     conn = db.connect(":memory:")
     db.init_schema(conn)
