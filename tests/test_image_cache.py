@@ -27,11 +27,11 @@ class Resp:
 def test_no_fake_tg_file_id_generated(monkeypatch):
     calls = {"head": 0, "get": 0}
 
-    def fake_head(url, timeout, allow_redirects=True):
+    def fake_head(url, timeout, allow_redirects=True, headers=None):
         calls["head"] += 1
         return Resp(PNG_DATA)
 
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, headers=None, allow_redirects=True):
         calls["get"] += 1
         return Resp(PNG_DATA)
 

@@ -49,7 +49,8 @@ RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === HTTP-клиент ===
 HTTP_TIMEOUT_CONNECT: float = float(os.getenv("HTTP_TIMEOUT_CONNECT", "5"))
-HTTP_TIMEOUT_READ: float = float(os.getenv("HTTP_TIMEOUT_READ", "15"))
+# ТЗ: смягчённые таймауты (connect=5s, read=10s)
+HTTP_TIMEOUT_READ: float = float(os.getenv("HTTP_TIMEOUT_READ", "10"))
 HTTP_RETRY_TOTAL: int = int(os.getenv("HTTP_RETRY_TOTAL", "3"))
 HTTP_BACKOFF: float = float(os.getenv("HTTP_BACKOFF", "0.5"))
 
