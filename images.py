@@ -44,6 +44,18 @@ _SRCSET_RE = re.compile(
     r'<(?:img|source)[^>]+(?:srcset|data-srcset)=["\']([^"\']+)["\']',
     re.I,
 )
+_META_OG_RE = re.compile(
+    r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
+    re.I,
+)
+_META_OG_SEC_RE = re.compile(
+    r'<meta\s+property=["\']og:image:secure_url["\']\s+content=["\']([^"\']+)["\']',
+    re.I,
+)
+_META_TW_RE = re.compile(
+    r'<meta\s+(?:name|property)=["\']twitter:image["\']\s+content=["\']([^"\']+)["\']',
+    re.I,
+)
 
 _PLACEHOLDER_RE = re.compile(
     r"(no[-_]?image|placeholder|plug|zaglushka|stub|default|spacer|1x1)",
@@ -91,12 +103,10 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
     if u0:
         urls.append(u0)
 
-    # inline images in article body
-    urls.extend(_IMG_RE.findall(content))
-    for srcset in _SRCSET_RE.findall(content):
-        best = _best_from_srcset(srcset)
-        if best:
-            urls.append(best)
+    # meta tags have highest priority
+    urls.extend(_META_OG_RE.findall(content))
+    urls.extend(_META_OG_SEC_RE.findall(content))
+    urls.extend(_META_TW_RE.findall(content))
 
     # JSON-LD blocks often contain clean cover images
     for block in _JSON_LD_RE.findall(content):
@@ -106,6 +116,15 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
             continue
         for url in _json_ld_image_urls(data):
             urls.append(url)
+
+    # srcset provides multiple variants; pick the largest
+    for srcset in _SRCSET_RE.findall(content):
+        best = _best_from_srcset(srcset)
+        if best:
+            urls.append(best)
+
+    # inline images in article body
+    urls.extend(_IMG_RE.findall(content))
 
     seen: set[str] = set()
     out: List[ImageCandidate] = []
