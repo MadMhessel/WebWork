@@ -54,6 +54,8 @@ def _publisher_send_direct(item: Dict) -> bool:
         item.get("content", ""),
         item.get("url", ""),
         item.get("image_url"),
+        image_bytes=item.get("image_bytes"),
+        image_mime=item.get("image_mime"),
         cfg=config,
     )
 
@@ -145,6 +147,10 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 item_clean["tg_file_id"] = img_info["tg_file_id"]
             if img_info.get("image_hash"):
                 item_clean["image_hash"] = img_info["image_hash"]
+            if img_info.get("bytes"):
+                item_clean["image_bytes"] = img_info["bytes"]
+                if img_info.get("mime"):
+                    item_clean["image_mime"] = img_info.get("mime")
 
             if getattr(config, "ENABLE_MODERATION", False):
                 mod_id = moderation.enqueue_and_preview(item_clean, conn)

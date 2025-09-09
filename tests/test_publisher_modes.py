@@ -62,6 +62,41 @@ def test_publisher_message_with_image_url_sends_photo(monkeypatch):
     assert db.get_cached_file_id(conn, "http://img2") == "fid2"
 
 
+def test_publish_message_uses_bytes_when_provided(monkeypatch):
+    conn = db.connect(":memory:")
+    db.init_schema(conn)
+    monkeypatch.setattr(publisher.db, "connect", lambda: conn)
+    monkeypatch.setattr(config, "ATTACH_IMAGES", True)
+    called = {}
+
+    def fake_send_photo(chat_id, photo, caption, parse_mode, mime=None):
+        called["photo_type"] = type(photo).__name__
+        called["mime"] = mime
+        return ("m3", "fid3")
+
+    def fake_send_text(chat_id, text, parse_mode):
+        called["text"] = text
+        return "m4"
+
+    monkeypatch.setattr(publisher, "_send_photo", fake_send_photo)
+    monkeypatch.setattr(publisher, "_send_text", fake_send_text)
+
+    ok = publisher.publish_message(
+        "100",
+        "t",
+        "b",
+        "u",
+        image_url="http://img3",
+        image_bytes=b"123",
+        image_mime="image/jpeg",
+        cfg=config,
+    )
+    assert ok is True
+    assert called["photo_type"] == "BytesIO"
+    assert called["mime"] == "image/jpeg"
+    assert db.get_cached_file_id(conn, "http://img3") == "fid3"
+
+
 def test_preview_text_only(monkeypatch):
     item = {"title": "t", "content": "c", "url": "u", "image_url": "http://img"}
     monkeypatch.setattr(config, "PREVIEW_MODE", "text_only")
