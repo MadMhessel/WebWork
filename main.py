@@ -139,8 +139,6 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "tags": list(tags),
             }
 
-            item_clean = rewrite.maybe_rewrite_item(item_clean, config)
-
             img_info = images.resolve_image(item_clean, conn)
             item_clean["image_url"] = img_info.get("image_url", "")
             if img_info.get("tg_file_id"):
@@ -151,6 +149,8 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 item_clean["image_bytes"] = img_info["bytes"]
                 if img_info.get("mime"):
                     item_clean["image_mime"] = img_info.get("mime")
+
+            item_clean = rewrite.maybe_rewrite_item(item_clean, config)
 
             if getattr(config, "ENABLE_MODERATION", False):
                 mod_id = moderation.enqueue_and_preview(item_clean, conn)
