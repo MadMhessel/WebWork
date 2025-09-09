@@ -126,6 +126,18 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
 
     _ensure_column(conn, "items", "image_url", "TEXT")
+    # --- moderation_queue extra fields for enhanced moderation ---
+    _ensure_column(conn, "moderation_queue", "tags", "TEXT")
+    _ensure_column(conn, "moderation_queue", "resume_at", "INTEGER")
+    _ensure_column(conn, "moderation_queue", "preview_chat_id", "TEXT")
+    _ensure_column(conn, "moderation_queue", "risk", "TEXT")
+    _ensure_column(conn, "moderation_queue", "reasons", "TEXT")
+    _ensure_column(conn, "moderation_queue", "approved_by", "INTEGER")
+    _ensure_column(conn, "moderation_queue", "published_msg_id", "TEXT")
+    _ensure_column(conn, "moderation_queue", "image_type", "TEXT")
+    _ensure_column(conn, "moderation_queue", "image_ref", "TEXT")
+    # editor_state now tracks which field is being edited
+    _ensure_column(conn, "editor_state", "field", "TEXT")
 
     try:
         conn.execute(

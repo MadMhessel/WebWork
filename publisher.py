@@ -265,12 +265,18 @@ def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg
     )
     keyboard = {
         "inline_keyboard": [
+            [{"text": "✅ Утвердить", "callback_data": f"m:{mod_id}:ok"}],
             [
-                {"text": "✅", "callback_data": f"mod:{mod_id}:approve"},
-                {"text": "❌", "callback_data": f"mod:{mod_id}:reject"},
-                {"text": "💤", "callback_data": f"mod:{mod_id}:snooze"},
-                {"text": "✏️", "callback_data": f"mod:{mod_id}:edit"},
+                {"text": "📝 Заголовок", "callback_data": f"m:{mod_id}:eh"},
+                {"text": "📝 Текст", "callback_data": f"m:{mod_id}:et"},
             ],
+            [{"text": "🏷️ Теги", "callback_data": f"m:{mod_id}:tg"}],
+            [
+                {"text": "💤 15м", "callback_data": f"m:{mod_id}:sz:15"},
+                {"text": "1ч", "callback_data": f"m:{mod_id}:sz:60"},
+                {"text": "3ч", "callback_data": f"m:{mod_id}:sz:180"},
+            ],
+            [{"text": "🚫 Отклонить", "callback_data": f"m:{mod_id}:rej"}],
             [{"text": "🔗", "url": item.get("url", "") or ""}],
         ]
     }
