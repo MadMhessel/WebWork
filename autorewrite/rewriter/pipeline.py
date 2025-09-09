@@ -28,6 +28,9 @@ def _make_title(text: str, desired_len: int = 110) -> str:
     # базово: берем 1-е предложение, чистим вводные, режем до длины
     sents = split_sentences(text)
     base = sents[0] if sents else text
+    # убираем служебные префиксы и агрегаторские поля
+    base = re.sub(r"^Erid:[^,]+,\s*", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"^((Коротко|Главное|Суть|Что произошло)\s*[:,]?\s*)+", "", base, flags=re.IGNORECASE)
     # упрощаем заголовок
     base = re.sub(r"\b(сообщил[аи]?|рассказал[аи]?|заявил[аи]?|по словам|как сообщили)\b.*?$", "", base, flags=re.IGNORECASE)
     base = re.sub(r"^\s*(В|Во|На|По)\s+", "", base, flags=re.IGNORECASE)
