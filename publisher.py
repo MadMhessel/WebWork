@@ -8,6 +8,11 @@ import sqlite3
 
 import requests
 
+try:  # Pillow is optional
+    from PIL import Image  # type: ignore
+except Exception:  # pragma: no cover
+    Image = None  # type: ignore
+
 try:
     from . import config, db, rewrite, http_client, images
     from .utils import shorten_url
@@ -203,20 +208,34 @@ def _send_photo(
     if not _ensure_client():
         return None
     url = f"{_client_base_url}/sendPhoto"
+    r = None
     try:
         r = requests.post(url, data=payload, files=files, timeout=30)
-        if r.status_code != 200:
-            logger.error("sendPhoto HTTP %s: %s", r.status_code, r.text[:200])
-            return None
-        j = r.json()
-        if not j.get("ok"):
-            logger.error("sendPhoto ok=false: %s", r.text[:200])
-            return None
+        j = r.json() if r.status_code == 200 else None
+        success = bool(j and j.get("ok"))
     except Exception as ex:  # pragma: no cover
         logger.exception("Exception during sendPhoto: %s", ex)
+        success = False
+        j = None
+    if not success and isinstance(photo, str) and photo.startswith("http"):
+        img = _download_image(photo, config)
+        if img:
+            data, mime2 = img
+            payload["photo"] = data
+            files = {"photo": ("image", data, mime2)}
+            try:
+                r = requests.post(url, data=payload, files=files, timeout=30)
+                j = r.json() if r.status_code == 200 else None
+                success = bool(j and j.get("ok"))
+            except Exception as ex:  # pragma: no cover
+                logger.exception("Exception during sendPhoto upload: %s", ex)
+                success = False
+    if not success:
+        if r is not None:
+            logger.error("sendPhoto failed: %s", getattr(r, "text", "")[:200])
         return None
 
-    res = j.get("result", {})
+    res = j.get("result", {}) if j else {}
     fid = None
     try:
         fid = res.get("photo", [{}])[-1].get("file_id")
@@ -240,8 +259,14 @@ def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
     timeout = (config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ)
     max_bytes = int(getattr(cfg, "IMAGE_MAX_BYTES", 5 * 1024 * 1024))
     session = http_client.get_session()
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "ru,en;q=0.8",
+        "Referer": url,
+    }
     try:
-        with session.get(url, timeout=timeout, stream=True) as r:
+        with session.get(url, timeout=timeout, stream=True, headers=headers, allow_redirects=True) as r:
             if r.status_code != 200:
                 return None
             ctype = (r.headers.get("Content-Type") or "").split(";")[0]
@@ -258,6 +283,15 @@ def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
                 if data.tell() > max_bytes:
                     return None
             data.seek(0)
+            if ctype in {"image/webp", "image/avif"} and Image is not None:
+                try:
+                    with Image.open(data) as im:
+                        converted = BytesIO()
+                        im.save(converted, format="JPEG", quality=85)
+                        converted.seek(0)
+                        return converted, "image/jpeg"
+                except Exception:
+                    return None
             return data, ctype
     except Exception:  # pragma: no cover
         return None
