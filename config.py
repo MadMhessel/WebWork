@@ -110,6 +110,7 @@ MODERATOR_IDS: set[int] = {
 }
 ALLOWED_MODERATORS = MODERATOR_IDS
 ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "true").lower() in {"1", "true", "yes"}
+ENABLE_IMAGE_PIPELINE: bool = os.getenv("ENABLE_IMAGE_PIPELINE", "false").lower() in {"1", "true", "yes"}
 MAX_MEDIA_PER_POST: int = int(os.getenv("MAX_MEDIA_PER_POST", "10"))
 IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "220"))
 IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", "45000"))

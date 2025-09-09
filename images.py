@@ -196,6 +196,20 @@ def select_image(item: Dict, cfg=config) -> Optional[str]:
             best_url = cand.url
     if best_url:
         return best_url
+    # Fallback: try full-page HTML analysis via image_pipeline if enabled
+    if getattr(cfg, "ENABLE_IMAGE_PIPELINE", False) and item.get("url"):
+        try:
+            try:
+                from . import image_pipeline  # type: ignore
+            except Exception:  # pragma: no cover
+                import image_pipeline  # type: ignore
+            html = image_pipeline.fetch_html(item["url"])
+            cands_ext = image_pipeline.extract_image_candidates(html, base_url=item["url"])
+            best_ext = image_pipeline.choose_best_candidate(cands_ext)
+            if best_ext:
+                return best_ext.url
+        except Exception:
+            logger.debug("image_pipeline fallback failed", exc_info=True)
     if ATTACH_IMAGES and FALLBACK_IMAGE_URL:
         return FALLBACK_IMAGE_URL
     return None
