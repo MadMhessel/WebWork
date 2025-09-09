@@ -7,8 +7,25 @@ from rewriter.base import NewsItem
 from media.extractor import extract_image_urls
 
 
-def test_extract_from_html_meta_and_img_and_list():
-    html = '''<html><head><meta property="og:image" content="http://site/og.jpg"><meta name="twitter:image" content="http://site/tw.jpg"></head><body><img src="http://site/body.jpg"></body></html>'''
-    item = NewsItem(id="1", source="s", url="u", title="t", text="", html=html, images=["http://site/extra.jpg"])
+def test_extract_priority_and_filters():
+    html = '''<html><head>
+    <meta property="og:image" content="/og.jpg">
+    <meta property="og:image:secure_url" content="https://cdn/og-sec.jpg">
+    <meta name="twitter:image" content="http://site/tw.jpg">
+    <script type="application/ld+json">{"image": "ld.jpg", "thumbnailUrl": "/thumb.jpg"}</script>
+    </head><body>
+    <picture><source srcset="/img1.jpg 1x, /img2.jpg 2x"></picture>
+    <img data-src="img3.jpg">
+    <img src="http://site/no-image.png">
+    </body></html>'''
+    item = NewsItem(id="1", source="s", url="http://site/page", title="t", text="", html=html)
     urls = extract_image_urls(item)
-    assert urls == ["http://site/extra.jpg", "http://site/og.jpg", "http://site/tw.jpg", "http://site/body.jpg"]
+    assert urls == [
+        "http://site/og.jpg",
+        "https://cdn/og-sec.jpg",
+        "http://site/tw.jpg",
+        "http://site/ld.jpg",
+        "http://site/thumb.jpg",
+        "http://site/img2.jpg",
+        "http://site/img3.jpg",
+    ]

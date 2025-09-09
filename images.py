@@ -37,9 +37,37 @@ _JSON_LD_RE = re.compile(
 )
 
 _IMG_RE = re.compile(
-    r'<img[^>]+(?:src|data-src|data-original)=["\']([^"\']+)["\']', re.I
+    r'<img[^>]+(?:src|data-src|data-original|data-lazy)=["\']([^"\']+)["\']',
+    re.I,
 )
-_SRCSET_RE = re.compile(r'<(?:img|source)[^>]+srcset=["\']([^"\']+)["\']', re.I)
+_SRCSET_RE = re.compile(
+    r'<(?:img|source)[^>]+(?:srcset|data-srcset)=["\']([^"\']+)["\']',
+    re.I,
+)
+
+_PLACEHOLDER_RE = re.compile(
+    r"(no[-_]?image|placeholder|plug|zaglushka|stub|default|spacer|1x1)",
+    re.I,
+)
+
+
+def _best_from_srcset(srcset: str) -> Optional[str]:
+    best_url = None
+    best_w = -1
+    for part in srcset.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        url, *rest = part.split()
+        width = 0
+        if rest:
+            m = re.search(r"(\d+)(w|x)", rest[0])
+            if m:
+                width = int(m.group(1))
+        if width > best_w:
+            best_w = width
+            best_url = url
+    return best_url
 
 
 @dataclass
@@ -66,9 +94,9 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
     # inline images in article body
     urls.extend(_IMG_RE.findall(content))
     for srcset in _SRCSET_RE.findall(content):
-        first = srcset.split(",")[0].strip().split(" ")[0]
-        if first:
-            urls.append(first)
+        best = _best_from_srcset(srcset)
+        if best:
+            urls.append(best)
 
     # JSON-LD blocks often contain clean cover images
     for block in _JSON_LD_RE.findall(content):
@@ -86,7 +114,7 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
             continue
         if item.get("url"):
             u = urljoin(item["url"], u)
-        if u in seen:
+        if u in seen or _PLACEHOLDER_RE.search(u):
             continue
         seen.add(u)
         if is_reasonable_image_url(u):
@@ -99,7 +127,12 @@ def _json_ld_image_urls(obj) -> List[str]:
     if isinstance(obj, str):
         urls.append(obj)
     elif isinstance(obj, dict):
-        img = obj.get("image") or obj.get("url") or obj.get("@id")
+        img = (
+            obj.get("image")
+            or obj.get("thumbnailUrl")
+            or obj.get("url")
+            or obj.get("@id")
+        )
         if isinstance(img, (str, dict, list)):
             urls.extend(_json_ld_image_urls(img))
     elif isinstance(obj, list):
@@ -117,6 +150,8 @@ def is_reasonable_image_url(url: str) -> bool:
     if parsed.scheme not in {"http", "https"}:
         return False
     low = url.lower()
+    if _PLACEHOLDER_RE.search(low):
+        return False
     deny = getattr(config, "IMAGE_DENYLIST_DOMAINS", set())
     if any(d in low for d in deny):
         return False
@@ -138,12 +173,33 @@ def _domain_allowed(url: str) -> bool:
         return False
 
 
+def _score_url(url: str) -> int:
+    low = url.lower()
+    if _PLACEHOLDER_RE.search(low):
+        return -100
+    score = 0
+    if any(k in low for k in {"logo", "sprite", "icon"}):
+        score -= 20
+    m = re.search(r"(\d{2,4})x(\d{2,4})", low)
+    if m:
+        score += int(m.group(1)) + int(m.group(2))
+    if "@2x" in low or "@3x" in low:
+        score += 10
+    return score
+
+
 def pick_best(candidates: List[ImageCandidate]) -> Optional[ImageCandidate]:
-    """Pick first candidate matching domain whitelist."""
+    """Pick highest-scoring candidate respecting domain whitelist."""
+    best = None
+    best_score = -999
     for cand in candidates:
-        if _domain_allowed(cand.url):
-            return cand
-    return None
+        if not _domain_allowed(cand.url):
+            continue
+        s = _score_url(cand.url)
+        if s > best_score:
+            best_score = s
+            best = cand
+    return best
 
 
 def select_image_with_fallback(item: dict) -> Optional[str]:
@@ -152,7 +208,9 @@ def select_image_with_fallback(item: dict) -> Optional[str]:
     Implements levels A and B of the fallback funnel and finally returns
     configured placeholder image (levels F–H) if nothing else matched.
     """
-    cand = pick_best(extract_candidates(item))
+    cands = extract_candidates(item)
+    log.debug("extract_image_candidates n=%d top=%s", len(cands), [c.url for c in cands[:3]])
+    cand = pick_best(cands)
     if cand:
         return cand.url
 
@@ -160,6 +218,7 @@ def select_image_with_fallback(item: dict) -> Optional[str]:
 
     fallback = getattr(config, "FALLBACK_IMAGE_URL", "")
     if fallback:
+        log.info("select_image_with_fallback: using fallback %s", fallback)
         return fallback
     return None
 
@@ -177,12 +236,12 @@ def resolve_image(item: dict, conn: Optional[sqlite3.Connection] = None) -> dict
 
     info = {"image_url": url}
     try:
-        res = probe_image(url)
+        res = probe_image(url, referer=item.get("url"))
         if not res:
             fb = getattr(config, "FALLBACK_IMAGE_URL", "")
             if fb and fb != url:
                 info["image_url"] = fb
-                res = probe_image(fb)
+                res = probe_image(fb, referer=item.get("url"))
         if res:
             ihash, w, h = res
             info["image_hash"] = ihash
@@ -197,32 +256,47 @@ def resolve_image(item: dict, conn: Optional[sqlite3.Connection] = None) -> dict
     return info
 
 
-def probe_image(image_url: str) -> Optional[tuple[str, int, int]]:
+def probe_image(image_url: str, referer: Optional[str] = None) -> Optional[tuple[str, int, int]]:
     """Validate image via HTTP and Pillow without uploading to Telegram."""
     if not image_url or not getattr(config, "ALLOW_IMAGES", True):
         return None
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "ru,en;q=0.8",
+    }
+    if referer:
+        headers["Referer"] = referer
 
     session = HTTP_SESSION
     try:
         head = session.head(
             image_url,
+            headers=headers,
             timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ),
             allow_redirects=True,
         )
+        if head.status_code in {403, 405}:  # immediately fallback to GET
+            head = None
         try:
-            ctype = head.headers.get("Content-Type", "")
-            if head.status_code != 200 or not ctype.startswith("image/"):
-                image_stats["reasons"]["invalid_content_type"] += 1
-                return None
-            clen = int(head.headers.get("Content-Length", "0") or "0")
-            if clen < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
-                image_stats["reasons"]["too_small"] += 1
-                return None
+            if head is not None:
+                ctype = head.headers.get("Content-Type", "")
+                if head.status_code != 200 or not ctype.startswith("image/"):
+                    image_stats["reasons"]["invalid_content_type"] += 1
+                    return None
+                clen = int(head.headers.get("Content-Length", "0") or "0")
+                if clen < int(getattr(config, "MIN_IMAGE_BYTES", 0)):
+                    image_stats["reasons"]["too_small"] += 1
+                    return None
         finally:
-            if hasattr(head, "close"):
+            if head is not None and hasattr(head, "close"):
                 head.close()
         r = session.get(
-            image_url, timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ)
+            image_url,
+            headers=headers,
+            timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ),
+            allow_redirects=True,
         )
         try:
             if r.status_code != 200:

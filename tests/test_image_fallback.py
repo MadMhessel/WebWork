@@ -25,7 +25,7 @@ def test_resolve_image_uses_fallback_when_candidate_invalid(monkeypatch):
     monkeypatch.setattr(config, "FALLBACK_IMAGE_URL", "http://fallback/img.png")
 
     # probe_image returns None for any URL to emulate validation failure
-    monkeypatch.setattr(images, "probe_image", lambda url: None)
+    monkeypatch.setattr(images, "probe_image", lambda url, referer=None: None)
 
     item = {"title": "t", "content": '<img src="http://bad/img.png">'}
     info = images.resolve_image(item)
