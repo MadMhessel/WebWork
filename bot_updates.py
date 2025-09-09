@@ -42,30 +42,16 @@ def run(stop_event) -> None:
 def _handle_update(conn, session, update: dict) -> None:
     if update.get("callback_query"):
         cb = update["callback_query"]
-        user_id = int(cb.get("from", {}).get("id", 0))
-        data = cb.get("data", "")
         cb_id = cb.get("id", "")
-        if not moderator.is_moderator(user_id):
-            publisher.answer_callback_query(cb_id, "Нет доступа", show_alert=True)
-            return
-        action = ""
-        mod_id: Optional[int] = None
-        if data.startswith("mod:"):
-            parts = data.split(":")
-            if len(parts) >= 3:
-                mod_id = int(parts[1]) if parts[1].isdigit() else None
-                action = parts[2]
-        moderator.handle_callback(conn, update)
+        action = moderator.handle_callback(conn, update)
         msg = cb.get("message") or {}
         chat_id = str(msg.get("chat", {}).get("id", ""))
         message_id = msg.get("message_id")
-        if action == "edit":
-            publisher.answer_callback_query(cb_id, "Редактирование")
-            publisher.remove_moderation_buttons(chat_id, message_id)
-            publisher.send_message(
-                str(user_id), "Пришлите текст одним сообщением или /cancel", cfg=config
-            )
-        elif action == "approve":
+        user_id = int(cb.get("from", {}).get("id", 0))
+        if action == "forbidden":
+            publisher.answer_callback_query(cb_id, "Нет доступа", show_alert=True)
+            return
+        if action == "approve":
             publisher.answer_callback_query(cb_id, "Опубликовано")
             publisher.remove_moderation_buttons(chat_id, message_id)
         elif action == "reject":
@@ -74,6 +60,27 @@ def _handle_update(conn, session, update: dict) -> None:
         elif action == "snooze":
             publisher.answer_callback_query(cb_id, "Отложено")
             publisher.remove_moderation_buttons(chat_id, message_id)
+        elif action == "edit_title":
+            publisher.answer_callback_query(cb_id, "Редактирование")
+            publisher.remove_moderation_buttons(chat_id, message_id)
+            publisher.send_message(
+                str(user_id), "Отправьте новый заголовок или /cancel", cfg=config
+            )
+        elif action == "edit_text":
+            publisher.answer_callback_query(cb_id, "Редактирование")
+            publisher.remove_moderation_buttons(chat_id, message_id)
+            publisher.send_message(
+                str(user_id), "Пришлите текст одним сообщением или /cancel", cfg=config
+            )
+        elif action == "edit_tags":
+            publisher.answer_callback_query(cb_id, "Редактирование")
+            publisher.remove_moderation_buttons(chat_id, message_id)
+            publisher.send_message(
+                str(user_id), "Отправьте теги или /cancel", cfg=config
+            )
+        else:
+            # acknowledge generic callback to remove spinner
+            publisher.answer_callback_query(cb_id)
         return
     msg = update.get("message")
     if not msg:

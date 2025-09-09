@@ -1,3 +1,4 @@
+import json
 import logging
 import sqlite3
 import time
@@ -21,7 +22,9 @@ EDITING = "EDITING"
 
 def is_moderator(user_id: int) -> bool:
     try:
-        return int(user_id) in getattr(config, "MODERATOR_IDS", set())
+        allowed = set(getattr(config, "ALLOWED_MODERATORS", set()))
+        allowed |= set(getattr(config, "MODERATOR_IDS", set()))
+        return int(user_id) in allowed
     except Exception:
         return False
 
@@ -75,7 +78,18 @@ def send_preview(conn: sqlite3.Connection, mod_id: int) -> Optional[str]:
             "UPDATE moderation_queue SET review_message_id = ? WHERE id = ?",
             (mid, mod_id),
         )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO moderation_messages
+            (post_id, mod_chat_id, message_id, state, created_at, updated_at)
+            VALUES(?, ?, ?, 'new', strftime('%s','now'), strftime('%s','now'))
+            """,
+            (mod_id, str(chat_id), str(mid)),
+        )
         conn.commit()
+        logger.info(
+            "preview", extra={"post_id": mod_id, "chat_id": chat_id, "message_id": mid}
+        )
     return mid
 
 
@@ -101,6 +115,15 @@ def approve(conn: sqlite3.Connection, mod_id: int, moderator_id: int, text_overr
         conn.commit()
         return False
     conn.commit()
+    conn.execute(
+        "INSERT INTO moderation_actions (post_id, user_id, action, payload, created_at) VALUES(?,?,?, ?, strftime('%s','now'))",
+        (mod_id, moderator_id, "approve", json.dumps({"override": bool(text_override)})),
+    )
+    conn.execute(
+        "UPDATE moderation_messages SET state = ?, updated_at = strftime('%s','now') WHERE post_id = ?",
+        (APPROVED, mod_id),
+    )
+    conn.commit()
     mid = publisher.publish_from_queue(conn, mod_id, text_override=text_override, cfg=config)
     return bool(mid)
 
@@ -113,6 +136,16 @@ def reject(conn: sqlite3.Connection, mod_id: int, moderator_id: int, comment: st
         (REJECTED, moderator_id, comment, mod_id),
     )
     conn.commit()
+    if cur.rowcount > 0:
+        conn.execute(
+            "INSERT INTO moderation_actions (post_id, user_id, action, payload, created_at) VALUES(?,?,?, ?, strftime('%s','now'))",
+            (mod_id, moderator_id, "reject", json.dumps({"comment": comment})),
+        )
+        conn.execute(
+            "UPDATE moderation_messages SET state = ?, updated_at = strftime('%s','now') WHERE post_id = ?",
+            (REJECTED, mod_id),
+        )
+        conn.commit()
     return cur.rowcount > 0
 
 
@@ -126,6 +159,16 @@ def snooze(conn: sqlite3.Connection, mod_id: int, moderator_id: int, minutes: in
         (SNOOZED, resume, moderator_id, mod_id),
     )
     conn.commit()
+    if cur.rowcount > 0:
+        conn.execute(
+            "INSERT INTO moderation_actions (post_id, user_id, action, payload, created_at) VALUES(?,?,?, ?, strftime('%s','now'))",
+            (mod_id, moderator_id, "snooze", json.dumps({"minutes": minutes})),
+        )
+        conn.execute(
+            "UPDATE moderation_messages SET state = ?, updated_at = strftime('%s','now') WHERE post_id = ?",
+            (SNOOZED, mod_id),
+        )
+        conn.commit()
     return cur.rowcount > 0
 
 
@@ -138,6 +181,10 @@ def start_edit(
     conn.execute(
         "INSERT OR REPLACE INTO editor_state(user_id, item_id, field, started_at) VALUES (?,?,?,strftime('%s','now'))",
         (moderator_id, mod_id, field),
+    )
+    conn.execute(
+        "INSERT INTO moderation_actions (post_id, user_id, action, payload, created_at) VALUES(?,?,?, ?, strftime('%s','now'))",
+        (mod_id, moderator_id, f"start_edit_{field}", json.dumps({})),
     )
     conn.commit()
     return True
@@ -177,51 +224,62 @@ def apply_edit_message(conn: sqlite3.Connection, user_id: int, text: str) -> boo
             "UPDATE moderation_queue SET content = ?, status = ? WHERE id = ?",
             (text, PENDING_REVIEW, mod_id),
         )
+    conn.execute(
+        "INSERT INTO moderation_actions (post_id, user_id, action, payload, created_at) VALUES(?,?,?, ?, strftime('%s','now'))",
+        (mod_id, user_id, f"apply_{field}", json.dumps({"text": text})),
+    )
     conn.execute("DELETE FROM editor_state WHERE user_id = ?", (user_id,))
     conn.commit()
     send_preview(conn, mod_id)
     return True
 
 
-def handle_callback(conn: sqlite3.Connection, update: dict) -> None:
+def handle_callback(conn: sqlite3.Connection, update: dict) -> Optional[str]:
     cb = update.get("callback_query") or {}
     data = cb.get("data", "")
     user_id = int(cb.get("from", {}).get("id", 0))
-    if data.startswith("mod:"):
-        # legacy format mod:<id>:action
-        try:
-            _, sid, action = data.split(":", 2)
-            mod_id = int(sid)
-        except Exception:
-            return
-    else:
-        if not data.startswith("m:"):
-            return
-        parts = data.split(":")
-        if len(parts) < 3:
-            return
-        _, sid, action = parts[:3]
+    if not (data.startswith("mod:") or data.startswith("m:")):
+        return None
+    parts = data.split(":")
+    if len(parts) < 3:
+        return None
+    _, sid, action, *rest = parts
+    try:
         mod_id = int(sid)
-        extra = parts[3] if len(parts) > 3 else None
+    except Exception:
+        return None
+    extra = rest[0] if rest else None
     if not is_moderator(user_id):
-        return
+        logger.warning("unauthorized callback", extra={"user_id": user_id, "action": action})
+        return "forbidden"
+    result: Optional[str] = None
     if action in {"approve", "ok"}:
-        approve(conn, mod_id, user_id)
+        if approve(conn, mod_id, user_id):
+            result = "approve"
     elif action in {"reject", "rej"}:
         start_edit(conn, mod_id, user_id, "reject")
+        result = "reject"
     elif action in {"snooze", "sz"}:
-        minutes = int(extra or 0) if 'extra' in locals() else 0
+        minutes = int(extra or 0) if extra else 0
         if minutes <= 0:
             minutes = int(getattr(config, "SNOOZE_MINUTES", 0) or 0)
         if minutes <= 0:
             minutes = 60
         snooze(conn, mod_id, user_id, minutes)
-    elif action in {"edit", "et"}:
+        result = "snooze"
+    elif action in {"edit", "edit_text", "et"}:
         start_edit(conn, mod_id, user_id, "content")
-    elif action == "eh":
+        result = "edit_text"
+    elif action in {"edit_title", "eh"}:
         start_edit(conn, mod_id, user_id, "title")
-    elif action == "tg":
+        result = "edit_title"
+    elif action in {"edit_tags", "tg"}:
         start_edit(conn, mod_id, user_id, "tags")
+        result = "edit_tags"
+    logger.info(
+        "callback", extra={"post_id": mod_id, "action": action, "from_id": user_id}
+    )
+    return result
 
 
 def cmd_queue(conn: sqlite3.Connection, chat_id: str, page: int = 1) -> None:

@@ -87,6 +87,15 @@ def compose_preview(title: str, body: str, url: str, parse_mode: str) -> tuple[s
     return caption, long_text
 
 
+def format_preview(post: Dict[str, Any], cfg=config) -> tuple[str, Optional[str]]:
+    """Format a news post for Telegram preview with escaping and limits."""
+    parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
+    title = post.get("title", "")
+    body = post.get("content", "") or post.get("text", "")
+    url = post.get("url", "")
+    return compose_preview(title, body, url, parse_mode)
+
+
 # ---------------------------------------------------------------------------
 # Telegram HTTP helpers
 # ---------------------------------------------------------------------------
@@ -259,24 +268,22 @@ def remove_moderation_buttons(chat_id: str, message_id: Union[int, str]) -> None
 
 def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config) -> Optional[str]:
     """Send preview message with inline buttons for moderation."""
+    caption, long_text = format_preview(item, cfg)
     parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
-    caption, long_text = compose_preview(
-        item.get("title", ""), item.get("content", ""), item.get("url", ""), parse_mode
-    )
     keyboard = {
         "inline_keyboard": [
-            [{"text": "✅ Утвердить", "callback_data": f"m:{mod_id}:ok"}],
+            [{"text": "✅ Утвердить", "callback_data": f"mod:{mod_id}:approve"}],
             [
-                {"text": "📝 Заголовок", "callback_data": f"m:{mod_id}:eh"},
-                {"text": "📝 Текст", "callback_data": f"m:{mod_id}:et"},
+                {"text": "✏️ Заголовок", "callback_data": f"mod:{mod_id}:edit_title"},
+                {"text": "📝 Текст", "callback_data": f"mod:{mod_id}:edit_text"},
             ],
-            [{"text": "🏷️ Теги", "callback_data": f"m:{mod_id}:tg"}],
+            [{"text": "🏷️ Теги", "callback_data": f"mod:{mod_id}:edit_tags"}],
             [
-                {"text": "💤 15м", "callback_data": f"m:{mod_id}:sz:15"},
-                {"text": "1ч", "callback_data": f"m:{mod_id}:sz:60"},
-                {"text": "3ч", "callback_data": f"m:{mod_id}:sz:180"},
+                {"text": "💤 15м", "callback_data": f"mod:{mod_id}:snooze:15"},
+                {"text": "1ч", "callback_data": f"mod:{mod_id}:snooze:60"},
+                {"text": "3ч", "callback_data": f"mod:{mod_id}:snooze:180"},
             ],
-            [{"text": "🚫 Отклонить", "callback_data": f"m:{mod_id}:rej"}],
+            [{"text": "❌ Отклонить", "callback_data": f"mod:{mod_id}:reject"}],
             [{"text": "🔗", "url": item.get("url", "") or ""}],
         ]
     }

@@ -39,7 +39,11 @@ except Exception:  # pragma: no cover - executed only when defaults missing
     DEFAULT_FALLBACK_IMAGE_URL = "https://example.com/placeholder.png"
 
 # === Базовые настройки бота ===
-BOT_TOKEN: str = os.getenv("BOT_TOKEN", DEFAULT_BOT_TOKEN).strip()
+# Support both legacy names and new explicit TELEGRAM_* variables
+BOT_TOKEN: str = (
+    os.getenv("TELEGRAM_BOT_TOKEN")
+    or os.getenv("BOT_TOKEN", DEFAULT_BOT_TOKEN)
+).strip()
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", DEFAULT_CHANNEL_ID).strip()  # пример: "@my_news_channel" или числовой ID
 RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
@@ -83,13 +87,27 @@ FALLBACK_IMAGE_URL: str = os.getenv(
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # === Параметры модерации и медиа ===
-REVIEW_CHAT_ID: str | int = os.getenv("REVIEW_CHAT_ID", DEFAULT_REVIEW_CHAT_ID).strip()
-CHANNEL_CHAT_ID: str | int = os.getenv("CHANNEL_CHAT_ID", CHANNEL_ID).strip()
+# Allow new variable names defined in technical specification
+REVIEW_CHAT_ID: str | int = (
+    os.getenv("MOD_CHAT_ID")
+    or os.getenv("REVIEW_CHAT_ID", DEFAULT_REVIEW_CHAT_ID)
+).strip()
+CHANNEL_CHAT_ID: str | int = (
+    os.getenv("TARGET_CHAT_ID")
+    or os.getenv("CHANNEL_CHAT_ID", CHANNEL_ID)
+).strip()
 MODERATOR_IDS: set[int] = {
     int(x)
-    for x in os.getenv("MODERATOR_IDS", ",".join(str(x) for x in DEFAULT_MODERATOR_IDS)).split(",")
+    for x in (
+        os.getenv("ALLOWED_MODERATORS")
+        or os.getenv(
+            "MODERATOR_IDS",
+            ",".join(str(x) for x in DEFAULT_MODERATOR_IDS),
+        )
+    ).split(",")
     if x.strip()
 }
+ALLOWED_MODERATORS = MODERATOR_IDS
 ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "true").lower() in {"1", "true", "yes"}
 MAX_MEDIA_PER_POST: int = int(os.getenv("MAX_MEDIA_PER_POST", "10"))
 IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "320"))
@@ -99,8 +117,17 @@ REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
 CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 PREVIEW_MODE: str = os.getenv("PREVIEW_MODE", "auto")
-TELEGRAM_PARSE_MODE: str = os.getenv("TELEGRAM_PARSE_MODE", "HTML")
-TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = os.getenv("TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", "true").lower() in {"1","true","yes"}
+TELEGRAM_PARSE_MODE: str = os.getenv(
+    "PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML")
+)
+TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = (
+    os.getenv(
+        "DISABLE_WEB_PAGE_PREVIEW",
+        os.getenv("TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", "true"),
+    )
+    .lower()
+    in {"1", "true", "yes"}
+)
 
 # === Регулируемые параметры фильтра ===
 FILTER_HEAD_CHARS: int = int(os.getenv("FILTER_HEAD_CHARS", "400"))
