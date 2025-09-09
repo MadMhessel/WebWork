@@ -24,7 +24,7 @@ class Resp:
         yield self.content
 
 
-def test_image_cache(monkeypatch):
+def test_no_fake_tg_file_id_generated(monkeypatch):
     calls = {"head": 0, "get": 0}
 
     def fake_head(url, timeout, allow_redirects=True):
@@ -56,6 +56,6 @@ def test_image_cache(monkeypatch):
 
     fid1, h1 = images.ensure_tg_file_id("http://e/img.png", conn)
     fid2, h2 = images.ensure_tg_file_id("http://e/img.png", conn)
-    assert fid1 == fid2
+    assert fid1 is None and fid2 is None
     assert h1 == h2
     assert calls["head"] == 1 and calls["get"] == 1

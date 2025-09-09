@@ -8,7 +8,7 @@ from html import unescape
 from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 try:  # Pillow is optional during runtime
     from PIL import Image  # type: ignore
@@ -36,6 +36,11 @@ _JSON_LD_RE = re.compile(
     re.I | re.S,
 )
 
+_IMG_RE = re.compile(
+    r'<img[^>]+(?:src|data-src|data-original)=["\']([^"\']+)["\']', re.I
+)
+_SRCSET_RE = re.compile(r'<(?:img|source)[^>]+srcset=["\']([^"\']+)["\']', re.I)
+
 
 @dataclass
 class ImageCandidate:
@@ -59,7 +64,11 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
         urls.append(u0)
 
     # inline images in article body
-    urls.extend(re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', content, flags=re.I))
+    urls.extend(_IMG_RE.findall(content))
+    for srcset in _SRCSET_RE.findall(content):
+        first = srcset.split(",")[0].strip().split(" ")[0]
+        if first:
+            urls.append(first)
 
     # JSON-LD blocks often contain clean cover images
     for block in _JSON_LD_RE.findall(content):
@@ -73,7 +82,11 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
     seen: set[str] = set()
     out: List[ImageCandidate] = []
     for u in urls:
-        if not u or u in seen:
+        if not u:
+            continue
+        if item.get("url"):
+            u = urljoin(item["url"], u)
+        if u in seen:
             continue
         seen.add(u)
         if is_reasonable_image_url(u):
@@ -152,70 +165,50 @@ def select_image_with_fallback(item: dict) -> Optional[str]:
 
 
 def resolve_image(item: dict, conn: Optional[sqlite3.Connection] = None) -> dict:
-    """Resolve image URL and Telegram file id for ``item``.
+    """Resolve best image URL for ``item`` and validate it.
 
-    The function first tries to pick the best candidate from the article
-    itself (levels A–B). If validation via ``ensure_tg_file_id`` fails, it
-    retries with the configured fallback image to guarantee that at least some
-    visual is attached to the post (SLA 100%).
-
-    Returns a dict that may contain ``image_url``, ``tg_file_id`` and
-    ``image_hash`` keys depending on which steps succeeded. ``image_url`` is
-    always present when a fallback is configured.
+    Returns a dict with ``image_url`` and optionally ``image_hash`` when the
+    image passes validation via :func:`probe_image`.
     """
 
-    best_url = select_image_with_fallback(item)
-    fallback_url = getattr(config, "FALLBACK_IMAGE_URL", "")
+    url = select_image_with_fallback(item)
+    if not url:
+        return {}
 
-    urls_to_try: List[str] = []
-    if best_url:
-        urls_to_try.append(best_url)
-    if fallback_url and fallback_url not in urls_to_try:
-        urls_to_try.append(fallback_url)
-
-    result: dict = {}
-    for url in urls_to_try:
-        res = ensure_tg_file_id(url, conn)
+    info = {"image_url": url}
+    try:
+        res = probe_image(url)
+        if not res:
+            fb = getattr(config, "FALLBACK_IMAGE_URL", "")
+            if fb and fb != url:
+                info["image_url"] = fb
+                res = probe_image(fb)
         if res:
-            fid, ihash = res
-            result = {"image_url": url, "tg_file_id": fid, "image_hash": ihash}
-            break
+            ihash, w, h = res
+            info["image_hash"] = ihash
+            if conn is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO images_cache(src_url, hash, width, height) VALUES (?,?,?,?)",
+                    (info["image_url"], ihash, w, h),
+                )
+                conn.commit()
+    except Exception:
+        pass
+    return info
 
-    if not result:
-        if fallback_url:
-            result = {"image_url": fallback_url}
-        elif urls_to_try:
-            result = {"image_url": urls_to_try[0]}
-    return result
 
-
-def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None) -> Optional[tuple[str, str]]:
-    """Ensure Telegram file id for image, applying filters and caching by hash.
-
-    Returns tuple ``(file_id, image_hash)`` or ``None`` if validation fails.
-    Results are cached in the ``images_cache`` table when ``conn`` is provided.
-    """
+def probe_image(image_url: str) -> Optional[tuple[str, int, int]]:
+    """Validate image via HTTP and Pillow without uploading to Telegram."""
     if not image_url or not getattr(config, "ALLOW_IMAGES", True):
         return None
 
-    if conn is None:
-        try:
-            conn = db.connect()
-        except Exception:  # pragma: no cover
-            conn = None
-
-    if conn is not None:
-        cur = conn.execute(
-            "SELECT tg_file_id, hash FROM images_cache WHERE src_url = ?",
-            (image_url,),
-        )
-        row = cur.fetchone()
-        if row:
-            return row["tg_file_id"], row["hash"]
-
     session = HTTP_SESSION
     try:
-        head = session.head(image_url, timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ), allow_redirects=True)
+        head = session.head(
+            image_url,
+            timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ),
+            allow_redirects=True,
+        )
         try:
             ctype = head.headers.get("Content-Type", "")
             if head.status_code != 200 or not ctype.startswith("image/"):
@@ -228,7 +221,9 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
         finally:
             if hasattr(head, "close"):
                 head.close()
-        r = session.get(image_url, timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ))
+        r = session.get(
+            image_url, timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ)
+        )
         try:
             if r.status_code != 200:
                 image_stats["reasons"][str(r.status_code)] += 1
@@ -258,19 +253,47 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
             image_stats["reasons"]["bad_ratio"] += 1
             return None
         ihash = hashlib.sha256(data).hexdigest()
-        cached = images_cache.get(ihash)
-        if cached:
-            return cached, ihash
-        file_id = f"file_{ihash[:32]}"
-        images_cache[ihash] = file_id
-        if conn is not None:
-            conn.execute(
-                "INSERT OR REPLACE INTO images_cache(src_url, hash, width, height, tg_file_id) VALUES (?,?,?,?,?)",
-                (image_url, ihash, w, h, file_id),
-            )
-            conn.commit()
         image_stats["with_image"] += 1
-        return file_id, ihash
+        return ihash, w, h
     except Exception as ex:  # pragma: no cover
-        log.debug("ensure_tg_file_id failed for %s: %s", image_url, ex)
+        log.debug("probe_image failed for %s: %s", image_url, ex)
         return None
+
+
+def ensure_tg_file_id(
+    image_url: str, conn: Optional[sqlite3.Connection] = None
+) -> Optional[tuple[Optional[str], str]]:
+    """Fetch cached Telegram ``file_id`` for ``image_url`` if available.
+
+    This function no longer generates pseudo identifiers. When called, it
+    returns ``(tg_file_id, image_hash)`` if present in cache or ``(None, hash)``
+    after probing the image.
+    """
+    if not image_url or not getattr(config, "ALLOW_IMAGES", True):
+        return None
+
+    if conn is None:
+        try:
+            conn = db.connect()
+        except Exception:  # pragma: no cover
+            conn = None
+
+    if conn is not None:
+        cur = conn.execute(
+            "SELECT tg_file_id, hash, width, height FROM images_cache WHERE src_url = ?",
+            (image_url,),
+        )
+        row = cur.fetchone()
+        if row:
+            return row["tg_file_id"], row["hash"]
+
+    res = probe_image(image_url)
+    if res and conn is not None:
+        ihash, w, h = res
+        conn.execute(
+            "INSERT OR REPLACE INTO images_cache(src_url, hash, width, height) VALUES (?,?,?,?)",
+            (image_url, ihash, w, h),
+        )
+        conn.commit()
+        return None, ihash
+    return None

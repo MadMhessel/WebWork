@@ -73,7 +73,25 @@ def _smart_trim(text: str, max_chars: int) -> str:
         return text
     cut = text[:max_chars].rstrip()
     pos = cut.rfind(" ")
-    return (cut[:pos] if pos > 0 else cut) + "…"
+    if pos > 0:
+        base = cut[:pos]
+    else:
+        base = cut[:-1]
+    return base + "…"
+
+
+def _sanitize_md_tail(text: str) -> str:
+    """Remove trailing characters that may break MarkdownV2."""
+    if text is None:
+        return text
+    # drop dangling escape or formatting markers
+    while text and text[-1] in _MD_V2_RESERVED:
+        if len(text) >= 2 and text[-2] == "\\":
+            break
+        text = text[:-1]
+    if text.endswith("\\"):
+        text = text[:-1]
+    return text
 
 
 def compose_preview(title: str, body: str, url: str, parse_mode: str) -> tuple[str, Optional[str]]:
@@ -81,15 +99,31 @@ def compose_preview(title: str, body: str, url: str, parse_mode: str) -> tuple[s
     caption_limit = int(getattr(config, "CAPTION_LIMIT", 1024))
     msg_limit = int(getattr(config, "TELEGRAM_MESSAGE_LIMIT", 4096))
     if len(full) <= caption_limit:
+        if parse_mode == "MarkdownV2":
+            full = _sanitize_md_tail(full)
         return full, None
     caption = _smart_trim(full, caption_limit)
     long_text = _smart_trim(full, msg_limit)
+    if parse_mode == "MarkdownV2":
+        caption = _sanitize_md_tail(caption)
+        long_text = _sanitize_md_tail(long_text)
     return caption, long_text
+
+
+def _normalize_parse_mode(mode: str) -> str:
+    low = (mode or "HTML").strip().lower()
+    if low == "markdownv2":
+        return "MarkdownV2"
+    if low == "html":
+        return "HTML"
+    return mode or "HTML"
 
 
 def format_preview(post: Dict[str, Any], cfg=config) -> tuple[str, Optional[str]]:
     """Format a news post for Telegram preview with escaping and limits."""
-    parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
+    parse_mode = _normalize_parse_mode(
+        getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
+    )
     title = post.get("title", "")
     body = post.get("content", "") or post.get("text", "")
     url = post.get("url", "")
@@ -173,7 +207,9 @@ def _send_photo(
 # ---------------------------------------------------------------------------
 
 def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
-    parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
+    parse_mode = _normalize_parse_mode(
+        getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
+    )
     return _send_text(chat_id, text, parse_mode)
 
 
@@ -207,31 +243,40 @@ def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
 def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Optional[str] = None, cfg=config) -> bool:
     if not chat_id:
         return False
-    parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
+    parse_mode = _normalize_parse_mode(
+        getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
+    )
     limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
     item = {"title": title, "content": body, "url": url}
+    if image_url:
+        item["image_url"] = image_url
     rewritten = rewrite.maybe_rewrite_item(item, cfg)
     body_current = rewritten.get("content", "") or ""
-    message = _build_message(title or "", body_current, url or "", parse_mode)
-    attempts = 0
-    while len(message) > limit and attempts < 4:
-        body_current = _smart_trim(body_current, max(0, len(body_current) - 100))
-        message = _build_message(title or "", body_current, url or "", parse_mode)
-        attempts += 1
-    if len(message) > limit:
-        body_current = _smart_trim(body_current, limit - len(message) + len(body_current) - 10)
-        message = _build_message(title or "", body_current, url or "", parse_mode)
+    caption, long_text = compose_preview(title or "", body_current, url or "", parse_mode)
+    limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
+    if long_text is None and len(caption) > limit:
+        caption = _smart_trim(caption, limit)
 
     mid: Optional[str] = None
+    photo: Optional[str] = None
+    conn: Optional[sqlite3.Connection] = None
     if image_url:
-        img = _download_image(image_url, cfg)
-        if img:
-            data, mime = img
-            res = _send_photo(chat_id, data, message, parse_mode, mime=mime)
-            if res:
-                mid = res[0]
+        try:
+            conn = db.connect()
+            cached = db.get_cached_file_id(conn, image_url)
+            photo = cached or image_url
+        except Exception:  # pragma: no cover
+            photo = image_url
+    if photo:
+        res = _send_photo(chat_id, photo, caption, parse_mode)
+        if res:
+            mid, fid = res
+            if fid and image_url and conn:
+                db.put_cached_file_id(conn, image_url, fid)
+            if long_text:
+                _send_text(chat_id, long_text, parse_mode)
     if mid is None:
-        mid = _send_text(chat_id, message, parse_mode)
+        mid = _send_text(chat_id, caption if not long_text else long_text, parse_mode)
     if not mid:
         return False
     sleep = float(getattr(cfg, "PUBLISH_SLEEP_BETWEEN_SEC", 0))
@@ -269,7 +314,9 @@ def remove_moderation_buttons(chat_id: str, message_id: Union[int, str]) -> None
 def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config) -> Optional[str]:
     """Send preview message with inline buttons for moderation."""
     caption, long_text = format_preview(item, cfg)
-    parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
+    parse_mode = _normalize_parse_mode(
+        getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
+    )
     keyboard = {
         "inline_keyboard": [
             [{"text": "✅ Утвердить", "callback_data": f"mod:{mod_id}:approve"}],
@@ -312,24 +359,19 @@ def publish_from_queue(conn: sqlite3.Connection, mod_id: int, text_override: Opt
     title = row["title"] or ""
     body = text_override or row["content"] or ""
     url = row["url"] or ""
-    parse_mode = (cfg.TELEGRAM_PARSE_MODE or getattr(cfg, "PARSE_MODE", "HTML")).upper()
+    parse_mode = _normalize_parse_mode(
+        getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
+    )
     caption, long_text = compose_preview(title, body, url, parse_mode)
     chat_id = getattr(cfg, "CHANNEL_CHAT_ID", "") or getattr(cfg, "CHANNEL_ID", "")
     mid: Optional[str] = None
     photo = row["tg_file_id"] or row["image_url"]
+    src_url = None
     if not row["tg_file_id"] and row["image_url"]:
-        try:
-            res = images.ensure_tg_file_id(row["image_url"], conn)
-            if res:
-                fid, ihash = res
-                conn.execute(
-                    "UPDATE moderation_queue SET tg_file_id = ?, image_hash = ? WHERE id = ?",
-                    (fid, ihash, mod_id),
-                )
-                conn.commit()
-                photo = fid
-        except Exception:
-            pass
+        src_url = row["image_url"]
+        cached = db.get_cached_file_id(conn, src_url)
+        if cached:
+            photo = cached
     if (
         cfg.PREVIEW_MODE != "text_only"
         and getattr(cfg, "ATTACH_IMAGES", True)
@@ -337,7 +379,14 @@ def publish_from_queue(conn: sqlite3.Connection, mod_id: int, text_override: Opt
     ):
         res = _send_photo(chat_id, photo, caption, parse_mode)
         if res:
-            mid = res[0]
+            mid, fid = res
+            if fid and src_url:
+                db.put_cached_file_id(conn, src_url, fid)
+                conn.execute(
+                    "UPDATE moderation_queue SET tg_file_id = ?, image_hash = ? WHERE id = ?",
+                    (fid, None, mod_id),
+                )
+                conn.commit()
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
     if mid is None:

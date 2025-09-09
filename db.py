@@ -168,8 +168,41 @@ def init_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
+    try:
+        conn.execute("DELETE FROM images_cache WHERE tg_file_id LIKE 'file_%'")
+    except Exception:
+        pass
+
     logger.info(
         "Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db")
+    )
+    conn.commit()
+
+
+def get_cached_file_id(conn: sqlite3.Connection, src_url: str) -> Optional[str]:
+    """Return cached Telegram file_id for given image URL if available."""
+    cur = conn.execute(
+        "SELECT tg_file_id FROM images_cache WHERE src_url = ?", (src_url,)
+    )
+    row = cur.fetchone()
+    if row and row["tg_file_id"]:
+        return row["tg_file_id"]
+    return None
+
+
+def put_cached_file_id(
+    conn: sqlite3.Connection,
+    src_url: str,
+    tg_file_id: str,
+    *,
+    img_hash: Optional[str] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+) -> None:
+    """Store Telegram file_id for image URL."""
+    conn.execute(
+        "INSERT OR REPLACE INTO images_cache(src_url, hash, width, height, tg_file_id) VALUES (?,?,?,?,?)",
+        (src_url, img_hash, width, height, tg_file_id),
     )
     conn.commit()
 
