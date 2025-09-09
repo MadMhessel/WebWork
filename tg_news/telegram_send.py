@@ -1,11 +1,9 @@
 import logging
-import math
 import requests
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Экранируем MarkdownV2 (минимально — символы, ломающие parse_mode)
 _TELEGRAM_MD_V2_SPECIALS = r'_\*\[\]\(\)~`>#+\-=|{}\.!'
 
 def escape_markdown_v2(text: str) -> str:
@@ -18,7 +16,7 @@ def escape_markdown_v2(text: str) -> str:
     return "".join(out)
 
 def _truncate(s: str, limit: int) -> str:
-    return s if len(s) <= limit else s[:limit-1] + "…"
+    return s if len(s) <= limit else s[:limit - 1] + "…"
 
 def send_post(
     *,
@@ -28,11 +26,6 @@ def send_post(
     image_bytes: Optional[bytes] = None,
     image_mime: str = "image/jpeg",
 ) -> None:
-    """
-    Универсальная отправка:
-    - есть image_bytes -> sendPhoto с caption (<=1024), остаток текстом отдельным сообщением
-    - нет image_bytes -> sendMessage
-    """
     api = f"https://api.telegram.org/bot{token}"
 
     if image_bytes:
@@ -47,7 +40,7 @@ def send_post(
         r = requests.post(f"{api}/sendPhoto", data=data, files=files, timeout=30)
         if not r.ok:
             logger.error("sendPhoto failed: %s %s", r.status_code, r.text)
-            # fallback — попробуем отправить без картинки
+            # fallback — текстом
             data2 = {
                 "chat_id": chat_id,
                 "text": text_md,
@@ -57,8 +50,6 @@ def send_post(
             r2 = requests.post(f"{api}/sendMessage", data=data2, timeout=30)
             r2.raise_for_status()
             return
-
-        # если текст длиннее 1024 — досылаем остаток отдельным постом
         if len(text_md) > 1024:
             rest = text_md[1024:]
             data3 = {
