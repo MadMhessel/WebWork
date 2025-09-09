@@ -44,6 +44,18 @@ _SRCSET_RE = re.compile(
     r'<(?:img|source)[^>]+(?:srcset|data-srcset)=["\']([^"\']+)["\']',
     re.I,
 )
+_META_OG_RE = re.compile(
+    r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
+    re.I,
+)
+_META_OG_SEC_RE = re.compile(
+    r'<meta\s+property=["\']og:image:secure_url["\']\s+content=["\']([^"\']+)["\']',
+    re.I,
+)
+_META_TW_RE = re.compile(
+    r'<meta\s+(?:name|property)=["\']twitter:image["\']\s+content=["\']([^"\']+)["\']',
+    re.I,
+)
 
 _PLACEHOLDER_RE = re.compile(
     r"(no[-_]?image|placeholder|plug|zaglushka|stub|default|spacer|1x1)",
@@ -91,12 +103,10 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
     if u0:
         urls.append(u0)
 
-    # inline images in article body
-    urls.extend(_IMG_RE.findall(content))
-    for srcset in _SRCSET_RE.findall(content):
-        best = _best_from_srcset(srcset)
-        if best:
-            urls.append(best)
+    # meta tags have highest priority
+    urls.extend(_META_OG_RE.findall(content))
+    urls.extend(_META_OG_SEC_RE.findall(content))
+    urls.extend(_META_TW_RE.findall(content))
 
     # JSON-LD blocks often contain clean cover images
     for block in _JSON_LD_RE.findall(content):
@@ -106,6 +116,15 @@ def extract_candidates(item: dict) -> List[ImageCandidate]:
             continue
         for url in _json_ld_image_urls(data):
             urls.append(url)
+
+    # srcset provides multiple variants; pick the largest
+    for srcset in _SRCSET_RE.findall(content):
+        best = _best_from_srcset(srcset)
+        if best:
+            urls.append(best)
+
+    # inline images in article body
+    urls.extend(_IMG_RE.findall(content))
 
     seen: set[str] = set()
     out: List[ImageCandidate] = []
@@ -202,24 +221,14 @@ def pick_best(candidates: List[ImageCandidate]) -> Optional[ImageCandidate]:
     return best
 
 
-def select_image_with_fallback(item: dict) -> Optional[str]:
-    """Try multiple strategies to obtain image URL for news item.
-
-    Implements levels A and B of the fallback funnel and finally returns
-    configured placeholder image (levels F–H) if nothing else matched.
-    """
+def select_image(item: dict) -> Optional[str]:
+    """Try to obtain image URL for news item without hard fallback."""
     cands = extract_candidates(item)
     log.debug("extract_image_candidates n=%d top=%s", len(cands), [c.url for c in cands[:3]])
     cand = pick_best(cands)
     if cand:
         return cand.url
-
     # TODO: implement levels C–E (official channels, open licenses)
-
-    fallback = getattr(config, "FALLBACK_IMAGE_URL", "")
-    if fallback:
-        log.info("select_image_with_fallback: using fallback %s", fallback)
-        return fallback
     return None
 
 
@@ -230,18 +239,13 @@ def resolve_image(item: dict, conn: Optional[sqlite3.Connection] = None) -> dict
     image passes validation via :func:`probe_image`.
     """
 
-    url = select_image_with_fallback(item)
+    url = select_image(item)
     if not url:
         return {}
 
     info = {"image_url": url}
     try:
         res = probe_image(url, referer=item.get("url"))
-        if not res:
-            fb = getattr(config, "FALLBACK_IMAGE_URL", "")
-            if fb and fb != url:
-                info["image_url"] = fb
-                res = probe_image(fb, referer=item.get("url"))
         if res:
             ihash, w, h = res
             info["image_hash"] = ihash
@@ -251,8 +255,10 @@ def resolve_image(item: dict, conn: Optional[sqlite3.Connection] = None) -> dict
                     (info["image_url"], ihash, w, h),
                 )
                 conn.commit()
+        else:
+            return {}
     except Exception:
-        pass
+        return {}
     return info
 
 

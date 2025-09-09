@@ -97,6 +97,17 @@ filters:
         - "продать"
         - "подписывайтесь"
         - "скидка"
+  images:
+    enabled: true
+    allow_placeholder: false
+    placeholder_path: "./assets/placeholder.png"
+    prefer: ["enclosure", "content", "og", "twitter"]
+    min_width: 320
+    min_height: 200
+    min_bytes: 10240
+    max_bytes: 7500000
+    timeout_s: 8.0
+    user_agent: "tg_newsbot/1.0 (+https://example.com)"
   media:
     enabled: true
     min_width: 800
