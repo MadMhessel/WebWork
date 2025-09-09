@@ -315,7 +315,16 @@ def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
         return None
 
 
-def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Optional[str] = None, cfg=config) -> bool:
+def publish_message(
+    chat_id: str,
+    title: str,
+    body: str,
+    url: str,
+    image_url: Optional[str] = None,
+    image_bytes: Optional[bytes] = None,
+    image_mime: Optional[str] = None,
+    cfg=config,
+) -> bool:
     if not chat_id:
         return False
     parse_mode = _normalize_parse_mode(
@@ -333,9 +342,18 @@ def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Op
         caption = _smart_trim(caption, limit)
 
     mid: Optional[str] = None
-    photo: Optional[str] = None
+    photo = None
+    mime = None
     conn: Optional[sqlite3.Connection] = None
-    if image_url:
+    if image_bytes:
+        photo = BytesIO(image_bytes)
+        mime = image_mime or "image/jpeg"
+        if image_url:
+            try:
+                conn = db.connect()
+            except Exception:  # pragma: no cover
+                conn = None
+    elif image_url:
         try:
             conn = db.connect()
             cached = db.get_cached_file_id(conn, image_url)
@@ -343,7 +361,10 @@ def publish_message(chat_id: str, title: str, body: str, url: str, image_url: Op
         except Exception:  # pragma: no cover
             photo = image_url
     if photo:
-        res = _send_photo(chat_id, photo, caption, parse_mode)
+        if mime:
+            res = _send_photo(chat_id, photo, caption, parse_mode, mime)
+        else:
+            res = _send_photo(chat_id, photo, caption, parse_mode)
         if res:
             mid, fid = res
             if fid and image_url and conn:
