@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 from typing import List, Optional
+import re
 
 
-BAD_KEYWORDS = {"logo", "sprite", "icon", "advert"}
+BAD_KEYWORDS = {"logo", "sprite", "icon", "advert", "1x1", "pixel"}
 
 
 def score_url(url: str) -> int:
     low = url.lower()
+    score = 0
     if any(k in low for k in BAD_KEYWORDS):
-        return -10
-    return 0
+        score -= 10
+    if low.endswith(('.gif', '.webp')):
+        score -= 5
+    m = re.search(r'(\d+)x(\d+)', low)
+    if m and (m.group(1) == '1' or m.group(2) == '1'):
+        score -= 5
+    return score
 
 
 def pick_best(urls: List[str]) -> Optional[str]:

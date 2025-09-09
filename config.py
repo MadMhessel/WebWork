@@ -117,9 +117,13 @@ REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
 CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 PREVIEW_MODE: str = os.getenv("PREVIEW_MODE", "auto")
-TELEGRAM_PARSE_MODE: str = os.getenv(
-    "PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML")
-)
+_RAW_PARSE_MODE = os.getenv("PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML"))
+if _RAW_PARSE_MODE.strip().lower() == "markdownv2":
+    TELEGRAM_PARSE_MODE: str = "MarkdownV2"
+elif _RAW_PARSE_MODE.strip().lower() == "html":
+    TELEGRAM_PARSE_MODE = "HTML"
+else:
+    TELEGRAM_PARSE_MODE = _RAW_PARSE_MODE.strip()
 TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = (
     os.getenv(
         "DISABLE_WEB_PAGE_PREVIEW",
