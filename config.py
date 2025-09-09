@@ -56,7 +56,7 @@ HTTP_BACKOFF: float = float(os.getenv("HTTP_BACKOFF", "0.5"))
 
 # === Флаги и режимы ===
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}
-STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "false").lower() in {"1", "true", "yes"}
+STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "1").lower() in {"1", "true", "yes"}
 ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", str(DEFAULT_ENABLE_MODERATION)).lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
 ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "true").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
@@ -111,8 +111,8 @@ MODERATOR_IDS: set[int] = {
 ALLOWED_MODERATORS = MODERATOR_IDS
 ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "true").lower() in {"1", "true", "yes"}
 MAX_MEDIA_PER_POST: int = int(os.getenv("MAX_MEDIA_PER_POST", "10"))
-IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "200"))
-IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", "40000"))
+IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "220"))
+IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", "45000"))
 SNOOZE_MINUTES: int = int(os.getenv("SNOOZE_MINUTES", "0"))
 REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
 CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))
@@ -145,20 +145,29 @@ WHITELIST_RELAX: bool = os.getenv("WHITELIST_RELAX", "true").lower() in {"1", "t
 FETCH_LIMIT_PER_SOURCE: int = int(os.getenv("FETCH_LIMIT_PER_SOURCE", "30"))
 LOOP_DELAY_SECS: int = int(os.getenv("LOOP_DELAY_SECS", "600"))
 
+# --- Database ---
+DB_PATH: str = os.getenv("DB_PATH", str(CONFIG_DIR / "newsbot.db")).strip()
+
 
 def validate_config() -> None:
-    invalid_token = {"", "YOUR_TELEGRAM_BOT_TOKEN"}
-    if BOT_TOKEN in invalid_token:
-        raise ValueError("BOT_TOKEN is required")
-    invalid_channel = {"", "@your_main_channel"}
-    if (CHANNEL_ID in invalid_channel) and (str(CHANNEL_CHAT_ID) in invalid_channel):
-        raise ValueError("CHANNEL_CHAT_ID or CHANNEL_ID is required")
+    """Validate critical configuration values with clear errors."""
+
+    missing: list[str] = []
+    if BOT_TOKEN in {"", "YOUR_TELEGRAM_BOT_TOKEN"}:
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not str(CHANNEL_CHAT_ID) and not CHANNEL_ID:
+        missing.append("CHANNEL_CHAT_ID or CHANNEL_ID")
     if ENABLE_MODERATION:
-        invalid_review = {"", "@your_review_channel"}
-        if str(REVIEW_CHAT_ID) in invalid_review:
-            raise ValueError("REVIEW_CHAT_ID is required when moderation is enabled")
+        if str(REVIEW_CHAT_ID) in {"", "@your_review_channel"}:
+            missing.append("REVIEW_CHAT_ID")
+        if not MODERATOR_IDS:
+            missing.append("MODERATOR_IDS")
+    if missing:
+        raise ValueError("Missing config: " + ", ".join(missing))
     if not isinstance(MODERATOR_IDS, set) or not all(isinstance(x, int) for x in MODERATOR_IDS):
-        raise ValueError("MODERATOR_IDS must be a set of ints")
+        raise ValueError("MODERATOR_IDS must be a set[int]")
+    if TELEGRAM_PARSE_MODE not in {"HTML", "MarkdownV2"}:
+        raise ValueError("PARSE_MODE must be HTML or MarkdownV2")
 
 # === Ключевые слова ===
 REGION_KEYWORDS = [

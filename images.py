@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -12,6 +13,12 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
+
+try:
+    from . import config, db  # type: ignore
+except Exception:  # pragma: no cover
+    import config  # type: ignore
+    import db  # type: ignore
 
 try:
     from PIL import Image  # type: ignore
@@ -25,11 +32,18 @@ logger = logging.getLogger(__name__)
 # -------------------- Константы/настройки (можно переопределить из config) --------------------
 
 USER_AGENT = "tg_newsbot/1.0 (+https://example.com)"
-TIMEOUT_HEAD = 5.0
-TIMEOUT_GET = 12.0
-MIN_BYTES = 10_240          # >= 10 КБ
-MAX_BYTES = 7_500_000       # < 7.5 МБ
-MIN_WIDTH, MIN_HEIGHT = 320, 200  # Плейсхолдер не используем — при отсутствии картинки отправляем пост без фото
+TIMEOUT_HEAD = getattr(config, "IMAGE_TIMEOUT", 15)
+TIMEOUT_GET = getattr(config, "IMAGE_TIMEOUT", 15)
+MIN_BYTES = int(getattr(config, "MIN_IMAGE_BYTES", 4096))
+MAX_BYTES = 7_500_000
+MIN_WIDTH = MIN_HEIGHT = int(getattr(config, "IMAGE_MIN_EDGE", 220))
+MIN_AREA = int(getattr(config, "IMAGE_MIN_AREA", 45000))
+MIN_RATIO = float(getattr(config, "IMAGE_MIN_RATIO", 0.5))
+MAX_RATIO = float(getattr(config, "IMAGE_MAX_RATIO", 3.0))
+ALLOWED_DOMAINS = {d.lower() for d in getattr(config, "IMAGE_ALLOWED_DOMAINS", set()) if d}
+ALLOWED_EXT = {e.lower() for e in getattr(config, "IMAGE_ALLOWED_EXT", {'.jpg','.jpeg','.png','.webp'})}
+FALLBACK_IMAGE_URL = getattr(config, "FALLBACK_IMAGE_URL", "")
+ATTACH_IMAGES = bool(getattr(config, "ATTACH_IMAGES", True))
 ALLOW_PLACEHOLDER = False
 
 # Фильтры «мусора» и плейсхолдеров
@@ -150,22 +164,41 @@ def extract_candidates(item: Dict) -> List[ImageCandidate]:
             continue
         if PLACEHOLDER_RE.search(low):
             continue
+        host = (urlparse(u).hostname or "").lower()
+        if ALLOWED_DOMAINS and host not in ALLOWED_DOMAINS:
+            continue
+        ext = os.path.splitext(urlparse(u).path)[1].lower()
+        if ALLOWED_EXT and ext and ext not in ALLOWED_EXT:
+            continue
         seen.add(u)
         final.append(ImageCandidate(u, c.source))
 
     return final
 
-def select_image(item: Dict) -> Optional[str]:
-    """
-    Возвращает лучший URL изображения (без скачивания), либо None.
-    Приоритет: enclosure > og > twitter > jsonld > content/srcset.
-    """
+def select_image(item: Dict, cfg=config) -> Optional[str]:
+    """Return best image URL for item or FALLBACK."""
     cands = extract_candidates(item)
-    if not cands:
-        return None
-    priority = {"enclosure": 0, "og": 1, "twitter": 2, "jsonld": 3, "content": 4, "srcset": 5}
-    cands.sort(key=lambda c: (priority.get(c.source, 99), c.url))
-    return cands[0].url if cands else None
+    best_url: Optional[str] = None
+    best_area = 0
+    for cand in cands:
+        info = probe_image(cand.url, referer=item.get("url"))
+        if not info:
+            continue
+        _hash, w, h = info
+        area = w * h
+        ratio = w / h if h else 0
+        if w < MIN_WIDTH or h < MIN_HEIGHT or area < MIN_AREA:
+            continue
+        if ratio < MIN_RATIO or ratio > MAX_RATIO:
+            continue
+        if area > best_area:
+            best_area = area
+            best_url = cand.url
+    if best_url:
+        return best_url
+    if ATTACH_IMAGES and FALLBACK_IMAGE_URL:
+        return FALLBACK_IMAGE_URL
+    return None
 
 # -------------------- Работа с БД кэша --------------------
 
@@ -201,8 +234,8 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
         ihash, w, h = res
         if conn is not None:
             conn.execute(
-                "INSERT OR REPLACE INTO images_cache(src_url, hash, width, height, tg_file_id) VALUES (?,?,?,?,COALESCE((SELECT tg_file_id FROM images_cache WHERE src_url=?), NULL))",
-                (image_url, ihash, w, h, image_url),
+                "INSERT OR IGNORE INTO images_cache(src_url, hash, width, height) VALUES (?,?,?,?)",
+                (image_url, ihash, w, h),
             )
             conn.commit()
         return None, ihash
@@ -293,6 +326,17 @@ def probe_image(url: str, referer: Optional[str] = None) -> Optional[Tuple[str, 
         return None
 
     w, h, mime = _probe_bytes(raw)
+    if not w or not h:
+        image_stats["too_small"] += 1
+        return None
+    area = w * h
+    ratio = w / h if h else 0
+    if w < MIN_WIDTH or h < MIN_HEIGHT or area < MIN_AREA:
+        image_stats["too_small"] += 1
+        return None
+    if ratio < MIN_RATIO or ratio > MAX_RATIO:
+        image_stats["filtered_out"] += 1
+        return None
     if mime == "image/webp":
         try:
             raw2, w2, h2 = _to_jpeg(raw)
@@ -337,8 +381,16 @@ def download_image(url: str, referer: Optional[str] = None) -> Optional[Tuple[by
         except Exception:
             pass
 
-    if not w or not h or w < MIN_WIDTH or h < MIN_HEIGHT:
+    if not w or not h:
         image_stats["too_small"] += 1
+        return None
+    area = w * h
+    ratio = w / h if h else 0
+    if w < MIN_WIDTH or h < MIN_HEIGHT or area < MIN_AREA:
+        image_stats["too_small"] += 1
+        return None
+    if ratio < MIN_RATIO or ratio > MAX_RATIO:
+        image_stats["filtered_out"] += 1
         return None
 
     return raw, (mime or "image/jpeg")
@@ -364,26 +416,36 @@ def resolve_image(item: Dict, conn: Optional[sqlite3.Connection] = None) -> Dict
     if not url:
         image_stats["no_candidate"] += 1
         return {}
+    if url == FALLBACK_IMAGE_URL:
+        return {"image_url": url}
 
-    # кешируем hash/размеры (и, если будет, tg_file_id)
-    tg_file_id, ihash = ensure_tg_file_id(url, conn)
+    fid = None
+    if conn:
+        try:
+            fid = db.get_cached_file_id(conn, url)
+        except Exception:
+            fid = None
+    if fid:
+        image_stats["with_image"] += 1
+        return {"image_url": url, "tg_file_id": fid}
 
-    # скачиваем для отправки
     payload = download_image(url, referer=item.get("url"))
     if not payload:
         image_stats["download_fail"] += 1
+        if ATTACH_IMAGES and FALLBACK_IMAGE_URL:
+            return {"image_url": FALLBACK_IMAGE_URL}
         return {}
 
     raw, mime = payload
     w, h, _ = _probe_bytes(raw)
-
+    ihash = hashlib.sha1(raw).hexdigest()[:16]
     image_stats["with_image"] += 1
     return {
-        "url": url,
+        "image_url": url,
         "bytes": raw,
         "mime": mime,
-        "hash": ihash or hashlib.sha1(raw).hexdigest()[:16],
+        "image_hash": ihash,
         "width": int(w or 0),
         "height": int(h or 0),
-        "tg_file_id": tg_file_id,  # может быть None — это нормально
+        "tg_file_id": None,
     }

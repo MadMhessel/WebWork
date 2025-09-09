@@ -43,6 +43,7 @@ def test_no_fake_tg_file_id_generated(monkeypatch):
     monkeypatch.setattr(images, "MIN_WIDTH", 1)
     monkeypatch.setattr(images, "MIN_HEIGHT", 1)
     monkeypatch.setattr(images, "MIN_BYTES", 0)
+    monkeypatch.setattr(images, "MIN_AREA", 1)
     monkeypatch.setattr(images, "_probe_bytes", lambda raw: (1, 1, "image/png"))
 
     conn = db.connect(":memory:")
