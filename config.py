@@ -59,14 +59,14 @@ STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "false").lower() in {"1", "true
 ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", str(DEFAULT_ENABLE_MODERATION)).lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
 ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "true").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
-MIN_IMAGE_BYTES: int = int(os.getenv("MIN_IMAGE_BYTES", "10000"))  # минимальный размер файла изображения
+MIN_IMAGE_BYTES: int = int(os.getenv("MIN_IMAGE_BYTES", "4096"))  # минимальный размер файла изображения
 IMAGE_TIMEOUT: int = int(os.getenv("IMAGE_TIMEOUT", "15"))  # таймаут загрузки изображений (сек)
 IMAGE_ALLOWED_DOMAINS = set(
     s.strip().lower()
     for s in os.getenv("IMAGE_ALLOWED_DOMAINS", "").split(",")
     if s.strip()
 )
-IMAGE_MIN_RATIO: float = float(os.getenv("IMAGE_MIN_RATIO", "0.2"))
+IMAGE_MIN_RATIO: float = float(os.getenv("IMAGE_MIN_RATIO", "0.5"))
 IMAGE_MAX_RATIO: float = float(os.getenv("IMAGE_MAX_RATIO", "3.0"))
 IMAGE_ALLOWED_EXT = set(
     e.strip().lower()
@@ -110,8 +110,8 @@ MODERATOR_IDS: set[int] = {
 ALLOWED_MODERATORS = MODERATOR_IDS
 ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "true").lower() in {"1", "true", "yes"}
 MAX_MEDIA_PER_POST: int = int(os.getenv("MAX_MEDIA_PER_POST", "10"))
-IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "320"))
-IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", str(320 * 320)))
+IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "200"))
+IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", "40000"))
 SNOOZE_MINUTES: int = int(os.getenv("SNOOZE_MINUTES", "0"))
 REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
 CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))

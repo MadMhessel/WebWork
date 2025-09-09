@@ -57,7 +57,7 @@ def _escape_html(text: str) -> str:
 
 
 def _build_message(title: str, body: str, url: str, parse_mode: str) -> str:
-    if parse_mode == "MARKDOWNV2":
+    if parse_mode == "MarkdownV2":
         t = _escape_markdown_v2(title)
         b = _escape_markdown_v2(body)
         u = _escape_markdown_v2(url)
@@ -183,16 +183,39 @@ def _send_photo(
     }
     if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    files = None
+
+    photo_kind = "upload" if isinstance(photo, BytesIO) else ("url" if str(photo).startswith("http") else "file_id")
+    logger.info(
+        "Sending photo: parse_mode=%s caption_len=%d type=%s",
+        parse_mode,
+        len(caption or ""),
+        photo_kind,
+    )
+
     if isinstance(photo, BytesIO):
         if not mime:
             raise ValueError("mime required when uploading BytesIO")
         files = {"photo": ("image", photo, mime)}
     else:
+        files = None
         payload["photo"] = photo
-    j = _api_post("sendPhoto", payload, files=files)
-    if not j:
+
+    if not _ensure_client():
         return None
+    url = f"{_client_base_url}/sendPhoto"
+    try:
+        r = requests.post(url, data=payload, files=files, timeout=30)
+        if r.status_code != 200:
+            logger.error("sendPhoto HTTP %s: %s", r.status_code, r.text[:200])
+            return None
+        j = r.json()
+        if not j.get("ok"):
+            logger.error("sendPhoto ok=false: %s", r.text[:200])
+            return None
+    except Exception as ex:  # pragma: no cover
+        logger.exception("Exception during sendPhoto: %s", ex)
+        return None
+
     res = j.get("result", {})
     fid = None
     try:
