@@ -1,15 +1,12 @@
+"""Utility rules and helpers for the autorewrite pipeline."""
+
+from __future__ import annotations
+
 import re
-from typing import Dict, Pattern, List, Tuple
+from typing import Dict, List, Pattern, Tuple
 
-# Базовый список стоп-слов (минимальный)
-STOP_WORDS_RU = {
-    "и","в","во","не","что","он","на","я","с","со","как","а","то","все","она","так",
-    "его","но","да","ты","к","у","же","вы","за","бы","по","ее","мне","есть","они",
-    "тут","о","эту","ли","если","мы","когда","вы","были","ещё","из","для","это","при",
-    "быть","от","до","после","г","год","лет","—","–"
-}
+# --- Basic replacements ---------------------------------------------------
 
-# Доменные синонимы/замены под стройку и новости (расширяйте)
 SYNONYMS: Dict[str, str] = {
     "построят": "возведут",
     "построить": "возвести",
@@ -21,67 +18,44 @@ SYNONYMS: Dict[str, str] = {
     "началось": "стартовало",
     "начался": "стартовал",
     "начнется": "стартует",
-    "планируют": "намерены",
-    "планируется": "намечено",
     "сообщил": "заявил",
     "сообщила": "заявила",
     "сообщили": "заявили",
-    "Нижегородской области": "Нижегородском регионе",
-    "Нижегородская область": "Нижегородский регион",
-    "Нижний Новгород": "Нижнем Новгороде",
-    "жилой комплекс": "ЖК",
-    "квартиры": "апартаменты",
-    "школа": "школьный корпус",
-    "детский сад": "дошкольное учреждение",
-    "инфраструктура": "объекты инфраструктуры",
-    "капитальный ремонт": "капремонт",
     "ремонт": "ремонтные работы",
     "реконструкция": "обновление",
 }
 
-# Паттерны простых перефраз (регекс → замена)
 PATTERNS: List[Tuple[Pattern[str], str]] = [
-    # пассив → актив (очень грубые эвристики)
-    (re.compile(r"\bбудет построен\b", flags=re.IGNORECASE), "планируют возвести"),
-    (re.compile(r"\bбудут построены\b", flags=re.IGNORECASE), "намерены возвести"),
-    (re.compile(r"\bбудет введен в эксплуатацию\b", flags=re.IGNORECASE), "планируют запустить"),
-    (re.compile(r"\bбудут введены в эксплуатацию\b", flags=re.IGNORECASE), "планируют запустить в работу"),
-    # канцелярит → нейтрально
-    (re.compile(r"\bв рамках\b", flags=re.IGNORECASE), "по проекту"),
-    (re.compile(r"\bв целях\b", flags=re.IGNORECASE), "чтобы"),
-    (re.compile(r"\bв том числе\b", flags=re.IGNORECASE), "включая"),
+    (re.compile(r"\bв рамках\b", re.IGNORECASE), "по проекту"),
+    (re.compile(r"\bв целях\b", re.IGNORECASE), "чтобы"),
+    (re.compile(r"\bв том числе\b", re.IGNORECASE), "включая"),
 ]
 
-# Простые клише/шаблоны для усиленного рерайта
-LEADS = [
-    "Коротко: {core}.",
-    "Главное: {core}.",
-    "Суть: {core}.",
-    "Что произошло: {core}.",
+# География и типовые огрехи ------------------------------------------------
+
+GEO_PATTERNS: List[Tuple[Pattern[str], str]] = [
+    (re.compile(r"\bНижегородском регионе\b", re.IGNORECASE), "Нижегородской области"),
+    (re.compile(r"\bв Нижегородском регионе\b", re.IGNORECASE), "в Нижегородской области"),
+    (re.compile(r"\bНижегородский регион\b", re.IGNORECASE), "Нижегородская область"),
 ]
 
-TAILS = [
-    "Подробности — ниже.",
-    "Сроки и детали уточняются.",
-    "Проект реализуют поэтапно.",
+TYPO_PATTERNS: List[Tuple[Pattern[str], str]] = [
+    (re.compile(r"\bгрузового\b(?!\s+транспорта)", re.IGNORECASE), "грузового транспорта"),
+    (re.compile(r"\s+([,.!?])"), r"\1"),
+    (re.compile(r"\.{2,}"), "."),
+    (re.compile(r'"{2,}'), '"'),
 ]
 
-# Разделители предложений (очень аккуратно)
-SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
+LEAD_RE = re.compile(r"^(Коротко|Главное|Суть|Что произошло)\s*[:,]?\s*", re.IGNORECASE)
 
-def split_sentences(text: str) -> List[str]:
-    text = text.strip()
-    if not text:
-        return []
-    # Сохраняем точки в числах/сокращениях грубой эвристикой — минимально
-    sents = SENT_SPLIT_RE.split(text)
-    # чистим пустые
-    return [s.strip() for s in sents if s.strip()]
+SOFT_LINKERS = ["Кроме того,", "Также", "При этом", "Дополнительно,"]
 
 WORD_RE = re.compile(r"\b([А-ЯЁA-Z][а-яёa-z]+|[а-яёa-z]+|[A-Z]+|[0-9]+)\b", re.UNICODE)
 
+# --- Text helpers ---------------------------------------------------------
+
+
 def smart_replace_wordcase(src: str, repl: str) -> str:
-    # Сохранение регистра: Слово -> Слово / слово -> слово / СЛОВО -> СЛОВО
     if not src:
         return repl
     if src.isupper():
@@ -90,18 +64,15 @@ def smart_replace_wordcase(src: str, repl: str) -> str:
         return repl.capitalize()
     return repl
 
+
 def apply_synonyms(text: str) -> str:
-    # жадно по длинным ключам (чтобы "введен в эксплуатацию" шел раньше "эксплуатацию")
     keys = sorted(SYNONYMS.keys(), key=len, reverse=True)
     out = text
     for k in keys:
-        # замена по словоформам будет ограниченной (русский сложен); используем точные вхождения/регистронезависимо
         pattern = re.compile(re.escape(k), flags=re.IGNORECASE)
-        def _repl(m):
-            src = m.group(0)
-            return smart_replace_wordcase(src, SYNONYMS[k])
-        out = pattern.sub(_repl, out)
+        out = pattern.sub(lambda m: smart_replace_wordcase(m.group(0), SYNONYMS[k]), out)
     return out
+
 
 def apply_patterns(text: str) -> str:
     out = text
@@ -109,13 +80,90 @@ def apply_patterns(text: str) -> str:
         out = pat.sub(repl, out)
     return out
 
+
+def normalize_geo(text: str) -> str:
+    out = text
+    for pat, repl in GEO_PATTERNS:
+        out = pat.sub(repl, out)
+    return out
+
+
+def fix_typos(text: str) -> str:
+    out = text
+    for pat, repl in TYPO_PATTERNS:
+        out = pat.sub(repl, out)
+    return out
+
+
+def strip_leads(text: str) -> str:
+    return LEAD_RE.sub("", text)
+
+
 def compact_whitespace(s: str) -> str:
     return re.sub(r"[ \t]+", " ", s).strip()
 
-def squeeze_newlines(s: str) -> str:
-    return re.sub(r"\n{3,}", "\n\n", s).strip()
 
-def sentence_score(sent: str) -> int:
-    # простая оценка "информативности": число значимых слов
-    tokens = [w.lower() for w in WORD_RE.findall(sent)]
-    return sum(1 for t in tokens if t not in STOP_WORDS_RU and len(t) > 2)
+# --- Sentence work --------------------------------------------------------
+
+# Учитываем сокращения вида "т." и "г."
+SENT_SPLIT_RE = re.compile(r"(?<!\b[тг]\.)(?<=[.!?])\s+", re.IGNORECASE)
+
+
+def split_sentences(text: str) -> List[str]:
+    text = strip_leads(compact_whitespace(text))
+    if not text:
+        return []
+    parts = SENT_SPLIT_RE.split(text)
+    out: List[str] = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if p[-1] not in ".!?…":
+            p += "."
+        out.append(p)
+    return out
+
+
+# --- Sentence scoring -----------------------------------------------------
+
+FACT_VERBS = [
+    "введен", "введён", "запущен", "заработал", "заработала", "начал", "началась",
+    "открыт", "открыла", "открыли", "построен", "создали",
+]
+KEY_TERMS = [
+    "весогабарит", "штраф", "постановление", "центр обработки", "сервис",
+    "нагрузк", "онлайн", "грузов", "проект",
+]
+
+
+def sentence_score(sent: str) -> float:
+    low = sent.lower()
+    score = 0.0
+    for v in FACT_VERBS:
+        if v in low:
+            score += 2
+    for term in KEY_TERMS:
+        if term in low:
+            score += 1.5
+    score += 0.5 * len(re.findall(r"\d+", low))
+    tokens = WORD_RE.findall(low)
+    if len(tokens) > 25:
+        score -= (len(tokens) - 25) * 0.1
+    return score
+
+
+# --- Public utility -------------------------------------------------------
+
+__all__ = [
+    "apply_synonyms",
+    "apply_patterns",
+    "normalize_geo",
+    "fix_typos",
+    "strip_leads",
+    "split_sentences",
+    "sentence_score",
+    "SOFT_LINKERS",
+    "compact_whitespace",
+    "WORD_RE",
+]
