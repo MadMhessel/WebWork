@@ -12,7 +12,9 @@ pip install beautifulsoup4
 
 ## Настройка
 Настройка выполняется один раз через `.env` в директории профиля пользователя
-(`%APPDATA%/NewsBot/.env` на Windows). Создать файл можно командой:
+(`%APPDATA%/NewsBot/.env` на Windows, `~/.config/NewsBot/.env` на Linux/macOS).
+Файл рядом с кодом `WebWork/.env` при наличии **переопределяет** значения из
+профильного. Создать основной файл можно командой:
 
 ```bash
 python -m config init
@@ -39,6 +41,19 @@ python -m config init
 
 В блоке `SOURCES` у каждого источника теперь есть флаг `enabled` и опциональные
 поля `timeout`/`retry` для индивидуальных сетевых настроек.
+
+## Быстрый старт
+1. Скопируйте `.env.example` в профиль пользователя:
+   ```bash
+   cp WebWork/.env.example ~/.config/NewsBot/.env  # для Windows путь %APPDATA%/NewsBot/.env
+   ```
+2. Укажите в файле обязательные параметры:
+   - `TELEGRAM_BOT_TOKEN` – токен бота;
+   - `CHANNEL_CHAT_ID` (или `CHANNEL_ID`) – целевой канал;
+   - при модерации (`ENABLE_MODERATION=1`) задайте `REVIEW_CHAT_ID` и `MODERATOR_IDS`.
+3. При необходимости скорректируйте лимиты Telegram и параметры изображений
+   (`CAPTION_LIMIT`, `TELEGRAM_MESSAGE_LIMIT`, `ATTACH_IMAGES`, `FALLBACK_IMAGE_URL`).
+4. Запустите `python main.py`.
 
 ## Запуск
 Разово:

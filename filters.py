@@ -147,27 +147,20 @@ def is_relevant_for_source(title: str, content: str, source_name: str, cfg) -> T
     wl = set(_normalize_keywords(getattr(cfg, "WHITELIST_SOURCES", [])))
     relax = bool(getattr(cfg, "WHITELIST_RELAX", True))
 
+    ok, region_ok, topic_ok, reason = is_relevant(title, content, cfg)
     if src and src in wl and relax:
-        strict = bool(getattr(cfg, "STRICT_FILTER", True))
-        region_kw = _normalize_keywords(getattr(cfg, "REGION_KEYWORDS", []))
-        topic_kw  = _normalize_keywords(getattr(cfg, "CONSTRUCTION_KEYWORDS", []))
-        text_full = f"{title}\n{content}"
-        region_ok = contains_any(text_full, region_kw)
-        topic_ok  = contains_any(text_full, topic_kw)
-        ok = (region_ok and topic_ok) if strict else (region_ok or topic_ok)
+        ok = region_ok or topic_ok
         if ok:
             reason = ""
         else:
             if not region_ok and not topic_ok:
-                reason = "нет слов региона и тематики"
+                reason = "whitelist: нет слов региона и тематики"
             elif not region_ok:
-                reason = "нет слов региона"
+                reason = "whitelist: нет слов региона"
             else:
-                reason = "нет слов тематики"
+                reason = "whitelist: нет слов тематики"
         logger.debug(
             "is_relevant_for_source[WHITELIST] src='%s' => region=%s topic=%s title='%s'",
             source_name, region_ok, topic_ok, title[:120]
         )
-        return ok, region_ok, topic_ok, reason
-
-    return is_relevant(title, content, cfg)
+    return ok, region_ok, topic_ok, reason

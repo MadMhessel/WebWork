@@ -116,7 +116,7 @@ def compose_preview(title: str, body: str, url: str, parse_mode: str) -> tuple[s
 
 
 def _normalize_parse_mode(mode: str) -> str:
-    low = (mode or "HTML").strip().lower()
+    low = (mode or "HTML").strip().lower().replace(" ", "")
     if low == "markdownv2":
         return "MarkdownV2"
     if low == "html":
@@ -211,8 +211,15 @@ def _send_photo(
     r = None
     try:
         r = requests.post(url, data=payload, files=files, timeout=30)
-        j = r.json() if r.status_code == 200 else None
-        success = bool(j and j.get("ok"))
+        if r.status_code != 200:
+            logger.error("sendPhoto failed: HTTP %s", r.status_code)
+            success = False
+            j = None
+        else:
+            j = r.json()
+            success = bool(j.get("ok"))
+            if not success:
+                logger.error("sendPhoto failed: %s", r.text[:200])
     except Exception as ex:  # pragma: no cover
         logger.exception("Exception during sendPhoto: %s", ex)
         success = False
@@ -225,14 +232,21 @@ def _send_photo(
             files = {"photo": ("image", data, mime2)}
             try:
                 r = requests.post(url, data=payload, files=files, timeout=30)
-                j = r.json() if r.status_code == 200 else None
-                success = bool(j and j.get("ok"))
+                if r.status_code != 200:
+                    logger.error("reupload fallback failed: HTTP %s", r.status_code)
+                    return None
+                j = r.json()
+                if not j.get("ok"):
+                    logger.error("reupload fallback failed: %s", r.text[:200])
+                    return None
+                success = True
             except Exception as ex:  # pragma: no cover
-                logger.exception("Exception during sendPhoto upload: %s", ex)
-                success = False
+                logger.exception("reupload fallback failed: %s", ex)
+                return None
+        else:
+            logger.error("reupload fallback failed: download error")
+            return None
     if not success:
-        if r is not None:
-            logger.error("sendPhoto failed: %s", getattr(r, "text", "")[:200])
         return None
 
     res = j.get("result", {}) if j else {}
@@ -256,8 +270,10 @@ def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
 
 
 def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
-    timeout = (config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ)
+    t = float(getattr(cfg, "IMAGE_TIMEOUT", 15))
+    timeout = (t, t)
     max_bytes = int(getattr(cfg, "IMAGE_MAX_BYTES", 5 * 1024 * 1024))
+    min_bytes = int(getattr(cfg, "MIN_IMAGE_BYTES", 4096))
     session = http_client.get_session()
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -282,6 +298,8 @@ def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
                 data.write(chunk)
                 if data.tell() > max_bytes:
                     return None
+            if data.tell() < min_bytes:
+                return None
             data.seek(0)
             if ctype in {"image/webp", "image/avif"} and Image is not None:
                 try:

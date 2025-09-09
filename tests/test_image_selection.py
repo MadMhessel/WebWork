@@ -5,7 +5,8 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
 from WebWork import images
 
 
-def test_select_image_json_ld():
+def test_select_image_json_ld(monkeypatch):
+    monkeypatch.setattr(images, "probe_image", lambda url, referer=None: ("h", 800, 600))
     item = {
         "title": "t",
         "content": '<script type="application/ld+json">{"image": "http://img/ld.png"}</script>'
@@ -14,16 +15,19 @@ def test_select_image_json_ld():
     assert url == "http://img/ld.png"
 
 
-def test_select_image_returns_none_when_none_found():
+def test_select_image_returns_fallback_when_none_found(monkeypatch):
+    monkeypatch.setattr(images, "probe_image", lambda url, referer=None: None)
+    monkeypatch.setattr(images, "FALLBACK_IMAGE_URL", "http://fallback/pic.jpg")
+    monkeypatch.setattr(images, "ATTACH_IMAGES", True)
     item = {"title": "t", "content": "no images"}
     url = images.select_image(item)
-    assert url is None
+    assert url == "http://fallback/pic.jpg"
 
 
-def test_resolve_image_returns_empty_when_candidate_invalid(monkeypatch):
-    # probe_image returns None for any URL to emulate validation failure
+def test_resolve_image_returns_fallback_when_candidate_invalid(monkeypatch):
     monkeypatch.setattr(images, "probe_image", lambda url, referer=None: None)
-
+    monkeypatch.setattr(images, "FALLBACK_IMAGE_URL", "http://fallback/pic.jpg")
+    monkeypatch.setattr(images, "ATTACH_IMAGES", True)
     item = {"title": "t", "content": '<img src="http://bad/img.png">'}
     info = images.resolve_image(item)
-    assert info == {}
+    assert info["image_url"] == "http://fallback/pic.jpg"
