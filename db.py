@@ -113,6 +113,25 @@ def init_schema(conn: sqlite3.Connection) -> None:
             started_at INTEGER DEFAULT (strftime('%s','now'))
         );
 
+        CREATE TABLE IF NOT EXISTS moderation_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER,
+            mod_chat_id TEXT,
+            message_id TEXT,
+            state TEXT,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            updated_at INTEGER DEFAULT (strftime('%s','now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS moderation_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER,
+            user_id INTEGER,
+            action TEXT,
+            payload TEXT,
+            created_at INTEGER DEFAULT (strftime('%s','now'))
+        );
+
         CREATE TABLE IF NOT EXISTS dedup (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             url TEXT UNIQUE,

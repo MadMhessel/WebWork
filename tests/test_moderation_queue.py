@@ -48,7 +48,7 @@ def test_queue_and_publish(monkeypatch):
     assert preview_calls == {"chat": "100", "id": mod_id}
     assert moderator.is_moderator(1)
     assert not moderator.is_moderator(2)
-    cb = {"callback_query": {"data": f"m:{mod_id}:ok", "from": {"id": 1}}}
+    cb = {"callback_query": {"data": f"mod:{mod_id}:approve", "from": {"id": 1}}}
     moderator.handle_callback(conn, cb)
     assert publish_calls == {"id": mod_id}
     row = conn.execute("SELECT status FROM moderation_queue WHERE id=?", (mod_id,)).fetchone()
@@ -82,7 +82,7 @@ def test_edit_and_snooze(monkeypatch):
     # start edit title
     moderator.handle_callback(
         conn,
-        {"callback_query": {"data": f"m:{mod_id}:eh", "from": {"id": 1}}},
+        {"callback_query": {"data": f"mod:{mod_id}:edit_title", "from": {"id": 1}}},
     )
     moderator.apply_edit_message(conn, 1, "new title")
     row = conn.execute("SELECT title, status FROM moderation_queue WHERE id=?", (mod_id,)).fetchone()
@@ -91,7 +91,7 @@ def test_edit_and_snooze(monkeypatch):
     # snooze for 15 minutes
     moderator.handle_callback(
         conn,
-        {"callback_query": {"data": f"m:{mod_id}:sz:15", "from": {"id": 1}}},
+        {"callback_query": {"data": f"mod:{mod_id}:snooze:15", "from": {"id": 1}}},
     )
     row = conn.execute(
         "SELECT status, resume_at FROM moderation_queue WHERE id=?", (mod_id,)
