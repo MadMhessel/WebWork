@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=62"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autorewrite"
+version = "0.1.0"
+description = "Автономный быстрый рерайт новостных постов с фолбэком и антидубликатами"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "ТГ — модуль рерайта", email = "dev@example.com" }
+]
+keywords = ["rewrite", "news", "telegram", "markdown", "simhash"]
+license = { text = "MIT" }
+
+[project.urls]
+Homepage = "https://example.local/autorewrite"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rewriter*"]
