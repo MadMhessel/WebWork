@@ -9,6 +9,7 @@ from autorewrite.rewriter import rewrite_post
 log = logging.getLogger(__name__)
 
 _TAGS_RE = re.compile(r"<[^>]+>")
+_FIGURE_RE = re.compile(r"<figure[^>]*>.*?</figure>", re.I | re.S)
 
 
 def _get_cfg_attr(cfg, name: str, default):
@@ -19,7 +20,8 @@ def _get_cfg_attr(cfg, name: str, default):
 
 
 def _strip_tags(text: str) -> str:
-    return _TAGS_RE.sub(" ", text or "")
+    t = _FIGURE_RE.sub(" ", text or "")
+    return _TAGS_RE.sub(" ", t)
 
 
 def _normalize_ws(text: str) -> str:
