@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import sqlite3
 
 import requests
+import html
 
 from formatting import clean_html_tags, html_escape, truncate_by_chars
 
@@ -167,7 +168,11 @@ def _api_post(
 
 
 def _send_text(
-    chat_id: str, text: str, parse_mode: str, reply_markup: Optional[dict] = None
+    chat_id: str,
+    text: str,
+    parse_mode: str,
+    reply_markup: Optional[dict] = None,
+    reply_to_message_id: Optional[str] = None,
 ) -> Optional[str]:
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
@@ -181,6 +186,8 @@ def _send_text(
     }
     if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+    if reply_to_message_id is not None:
+        payload["reply_to_message_id"] = reply_to_message_id
     j = _api_post("sendMessage", payload)
     if not j:
         return None
@@ -320,6 +327,7 @@ def publish_message(
     image_url: Optional[str] = None,
     image_bytes: Optional[bytes] = None,
     image_mime: Optional[str] = None,
+    credit: Optional[str] = None,
     cfg=config,
 ) -> bool:
     if not chat_id:
@@ -366,12 +374,28 @@ def publish_message(
                 photo, mime = dl
             else:
                 photo = None
+
+    credit_block = ""
+    if credit and photo:
+        credit_html = html.escape(str(credit))
+        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
+        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
+            caption += credit_block
+            credit_block = ""
+
     if photo:
         res = _send_photo(chat_id, photo, caption, parse_mode, mime)
         if res:
             mid, fid = res
             if fid and image_url and conn:
                 db.put_cached_file_id(conn, image_url, fid)
+            if credit_block:
+                _send_text(
+                    chat_id,
+                    credit_block.strip(),
+                    parse_mode,
+                    reply_to_message_id=mid,
+                )
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
     if mid is None:
@@ -438,6 +462,14 @@ def send_moderation_preview(
     }
     photo: Optional[Union[BytesIO, str]] = None
     mime = None
+    credit = item.get("credit")
+    credit_block = ""
+    if credit and (item.get("tg_file_id") or item.get("image_url")):
+        credit_html = html.escape(str(credit))
+        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
+        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
+            caption += credit_block
+            credit_block = ""
     if cfg.PREVIEW_MODE != "text_only" and getattr(cfg, "ATTACH_IMAGES", True):
         photo = item.get("tg_file_id")
         if not photo and item.get("image_url"):
@@ -458,6 +490,13 @@ def send_moderation_preview(
         res = _send_photo(chat_id, photo, caption, parse_mode, mime, reply_markup=keyboard)
         if res:
             mid = res[0]
+            if credit_block:
+                _send_text(
+                    chat_id,
+                    credit_block.strip(),
+                    parse_mode,
+                    reply_to_message_id=mid,
+                )
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
             return mid
@@ -503,6 +542,15 @@ def publish_from_queue(
             dl = _download_image(src_url, cfg)
             if dl:
                 photo, mime = dl
+    credit = row["credit"] if "credit" in row.keys() else None
+    credit_block = ""
+    if credit and photo:
+        credit_html = html.escape(str(credit))
+        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
+        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
+            caption += credit_block
+            credit_block = ""
+
     if (
         cfg.PREVIEW_MODE != "text_only"
         and getattr(cfg, "ATTACH_IMAGES", True)
@@ -518,6 +566,13 @@ def publish_from_queue(
                     (fid, None, mod_id),
                 )
                 conn.commit()
+            if credit_block:
+                _send_text(
+                    chat_id,
+                    credit_block.strip(),
+                    parse_mode,
+                    reply_to_message_id=mid,
+                )
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
     if mid is None:
