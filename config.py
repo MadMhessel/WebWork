@@ -567,8 +567,6 @@ SOURCES.extend(SOURCES_NN)
 DB_PATH: str = os.getenv("DB_PATH", "newsbot.db")
 
 # === Telegram ===
-PARSE_MODE: str = os.getenv("PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML")).strip()
-TELEGRAM_PARSE_MODE: str = PARSE_MODE
 TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = os.getenv("TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", "true").lower() in {"1", "true", "yes"}
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 ON_SEND_ERROR: str = os.getenv("ON_SEND_ERROR", "retry").strip().lower()

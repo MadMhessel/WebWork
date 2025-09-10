@@ -28,7 +28,7 @@ def test_publish_from_queue_prefers_url_then_caches_file_id(monkeypatch):
         called["photo_type"] = type(photo).__name__
         return ("m1", "fid1")
 
-    def fake_send_text(chat_id, text, parse_mode):
+    def fake_send_text(chat_id, text, parse_mode, reply_markup=None, reply_to_message_id=None):
         return "m2"
 
     monkeypatch.setattr(publisher, "_send_photo", fake_send_photo)
@@ -54,7 +54,7 @@ def test_publisher_message_with_image_url_sends_photo(monkeypatch):
         called["photo_type"] = type(photo).__name__
         return ("m1", "fid2")
 
-    def fake_send_text(chat_id, text, parse_mode):
+    def fake_send_text(chat_id, text, parse_mode, reply_markup=None, reply_to_message_id=None):
         called["text"] = text
         return "m2"
 
@@ -80,7 +80,7 @@ def test_publish_message_uses_bytes_when_provided(monkeypatch):
         called["mime"] = mime
         return ("m3", "fid3")
 
-    def fake_send_text(chat_id, text, parse_mode):
+    def fake_send_text(chat_id, text, parse_mode, reply_markup=None, reply_to_message_id=None):
         called["text"] = text
         return "m4"
 
@@ -108,7 +108,7 @@ def test_preview_text_only(monkeypatch):
     monkeypatch.setattr(config, "PREVIEW_MODE", "text_only")
     called = {}
 
-    def fake_send_text(chat_id, text, parse_mode, reply_markup=None):
+    def fake_send_text(chat_id, text, parse_mode, reply_markup=None, reply_to_message_id=None):
         called["text"] = text
         return "m"
 

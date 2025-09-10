@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import sqlite3
 
 import requests
+import html
 
 from formatting import clean_html_tags, html_escape, truncate_by_chars
 
@@ -482,6 +483,13 @@ def send_moderation_preview(
         res = _send_photo(chat_id, photo, caption, parse_mode, mime, reply_markup=keyboard)
         if res:
             mid = res[0]
+            if credit_block:
+                _send_text(
+                    chat_id,
+                    credit_block.strip(),
+                    parse_mode,
+                    reply_to_message_id=mid,
+                )
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
             return mid
@@ -542,6 +550,13 @@ def publish_from_queue(
                     (fid, None, mod_id),
                 )
                 conn.commit()
+            if credit_block:
+                _send_text(
+                    chat_id,
+                    credit_block.strip(),
+                    parse_mode,
+                    reply_to_message_id=mid,
+                )
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
     if mid is None:
