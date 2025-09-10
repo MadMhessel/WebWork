@@ -56,7 +56,7 @@ def _publisher_send_direct(item: Dict) -> bool:
         item.get("image_url"),
         image_bytes=item.get("image_bytes"),
         image_mime=item.get("image_mime"),
-        credit=item.get("image_credit"),
+        credit=item.get("credit"),
         cfg=config,
     )
 
@@ -151,7 +151,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 if img_info.get("mime"):
                     item_clean["image_mime"] = img_info.get("mime")
             if img_info.get("credit"):
-                item_clean["image_credit"] = img_info["credit"]
+                item_clean["credit"] = img_info["credit"]
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
 

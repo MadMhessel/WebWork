@@ -155,9 +155,11 @@ _RAW_PARSE_MODE = (
     or "HTML"
 )
 if _RAW_PARSE_MODE.strip().lower() == "markdownv2":
-    PARSE_MODE = TELEGRAM_PARSE_MODE = "MarkdownV2"
+    TELEGRAM_PARSE_MODE = PARSE_MODE = "MarkdownV2"
+elif _RAW_PARSE_MODE.strip().lower() == "html":
+    TELEGRAM_PARSE_MODE = PARSE_MODE = "HTML"
 else:
-    PARSE_MODE = TELEGRAM_PARSE_MODE = "HTML"
+    TELEGRAM_PARSE_MODE = PARSE_MODE = _RAW_PARSE_MODE.strip()
 TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = (
     os.getenv(
         "DISABLE_WEB_PAGE_PREVIEW",
