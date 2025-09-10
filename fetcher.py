@@ -3,32 +3,28 @@ import logging
 import time
 import re
 from typing import Dict, Iterable, Iterator, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import feedparser
-from requests import Response
+import requests
 
 try:
-    from . import config, http_client
+    from . import config, net
     from .utils import normalize_whitespace, shorten_url
 except ImportError:  # pragma: no cover
-    import config, http_client  # type: ignore
+    import config, net  # type: ignore
     from utils import normalize_whitespace, shorten_url  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 
-# Reuse global HTTP session
-HTTP_SESSION = http_client.get_session()
-DEFAULT_TIMEOUT = (
-    getattr(config, "HTTP_TIMEOUT_CONNECT", 5),
-    getattr(config, "HTTP_TIMEOUT_READ", 15),
-)
-
 try:
     from bs4 import BeautifulSoup  # type: ignore
 except Exception:
     BeautifulSoup = None
+
+_HOST_FAILS: Dict[str, float] = {}
+_FAIL_TTL = 30 * 60  # 30 minutes
 
 
 def _first_http_url(candidates: Iterable[str]) -> str:
@@ -92,51 +88,27 @@ MOCK_ITEMS: List[Dict[str, str]] = [
 
 # -------------------- HTTP helpers --------------------
 
-def _requests_get(
+def _fetch_text(
     url: str,
     *,
     timeout: Optional[tuple[int, int]] = None,
     allow_redirects: bool = True,
 ) -> str:
-    """GET страницу как текст, с общим Session и стандартными таймаутами"""
-    resp: Response = HTTP_SESSION.get(
-        url,
-        timeout=timeout or DEFAULT_TIMEOUT,
-        allow_redirects=allow_redirects,
-    )
-    resp.raise_for_status()
-    return resp.text  # requests сам подберёт encoding по заголовкам/контенту
-
-
-def _requests_head(
-    url: str,
-    *,
-    timeout: Optional[tuple[int, int]] = None,
-    allow_redirects: bool = True,
-) -> Response:
-    """HEAD-запрос для быстрой проверки доступности и заголовков"""
-    resp: Response = HTTP_SESSION.head(
-        url,
-        timeout=timeout or DEFAULT_TIMEOUT,
-        allow_redirects=allow_redirects,
-    )
-    resp.raise_for_status()
-    return resp
-
-
-def _download_bytes(
-    url: str,
-    *,
-    timeout: Optional[tuple[int, int]] = None,
-) -> bytes:
-    """Скачать бинарные данные (если понадобятся), корректно закрывая респонс"""
-    with HTTP_SESSION.get(
-        url,
-        timeout=timeout or DEFAULT_TIMEOUT,
-        stream=True,
-    ) as r:
-        r.raise_for_status()
-        return r.content
+    host = (urlparse(url).hostname or "").lower()
+    now = time.time()
+    if host in _HOST_FAILS and now - _HOST_FAILS[host] < _FAIL_TTL:
+        return ""
+    try:
+        read_to = timeout[1] if timeout else None
+        return net.get_text(url, timeout=read_to, allow_redirects=allow_redirects)
+    except requests.exceptions.SSLError as ex:
+        logger.warning("TLS_FAIL %s: %s", host, ex)
+    except requests.exceptions.ConnectionError as ex:
+        logger.warning("DNS_FAIL %s: %s", host, ex)
+    except Exception as ex:
+        logger.debug("fetch error %s: %s", host, ex)
+    _HOST_FAILS[host] = now
+    return ""
 
 # -------------------- HTML article --------------------
 
@@ -221,32 +193,11 @@ def _extract_html_image_url(soup, base_url: str = "") -> str:
 
 
 def _validate_image_url(url: str) -> str:
-    """Fast-check that URL points to an image.
-
-    Использует HEAD-запрос, чтобы не скачивать сам файл. Возвращает исходный URL,
-    если Content-Type начинается с ``image/`` и статус 200, иначе пустую строку.
-    """
-    if not url:
+    """Check that URL points to an actual image by downloading a small portion."""
+    if not net.is_downloadable_image_url(url):
         return ""
-    resp: Response | None = None
     try:
-        resp = HTTP_SESSION.head(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
-        if resp.status_code != 200:
-            logger.warning(
-                "Отказ скачивания картинки %s: HTTP %s",
-                shorten_url(url),
-                resp.status_code,
-            )
-            return ""
-        ctype = resp.headers.get("Content-Type", "")
-        if not ctype.startswith("image/"):
-            logger.warning(
-                "Отказ скачивания картинки %s: тип %s",
-                shorten_url(url),
-                ctype or "неизвестен",
-            )
-            return ""
-        return url
+        data = net.get_bytes(url, timeout=5)
     except Exception as ex:
         logger.warning(
             "Отказ скачивания картинки %s: %s",
@@ -254,12 +205,13 @@ def _validate_image_url(url: str) -> str:
             ex,
         )
         return ""
-    finally:
-        if resp is not None:
-            try:
-                resp.close()
-            except Exception:
-                pass
+    if data.startswith(b"\xff\xd8") or data.startswith(b"\x89PNG") or data[:4] == b"RIFF":
+        return url
+    logger.warning(
+        "Отказ скачивания картинки %s: тип неизвестен",
+        shorten_url(url),
+    )
+    return ""
 def _extract_html_image_url_basic(soup) -> str:
     if not soup:
         return ""
@@ -291,7 +243,7 @@ def _parse_html_article(
     *,
     timeout: Optional[tuple] = None,
 ) -> Optional[Dict[str, str]]:
-    html_text = _requests_get(url, timeout=timeout)
+    html_text = _fetch_text(url, timeout=timeout)
     if not html_text:
         return None
     title, content, published_at, image_url = "", "", "", ""
@@ -310,7 +262,9 @@ def _parse_html_article(
             else:
                 img = _extract_html_image_url_basic(soup)
                 if img:
-                    image_url = urljoin(url, img)
+                    candidate = urljoin(url, img)
+                    if net.is_downloadable_image_url(candidate):
+                        image_url = candidate
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
             soup = None
@@ -432,7 +386,7 @@ def fetch_rss(
         return []
     logger.info("Загрузка RSS: %s (%s)", name, url)
     try:
-        text = _requests_get(url, timeout=timeout)
+        text = _fetch_text(url, timeout=timeout)
         if text is None:
             return []
         fp = feedparser.parse(text)
@@ -502,7 +456,7 @@ def fetch_html_list(
         return []
 
     logger.info("Загрузка HTML-листа: %s (%s)", name, base_url)
-    html = _requests_get(base_url, timeout=timeout)
+    html = _fetch_text(base_url, timeout=timeout)
     if not html:
         return []
 

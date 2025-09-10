@@ -167,7 +167,11 @@ def _api_post(
 
 
 def _send_text(
-    chat_id: str, text: str, parse_mode: str, reply_markup: Optional[dict] = None
+    chat_id: str,
+    text: str,
+    parse_mode: str,
+    reply_markup: Optional[dict] = None,
+    reply_to_message_id: Optional[str] = None,
 ) -> Optional[str]:
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
@@ -181,6 +185,8 @@ def _send_text(
     }
     if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+    if reply_to_message_id is not None:
+        payload["reply_to_message_id"] = reply_to_message_id
     j = _api_post("sendMessage", payload)
     if not j:
         return None
@@ -203,11 +209,7 @@ def _send_photo(
     if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
 
-    photo_kind = (
-        "upload"
-        if isinstance(photo, BytesIO)
-        else ("url" if str(photo).startswith("http") else "file_id")
-    )
+    photo_kind = "upload" if isinstance(photo, BytesIO) else "file_id"
     logger.info(
         "Sending photo: parse_mode=%s caption_len=%d type=%s",
         parse_mode,
@@ -220,6 +222,8 @@ def _send_photo(
             raise ValueError("mime required when uploading BytesIO")
         files = {"photo": ("image", photo, mime)}
     else:
+        if str(photo).startswith("http"):
+            raise ValueError("photo URL not allowed; provide BytesIO or file_id")
         files = None
         payload["photo"] = photo
 
@@ -242,28 +246,6 @@ def _send_photo(
         logger.exception("Exception during sendPhoto: %s", ex)
         success = False
         j = None
-    if not success and isinstance(photo, str) and photo.startswith("http"):
-        img = _download_image(photo, config)
-        if img:
-            data, mime2 = img
-            payload["photo"] = data
-            files = {"photo": ("image", data, mime2)}
-            try:
-                r = requests.post(url, data=payload, files=files, timeout=30)
-                if r.status_code != 200:
-                    logger.error("reupload fallback failed: HTTP %s", r.status_code)
-                    return None
-                j = r.json()
-                if not j.get("ok"):
-                    logger.error("reupload fallback failed: %s", r.text[:200])
-                    return None
-                success = True
-            except Exception as ex:  # pragma: no cover
-                logger.exception("reupload fallback failed: %s", ex)
-                return None
-        else:
-            logger.error("reupload fallback failed: download error")
-            return None
     if not success:
         return None
 
@@ -344,6 +326,7 @@ def publish_message(
     image_url: Optional[str] = None,
     image_bytes: Optional[bytes] = None,
     image_mime: Optional[str] = None,
+    credit: Optional[str] = None,
     cfg=config,
 ) -> bool:
     if not chat_id:
@@ -360,12 +343,25 @@ def publish_message(
     caption, long_text = compose_preview(
         title or "", body_current, url or "", parse_mode
     )
+    caption_limit = int(getattr(cfg, "CAPTION_LIMIT", 1024))
+    extra_credit: Optional[str] = None
+    if credit:
+        if parse_mode == "MarkdownV2":
+            credit_text = _escape_markdown_v2(credit)
+            credit_tag = f"_Фото: {credit_text}_"
+        else:
+            credit_text = _escape_html(credit)
+            credit_tag = f"<i>Фото: {credit_text}</i>"
+        if len(caption) + 2 + len(credit_tag) <= caption_limit:
+            caption = f"{caption}\n\n{credit_tag}"
+        else:
+            extra_credit = credit_tag
     limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
     if long_text is None and len(caption) > limit:
         caption = _smart_trim(caption, limit)
 
     mid: Optional[str] = None
-    photo = None
+    photo: Optional[Union[BytesIO, str]] = None
     mime = None
     conn: Optional[sqlite3.Connection] = None
     if image_bytes:
@@ -379,23 +375,31 @@ def publish_message(
     elif image_url:
         try:
             conn = db.connect()
-            cached = db.get_cached_file_id(conn, image_url)
-            photo = cached or image_url
         except Exception:  # pragma: no cover
-            photo = image_url
-    if photo:
-        if mime:
-            res = _send_photo(chat_id, photo, caption, parse_mode, mime)
+            conn = None
+        cached = db.get_cached_file_id(conn, image_url) if conn else None
+        if cached:
+            photo = cached
         else:
-            res = _send_photo(chat_id, photo, caption, parse_mode)
+            dl = _download_image(image_url, cfg)
+            if dl:
+                photo, mime = dl
+            else:
+                photo = None
+    if photo:
+        res = _send_photo(chat_id, photo, caption, parse_mode, mime)
         if res:
             mid, fid = res
             if fid and image_url and conn:
                 db.put_cached_file_id(conn, image_url, fid)
+            if extra_credit:
+                _send_text(chat_id, extra_credit, parse_mode, reply_to_message_id=mid)
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
     if mid is None:
         mid = _send_text(chat_id, caption if not long_text else long_text, parse_mode)
+        if extra_credit and mid:
+            _send_text(chat_id, extra_credit, parse_mode, reply_to_message_id=mid)
     if not mid:
         return False
     sleep = float(getattr(cfg, "PUBLISH_SLEEP_BETWEEN_SEC", 0))
@@ -456,14 +460,26 @@ def send_moderation_preview(
             [{"text": "🔗", "url": item.get("url", "") or ""}],
         ]
     }
-    photo = item.get("tg_file_id") or item.get("image_url")
+    photo: Optional[Union[BytesIO, str]] = None
+    mime = None
+    if cfg.PREVIEW_MODE != "text_only" and getattr(cfg, "ATTACH_IMAGES", True):
+        photo = item.get("tg_file_id")
+        if not photo and item.get("image_url"):
+            src = item["image_url"]
+            try:
+                conn = db.connect()
+            except Exception:  # pragma: no cover
+                conn = None
+            cached = db.get_cached_file_id(conn, src) if conn else None
+            if cached:
+                photo = cached
+            else:
+                dl = _download_image(src, cfg)
+                if dl:
+                    photo, mime = dl
     mid = None
-    if (
-        cfg.PREVIEW_MODE != "text_only"
-        and getattr(cfg, "ATTACH_IMAGES", True)
-        and photo
-    ):
-        res = _send_photo(chat_id, photo, caption, parse_mode, reply_markup=keyboard)
+    if photo:
+        res = _send_photo(chat_id, photo, caption, parse_mode, mime, reply_markup=keyboard)
         if res:
             mid = res[0]
             if long_text:
@@ -499,19 +515,24 @@ def publish_from_queue(
     caption, long_text = compose_preview(title, body, url, parse_mode)
     chat_id = getattr(cfg, "CHANNEL_CHAT_ID", "") or getattr(cfg, "CHANNEL_ID", "")
     mid: Optional[str] = None
-    photo = row["tg_file_id"] or row["image_url"]
+    photo: Optional[Union[BytesIO, str]] = row["tg_file_id"]
+    mime = None
     src_url = None
-    if not row["tg_file_id"] and row["image_url"]:
+    if not photo and row["image_url"]:
         src_url = row["image_url"]
         cached = db.get_cached_file_id(conn, src_url)
         if cached:
             photo = cached
+        else:
+            dl = _download_image(src_url, cfg)
+            if dl:
+                photo, mime = dl
     if (
         cfg.PREVIEW_MODE != "text_only"
         and getattr(cfg, "ATTACH_IMAGES", True)
         and photo
     ):
-        res = _send_photo(chat_id, photo, caption, parse_mode)
+        res = _send_photo(chat_id, photo, caption, parse_mode, mime)
         if res:
             mid, fid = res
             if fid and src_url:
