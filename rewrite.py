@@ -24,7 +24,7 @@ _FIGURE_RE = re.compile(r"<figure[^>]*>.*?</figure>", re.I | re.S)
 _rewriter: Rewriter | None = None
 
 
-def _instance(cfg) -> Rewriter:
+def _instance(cfg) -> Rewriter | None:
     """Lazily create a :class:`Rewriter` instance based on config."""
 
     global _rewriter
