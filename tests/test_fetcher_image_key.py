@@ -19,7 +19,7 @@ def test_entry_to_item_rss_single_image_key():
 def test_fetch_html_list_single_image_key(monkeypatch):
     html = '<html><body><article><a href="/a">t</a><img src="img.jpg"></article></body></html>'
     source = {"name": "S", "url": "http://test/", "type": "html_list"}
-    monkeypatch.setattr(fetcher, "_requests_get", lambda url, timeout=None, retry=None: html)
+    monkeypatch.setattr(fetcher, "_fetch_text", lambda url, timeout=None, allow_redirects=True: html)
     monkeypatch.setattr(fetcher, "_parse_html_article", lambda *a, **k: None)
     items = fetcher.fetch_html_list(source, limit=1)
     assert items

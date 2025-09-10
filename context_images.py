@@ -7,13 +7,12 @@ import re
 import random
 from typing import Dict, Optional
 
-import requests
-
 try:  # pragma: no cover - optional package structure
     from . import config, images
 except ImportError:  # pragma: no cover
     import config  # type: ignore
     import images  # type: ignore
+    import net  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -77,13 +76,12 @@ def _openverse(query: str, cfg=config) -> Optional[Dict]:
         "page_size": 1,
     }
     try:
-        r = requests.get(
+        text = net.get_text(
             _OPENVERSE_ENDPOINT,
             params=params,
-            timeout=(cfg.HTTP_TIMEOUT_CONNECT, cfg.HTTP_TIMEOUT_READ),
+            timeout=cfg.HTTP_TIMEOUT_READ,
         )
-        r.raise_for_status()
-        data = r.json()
+        data = json.loads(text)
     except Exception:  # pragma: no cover - network issues
         return None
 
@@ -98,22 +96,28 @@ def _openverse(query: str, cfg=config) -> Optional[Dict]:
         if width * height < cfg.IMAGE_MIN_AREA:
             continue
         img_url = res.get("url") or res.get("thumbnail")
-        if not img_url:
+        if not img_url or not net.is_downloadable_image_url(img_url):
             continue
         payload = images.download_image(img_url)
         if not payload:
             continue
         raw, mime = payload
+        author = res.get("creator")
+        source = res.get("foreign_landing_url") or img_url
+        credit = None
+        if author or lic:
+            credit = f"{author or ''} / {lic.upper()} (Openverse)".strip()
         return {
             "image_url": img_url,
             "bytes": raw,
             "mime": mime,
             "width": width,
             "height": height,
-            "author": res.get("creator"),
+            "author": author,
             "license": lic,
-            "source": res.get("foreign_landing_url") or img_url,
+            "source": source,
             "provider": "openverse",
+            "credit": credit,
         }
     return None
 
@@ -136,13 +140,12 @@ def _wikimedia(query: str, cfg=config) -> Optional[Dict]:
         "format": "json",
     }
     try:
-        r = requests.get(
+        text = net.get_text(
             _WIKIMEDIA_ENDPOINT,
             params=params,
-            timeout=(cfg.HTTP_TIMEOUT_CONNECT, cfg.HTTP_TIMEOUT_READ),
+            timeout=cfg.HTTP_TIMEOUT_READ,
         )
-        r.raise_for_status()
-        data = r.json()
+        data = json.loads(text)
     except Exception:  # pragma: no cover
         return None
     pages = data.get("query", {}).get("pages", {})
@@ -163,7 +166,7 @@ def _wikimedia(query: str, cfg=config) -> Optional[Dict]:
         if width * height < cfg.IMAGE_MIN_AREA:
             continue
         img_url = info.get("url")
-        if not img_url:
+        if not img_url or not net.is_downloadable_image_url(img_url):
             continue
         payload = images.download_image(img_url)
         if not payload:
@@ -173,6 +176,9 @@ def _wikimedia(query: str, cfg=config) -> Optional[Dict]:
             info.get("extmetadata", {}).get("Artist", {}).get("value")
         )
         source = page.get("fullurl") or img_url
+        credit = None
+        if author or lic:
+            credit = f"{author or ''} / {lic.upper()} (Wikimedia)".strip()
         return {
             "image_url": img_url,
             "bytes": raw,
@@ -183,6 +189,7 @@ def _wikimedia(query: str, cfg=config) -> Optional[Dict]:
             "license": lic,
             "source": source,
             "provider": "wikimedia",
+            "credit": credit,
         }
     return None
 

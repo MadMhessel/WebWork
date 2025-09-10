@@ -11,14 +11,13 @@ from html import unescape
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
-import requests
-
 try:
     from . import config, db, context_images  # type: ignore
 except ImportError:  # pragma: no cover
     import config  # type: ignore
     import db  # type: ignore
     import context_images  # type: ignore
+    import net  # type: ignore
 
 try:
     from PIL import Image  # type: ignore
@@ -41,8 +40,7 @@ logger = logging.getLogger(__name__)
 # -------------------- Константы/настройки (можно переопределить из config) --------------------
 
 USER_AGENT = "tg_newsbot/1.0 (+https://example.com)"
-TIMEOUT_HEAD = getattr(config, "IMAGE_TIMEOUT", 15)
-TIMEOUT_GET = getattr(config, "IMAGE_TIMEOUT", 15)
+IMAGE_TIMEOUT = getattr(config, "IMAGE_TIMEOUT", 15)
 MIN_BYTES = int(getattr(config, "MIN_IMAGE_BYTES", 4096))
 MAX_BYTES = 7_500_000
 MIN_WIDTH = MIN_HEIGHT = int(getattr(config, "IMAGE_MIN_EDGE", 220))
@@ -218,6 +216,8 @@ def select_image(item: Dict, cfg=config) -> Optional[str]:
     best_url: Optional[str] = None
     best_area = 0
     for cand in cands:
+        if not net.is_downloadable_image_url(cand.url):
+            continue
         info = probe_image(cand.url, referer=item.get("url"))
         if not info:
             continue
@@ -348,35 +348,15 @@ def probe_image(
     HEAD -> GET, проверяем размер, минимум байт, пробуем распарсить размер.
     Возвращает (sha1-hex[:16], width, height) или None.
     """
+    if not net.is_downloadable_image_url(url):
+        return None
     try:
-        r = requests.head(
-            url, allow_redirects=True, timeout=TIMEOUT_HEAD, headers=_headers(referer)
-        )
-        if r.status_code >= 400:
-            image_stats["download_fail"] += 1
-            return None
-    except Exception:
-        # многие сайты режут HEAD — идём дальше
-        pass
-
-    try:
-        g = requests.get(
-            url, stream=True, timeout=TIMEOUT_GET, headers=_headers(referer)
-        )
-        g.raise_for_status()
-        buf = io.BytesIO()
-        total = 0
-        for chunk in g.iter_content(64 * 1024):
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > MAX_BYTES:
-                image_stats["bad_bytes"] += 1
-                return None
-            buf.write(chunk)
-        raw = buf.getvalue()
+        raw = net.get_bytes(url, headers=_headers(referer), timeout=IMAGE_TIMEOUT)
     except Exception:
         image_stats["download_fail"] += 1
+        return None
+    if len(raw) > MAX_BYTES:
+        image_stats["bad_bytes"] += 1
         return None
 
     if len(raw) < MIN_BYTES:
@@ -421,12 +401,10 @@ def download_image(
     Скачивает изображение (с конвертацией webp->jpeg при наличии Pillow).
     Возвращает (bytes, mime) или None.
     """
+    if not net.is_downloadable_image_url(url):
+        return None
     try:
-        g = requests.get(
-            url, stream=True, timeout=TIMEOUT_GET, headers=_headers(referer)
-        )
-        g.raise_for_status()
-        raw = g.content
+        raw = net.get_bytes(url, headers=_headers(referer), timeout=IMAGE_TIMEOUT)
     except Exception:
         image_stats["download_fail"] += 1
         return None

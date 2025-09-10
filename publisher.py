@@ -344,6 +344,19 @@ def publish_message(
     caption, long_text = compose_preview(
         title or "", body_current, url or "", parse_mode
     )
+    caption_limit = int(getattr(cfg, "CAPTION_LIMIT", 1024))
+    extra_credit: Optional[str] = None
+    if credit:
+        if parse_mode == "MarkdownV2":
+            credit_text = _escape_markdown_v2(credit)
+            credit_tag = f"_Фото: {credit_text}_"
+        else:
+            credit_text = _escape_html(credit)
+            credit_tag = f"<i>Фото: {credit_text}</i>"
+        if len(caption) + 2 + len(credit_tag) <= caption_limit:
+            caption = f"{caption}\n\n{credit_tag}"
+        else:
+            extra_credit = credit_tag
     limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
     if long_text is None and len(caption) > limit:
         caption = _smart_trim(caption, limit)
@@ -400,6 +413,8 @@ def publish_message(
                 _send_text(chat_id, long_text, parse_mode)
     if mid is None:
         mid = _send_text(chat_id, caption if not long_text else long_text, parse_mode)
+        if extra_credit and mid:
+            _send_text(chat_id, extra_credit, parse_mode, reply_to_message_id=mid)
     if not mid:
         return False
     sleep = float(getattr(cfg, "PUBLISH_SLEEP_BETWEEN_SEC", 0))
