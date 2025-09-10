@@ -20,18 +20,25 @@ log = logging.getLogger(__name__)
 
 _FIGURE_RE = re.compile(r"<figure[^>]*>.*?</figure>", re.I | re.S)
 
+
 _rewriter: Rewriter | None = None
 
 
-def _instance(cfg) -> Rewriter:
+def _instance(cfg) -> Rewriter | None:
     """Lazily create a :class:`Rewriter` instance based on config."""
 
     global _rewriter
     if _rewriter is None:
-        creds_ok = bool(getattr(cfg, "YANDEX_API_KEY", "") or getattr(cfg, "YANDEX_IAM_TOKEN", ""))
-        use_llm = bool(getattr(cfg, "ENABLE_LLM_REWRITE", False) and creds_ok)
-        topic_hint = "строительство, инфраструктура, ЖК, дороги, мосты"
-        _rewriter = Rewriter(use_llm=use_llm, topic_hint=topic_hint)
+        enabled = bool(getattr(cfg, "YANDEX_REWRITE_ENABLED", False))
+        creds_ok = bool(
+            getattr(cfg, "YANDEX_API_KEY", "")
+            or getattr(cfg, "YANDEX_IAM_TOKEN", "")
+        )
+        if enabled and creds_ok:
+            topic_hint = "строительство, инфраструктура, ЖК, дороги, мосты"
+            _rewriter = Rewriter(topic_hint=topic_hint)
+        else:
+            _rewriter = None
     return _rewriter
 
 
@@ -53,7 +60,10 @@ def rewrite_text(original: str, cfg) -> str:
         region = getattr(
             cfg, "REGION_HINT", "Нижегородская область, Нижний Новгород"
         )
-        return _instance(cfg).rewrite("", original, max_len, region)
+        rw = _instance(cfg)
+        if rw is None:
+            return clean_html_tags(_FIGURE_RE.sub(" ", original))
+        return rw.rewrite("", original, max_len, region)
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(
             "\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0435\u0440\u0430\u0439\u0442\u0430: %s",
@@ -81,7 +91,11 @@ def maybe_rewrite_item(item: Dict[str, Any], cfg) -> Dict[str, Any]:
         )
         title = out.get("title", "")
         body = out.get("content", "")
-        out["content"] = _instance(cfg).rewrite(title, body, max_len, region)
+        rw = _instance(cfg)
+        if rw is None:
+            out["content"] = clean_html_tags(_FIGURE_RE.sub(" ", body))
+        else:
+            out["content"] = rw.rewrite(title, body, max_len, region)
         return out
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(

@@ -20,7 +20,7 @@ class DummyResp:
 
 def _mk_cfg(**over):
     cfg = types.SimpleNamespace(
-        ENABLE_LLM_REWRITE=True,
+        YANDEX_REWRITE_ENABLED=True,
         YANDEX_API_MODE="openai",
         YANDEX_API_KEY="k",
         YANDEX_IAM_TOKEN="t",

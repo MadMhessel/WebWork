@@ -35,7 +35,7 @@ python -m config init
   `IMAGES_CACHE_DIR`
 - `MAX_POST_LEN`, `MAX_CAPTION_LEN`, `REWRITE_TARGET_LEN`, `REGION_HINT`,
   `PARSE_MODE`, `SPLIT_LONG_POSTS`
-- `ENABLE_LLM_REWRITE`, `YANDEX_API_MODE`, `YANDEX_API_KEY`,
+- `YANDEX_REWRITE_ENABLED`, `YANDEX_API_MODE`, `YANDEX_API_KEY`,
   `YANDEX_IAM_TOKEN`, `YANDEX_FOLDER_ID`, `YANDEX_MODEL`,
   `YANDEX_TEMPERATURE`, `YANDEX_MAX_TOKENS`
 - ключевые слова и источники в `newsbot/config.py`
@@ -61,7 +61,7 @@ python -m config init
 ### Рерайт через YandexGPT
 
 Для более качественного сжатия текста используется модель YandexGPT. Включить
-её можно, задав в `.env` переменную `ENABLE_LLM_REWRITE=true` и указав
+её можно, задав в `.env` переменную `YANDEX_REWRITE_ENABLED=true` и указав
 учётные данные:
 
 ```

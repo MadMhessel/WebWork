@@ -580,7 +580,7 @@ PUBLISH_SLEEP_BETWEEN_SEC: float = float(os.getenv("PUBLISH_SLEEP_BETWEEN_SEC", 
 REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "600"))
 
 # --- Яндекс LLM (Foundation Models) ---
-ENABLE_LLM_REWRITE: bool = os.getenv("ENABLE_LLM_REWRITE", "0").lower() in {
+YANDEX_REWRITE_ENABLED: bool = os.getenv("YANDEX_REWRITE_ENABLED", "0").lower() in {
     "1",
     "true",
     "yes",

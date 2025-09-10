@@ -199,7 +199,7 @@ def rewrite(
 ) -> str:
     """Rewrite ``text`` using YandexGPT and return cleaned plain text."""
 
-    if not getattr(config, "ENABLE_LLM_REWRITE", False):
+    if not getattr(config, "YANDEX_REWRITE_ENABLED", False):
         raise PermissionError("Yandex rewrite disabled")
 
     _check_rpm_limit()
