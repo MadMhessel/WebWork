@@ -19,11 +19,14 @@ def run(stop_event) -> None:
     while not stop_event.is_set():
         try:
             url = f"{API_BASE}/bot{config.BOT_TOKEN}/getUpdates"
-            params = {"timeout": 30, "offset": offset}
+            params = {"timeout": config.TELEGRAM_LONG_POLL, "offset": offset}
             resp = session.get(
                 url,
                 params=params,
-                timeout=(config.HTTP_TIMEOUT_CONNECT, config.HTTP_TIMEOUT_READ),
+                timeout=(
+                    config.HTTP_TIMEOUT_CONNECT,
+                    config.TELEGRAM_LONG_POLL + 10,
+                ),
             )
             resp.raise_for_status()
             data = resp.json()

@@ -49,10 +49,16 @@ RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === HTTP-клиент ===
 HTTP_TIMEOUT_CONNECT: float = float(os.getenv("HTTP_TIMEOUT_CONNECT", "5"))
-# ТЗ: смягчённые таймауты (connect=5s, read=10s)
-HTTP_TIMEOUT_READ: float = float(os.getenv("HTTP_TIMEOUT_READ", "10"))
+# ТЗ: connect=5s, read=65s (long-poll up to 30s)
+HTTP_TIMEOUT_READ: float = float(os.getenv("HTTP_TIMEOUT_READ", "65"))
 HTTP_RETRY_TOTAL: int = int(os.getenv("HTTP_RETRY_TOTAL", "3"))
 HTTP_BACKOFF: float = float(os.getenv("HTTP_BACKOFF", "0.5"))
+SSL_NO_VERIFY_HOSTS: set[str] = {
+    h.strip().lower()
+    for h in os.getenv("SSL_NO_VERIFY_HOSTS", "").split(",")
+    if h.strip()
+}
+TELEGRAM_LONG_POLL: int = int(os.getenv("TELEGRAM_LONG_POLL", "30"))
 
 # === Флаги и режимы ===
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}
@@ -87,7 +93,7 @@ CONTEXT_IMAGE_ENABLED: bool = os.getenv("CONTEXT_IMAGE_ENABLED", "true").lower()
     "yes",
 }
 CONTEXT_IMAGE_PREFERRED: bool = os.getenv(
-    "CONTEXT_IMAGE_PREFERRED", "false"
+    "CONTEXT_IMAGE_PREFERRED", "true"
 ).lower() in {"1", "true", "yes"}
 CONTEXT_IMAGE_PROVIDERS: str = os.getenv(
     "CONTEXT_IMAGE_PROVIDERS", "openverse,wikimedia"
@@ -143,7 +149,11 @@ REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
 CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 PREVIEW_MODE: str = os.getenv("PREVIEW_MODE", "auto")
-_RAW_PARSE_MODE = os.getenv("PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML"))
+_RAW_PARSE_MODE = (
+    os.getenv("TELEGRAM_PARSE_MODE")
+    or os.getenv("PARSE_MODE")
+    or "HTML"
+)
 if _RAW_PARSE_MODE.strip().lower() == "markdownv2":
     TELEGRAM_PARSE_MODE = PARSE_MODE = "MarkdownV2"
 elif _RAW_PARSE_MODE.strip().lower() == "html":
