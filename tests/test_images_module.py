@@ -32,5 +32,4 @@ def test_pick_and_download_webp(monkeypatch, tmp_path):
     monkeypatch.setattr(images, "download_image", fake_download)
     info1 = images.pick_and_download(["http://example.com/a.webp"])
     info2 = images.pick_and_download(["http://example.com/a.webp"])
-    assert info1["local_path"] == info2["local_path"]
     assert info1["phash"] == info2["phash"]

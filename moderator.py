@@ -33,8 +33,8 @@ def enqueue_item(item: Dict[str, Any], conn: sqlite3.Connection) -> Optional[int
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO moderation_queue
-        (source_id, url, guid, title, summary, content, image_url, image_hash, tg_file_id, status, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
+        (source_id, url, guid, title, summary, content, image_url, image_hash, tg_file_id, credit, status, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
         """,
         (
             item.get("source_id"),
@@ -46,6 +46,7 @@ def enqueue_item(item: Dict[str, Any], conn: sqlite3.Connection) -> Optional[int
             item.get("image_url"),
             item.get("image_hash"),
             item.get("tg_file_id"),
+            item.get("credit"),
             PENDING_REVIEW,
         ),
     )
