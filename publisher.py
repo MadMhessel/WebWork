@@ -1,12 +1,13 @@
-import html
 import json
 import logging
 import time
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 import sqlite3
 
 import requests
+
+from formatting import clean_html_tags, html_escape, truncate_by_chars
 
 try:  # Pillow is optional
     from PIL import Image  # type: ignore
@@ -14,11 +15,12 @@ except Exception:  # pragma: no cover
     Image = None  # type: ignore
 
 try:
-    from . import config, db, rewrite, http_client, images
-    from .utils import shorten_url
+    from . import config, db, rewrite, http_client
 except ImportError:  # pragma: no cover
-    import config, db, rewrite, http_client, images  # type: ignore
-    from utils import shorten_url  # type: ignore
+    import config  # type: ignore
+    import db  # type: ignore
+    import rewrite  # type: ignore
+    import http_client  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +32,11 @@ _client_base_url: Optional[str] = None
 # Client helpers
 # ---------------------------------------------------------------------------
 
+
 def init_telegram_client(token: Optional[str] = None) -> None:
     """Initialize base URL for Telegram Bot API."""
     global _client_base_url
-    token = (token or getattr(config, "BOT_TOKEN", "").strip())
+    token = token or getattr(config, "BOT_TOKEN", "").strip()
     if not token:
         logger.warning("BOT_TOKEN пуст — отправка в Telegram отключена.")
         _client_base_url = None
@@ -53,15 +56,20 @@ def _ensure_client() -> bool:
 
 _MD_V2_RESERVED = "_*[]()~`>#+-=|{}.!\\"
 
+
 def _escape_markdown_v2(text: str) -> str:
     return "".join(f"\\{ch}" if ch in _MD_V2_RESERVED else ch for ch in text or "")
 
 
 def _escape_html(text: str) -> str:
-    return html.escape(text or "", quote=True)
+    """Delegate HTML escaping to :mod:`formatting`."""
+
+    return html_escape(text or "")
 
 
 def _build_message(title: str, body: str, url: str, parse_mode: str) -> str:
+    title = clean_html_tags(title)
+    body = clean_html_tags(body)
     if parse_mode == "MarkdownV2":
         t = _escape_markdown_v2(title)
         b = _escape_markdown_v2(body)
@@ -70,19 +78,14 @@ def _build_message(title: str, body: str, url: str, parse_mode: str) -> str:
     et = _escape_html(title)
     eb = _escape_html(body)
     eu = _escape_html(url)
-    return f"<b>{et}</b>\n\n{eb}\n\nПодробнее: <a href=\"{eu}\">{eu}</a>".strip()
+    return f'<b>{et}</b>\n\n{eb}\n\nПодробнее: <a href="{eu}">{eu}</a>'.strip()
 
 
 def _smart_trim(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
-    cut = text[:max_chars].rstrip()
-    pos = cut.rfind(" ")
-    if pos > 0:
-        base = cut[:pos]
-    else:
-        base = cut[:-1]
-    return base + "…"
+    trimmed = truncate_by_chars(text, max_chars - 1)
+    return trimmed + "…"
 
 
 def _sanitize_md_tail(text: str) -> str:
@@ -99,7 +102,9 @@ def _sanitize_md_tail(text: str) -> str:
     return text
 
 
-def compose_preview(title: str, body: str, url: str, parse_mode: str) -> tuple[str, Optional[str]]:
+def compose_preview(
+    title: str, body: str, url: str, parse_mode: str
+) -> tuple[str, Optional[str]]:
     full = _build_message(title, body, url, parse_mode)
     caption_limit = int(getattr(config, "CAPTION_LIMIT", 1024))
     msg_limit = int(getattr(config, "TELEGRAM_MESSAGE_LIMIT", 4096))
@@ -139,7 +144,10 @@ def format_preview(post: Dict[str, Any], cfg=config) -> tuple[str, Optional[str]
 # Telegram HTTP helpers
 # ---------------------------------------------------------------------------
 
-def _api_post(method: str, payload: Dict[str, Any], files: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+
+def _api_post(
+    method: str, payload: Dict[str, Any], files: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
     if not _ensure_client():
         return None
     url = f"{_client_base_url}/{method}"
@@ -158,12 +166,18 @@ def _api_post(method: str, payload: Dict[str, Any], files: Optional[Dict[str, An
         return None
 
 
-def _send_text(chat_id: str, text: str, parse_mode: str, reply_markup: Optional[dict] = None) -> Optional[str]:
+def _send_text(
+    chat_id: str, text: str, parse_mode: str, reply_markup: Optional[dict] = None
+) -> Optional[str]:
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
         "parse_mode": parse_mode,
-        "disable_web_page_preview": "true" if getattr(config, "TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", False) else "false",
+        "disable_web_page_preview": (
+            "true"
+            if getattr(config, "TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", False)
+            else "false"
+        ),
     }
     if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
@@ -189,7 +203,11 @@ def _send_photo(
     if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
 
-    photo_kind = "upload" if isinstance(photo, BytesIO) else ("url" if str(photo).startswith("http") else "file_id")
+    photo_kind = (
+        "upload"
+        if isinstance(photo, BytesIO)
+        else ("url" if str(photo).startswith("http") else "file_id")
+    )
     logger.info(
         "Sending photo: parse_mode=%s caption_len=%d type=%s",
         parse_mode,
@@ -262,6 +280,7 @@ def _send_photo(
 # Public helpers used in tests and pipeline
 # ---------------------------------------------------------------------------
 
+
 def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
     parse_mode = _normalize_parse_mode(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
@@ -282,7 +301,9 @@ def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
         "Referer": url,
     }
     try:
-        with session.get(url, timeout=timeout, stream=True, headers=headers, allow_redirects=True) as r:
+        with session.get(
+            url, timeout=timeout, stream=True, headers=headers, allow_redirects=True
+        ) as r:
             if r.status_code != 200:
                 return None
             ctype = (r.headers.get("Content-Type") or "").split(";")[0]
@@ -336,7 +357,9 @@ def publish_message(
         item["image_url"] = image_url
     rewritten = rewrite.maybe_rewrite_item(item, cfg)
     body_current = rewritten.get("content", "") or ""
-    caption, long_text = compose_preview(title or "", body_current, url or "", parse_mode)
+    caption, long_text = compose_preview(
+        title or "", body_current, url or "", parse_mode
+    )
     limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
     if long_text is None and len(caption) > limit:
         caption = _smart_trim(caption, limit)
@@ -385,6 +408,7 @@ def publish_message(
 # Moderation helpers
 # ---------------------------------------------------------------------------
 
+
 def answer_callback_query(
     callback_query_id: str, text: Optional[str] = None, show_alert: bool = False
 ) -> None:
@@ -407,7 +431,9 @@ def remove_moderation_buttons(chat_id: str, message_id: Union[int, str]) -> None
     _api_post("editMessageReplyMarkup", payload)
 
 
-def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config) -> Optional[str]:
+def send_moderation_preview(
+    chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config
+) -> Optional[str]:
     """Send preview message with inline buttons for moderation."""
     caption, long_text = format_preview(item, cfg)
     parse_mode = _normalize_parse_mode(
@@ -443,11 +469,23 @@ def send_moderation_preview(chat_id: str, item: Dict[str, Any], mod_id: int, cfg
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
             return mid
-        logger.warning("Failed to send photo preview for mod_id=%s; falling back to text", mod_id)
-    return _send_text(chat_id, caption if not long_text else long_text, parse_mode, reply_markup=keyboard)
+        logger.warning(
+            "Failed to send photo preview for mod_id=%s; falling back to text", mod_id
+        )
+    return _send_text(
+        chat_id,
+        caption if not long_text else long_text,
+        parse_mode,
+        reply_markup=keyboard,
+    )
 
 
-def publish_from_queue(conn: sqlite3.Connection, mod_id: int, text_override: Optional[str] = None, cfg=config) -> Optional[str]:
+def publish_from_queue(
+    conn: sqlite3.Connection,
+    mod_id: int,
+    text_override: Optional[str] = None,
+    cfg=config,
+) -> Optional[str]:
     cur = conn.execute("SELECT * FROM moderation_queue WHERE id = ?", (mod_id,))
     row = cur.fetchone()
     if not row:
