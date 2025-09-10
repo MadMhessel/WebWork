@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, Optional
 
 import requests
@@ -26,8 +27,32 @@ def _licenses(cfg=config) -> set[str]:
 
 def build_query(item: Dict, cfg=config) -> str:
     title = item.get("title", "")
+    tokens = [title]
+
+    patterns = {
+        r"\bмост": "мост",
+        r"\bдорог": "дорога",
+        r"\bжк\b|жил[ья]?\s*комплекс": "жилой комплекс",
+        r"\bпромзона": "промзона",
+        r"\bнабережн": "набережная",
+        r"\bкампус": "кампус",
+        r"\bвокзал": "вокзал",
+        r"\bметро": "метро",
+    }
+    for pattern, token in patterns.items():
+        if re.search(pattern, title, re.IGNORECASE):
+            tokens.append(token)
+
+    region_keywords = list(getattr(cfg, "REGION_KEYWORDS", []))
+    if region_keywords:
+        tokens.extend(region_keywords[:3])
+
     hint = getattr(cfg, "REGION_HINT", "")
-    return f"{title} {hint}".strip()
+    if hint:
+        tokens.append(hint)
+
+    query = " ".join(t for t in tokens if t)
+    return query[:150]
 
 
 # ---------------------------------------------------------------------------
@@ -173,5 +198,12 @@ def fetch_context_image(item: Dict, cfg=config) -> Dict:
         elif prov == "wikimedia":
             res = _wikimedia(query, cfg)
         if res:
+            parts = [res.get("author"), res.get("source")]
+            credit = " / ".join(p for p in parts if p)
+            lic = res.get("license")
+            if lic:
+                credit = f"{credit} ({lic})" if credit else lic
+            if credit:
+                res["credit"] = credit
             return res
     return {}

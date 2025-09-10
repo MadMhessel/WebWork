@@ -7,9 +7,7 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
 from html import unescape
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
@@ -64,10 +62,9 @@ FALLBACK_IMAGE_URL = getattr(config, "FALLBACK_IMAGE_URL", "")
 ATTACH_IMAGES = bool(getattr(config, "ATTACH_IMAGES", True))
 ALLOW_PLACEHOLDER = bool(getattr(config, "ALLOW_PLACEHOLDER", False))
 
-IMAGES_CACHE_DIR = Path(getattr(config, "IMAGES_CACHE_DIR", "./cache/images"))
 MAX_SIDE = 1600
 
-_PHASH_CACHE: Dict[str, Path] = {}
+_PHASH_CACHE: Dict[str, Optional[str]] = {}
 
 # Фильтры «мусора» и плейсхолдеров
 PLACEHOLDER_RE = re.compile(
@@ -463,12 +460,8 @@ def download_image(
 
 
 def _save_and_hash(raw: bytes, url: str) -> Dict[str, object]:
-    """Save image to cache and compute perceptual hash."""
+    """Compute perceptual hash for an image without saving to disk."""
 
-    ts = datetime.utcnow()
-    subdir = IMAGES_CACHE_DIR / ts.strftime("%y/%m")
-    subdir.mkdir(parents=True, exist_ok=True)
-    file_path = subdir / (hashlib.sha1(url.encode("utf-8")).hexdigest()[:16] + ".jpg")
     if IMAGEHASH_OK and PIL_OK:
         img = Image.open(io.BytesIO(raw))
         if img.mode in ("RGBA", "LA"):
@@ -476,22 +469,16 @@ def _save_and_hash(raw: bytes, url: str) -> Dict[str, object]:
             bg.paste(img, mask=img.split()[-1])
             img = bg
         img.thumbnail((MAX_SIDE, MAX_SIDE))
-        img.save(file_path, format="JPEG", quality=85)
         phash = str(imagehash.phash(img))
         width, height = img.size
     else:  # pragma: no cover - imagehash not available
-        with open(file_path, "wb") as f:
-            f.write(raw)
         phash = hashlib.sha1(raw).hexdigest()
         width = height = 0
 
-    if phash in _PHASH_CACHE:
-        file_path = _PHASH_CACHE[phash]
-    else:
-        _PHASH_CACHE[phash] = file_path
+    if phash not in _PHASH_CACHE:
+        _PHASH_CACHE[phash] = None
 
     return {
-        "local_path": str(file_path),
         "phash": phash,
         "width": width,
         "height": height,
@@ -501,8 +488,8 @@ def _save_and_hash(raw: bytes, url: str) -> Dict[str, object]:
 def pick_and_download(urls: List[str]) -> Optional[Dict[str, object]]:
     """Download first valid image from URLs.
 
-    The image is validated, converted to JPEG if necessary and cached on disk.
-    A dictionary describing the image (path, hash, dimensions) is returned.
+    The image is validated, converted if necessary and hashed in-memory.
+    A dictionary describing the image (hash and dimensions) is returned.
     """
 
     for u in urls:

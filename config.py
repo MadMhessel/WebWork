@@ -145,11 +145,11 @@ TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 PREVIEW_MODE: str = os.getenv("PREVIEW_MODE", "auto")
 _RAW_PARSE_MODE = os.getenv("PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML"))
 if _RAW_PARSE_MODE.strip().lower() == "markdownv2":
-    TELEGRAM_PARSE_MODE: str = "MarkdownV2"
+    TELEGRAM_PARSE_MODE = PARSE_MODE = "MarkdownV2"
 elif _RAW_PARSE_MODE.strip().lower() == "html":
-    TELEGRAM_PARSE_MODE = "HTML"
+    TELEGRAM_PARSE_MODE = PARSE_MODE = "HTML"
 else:
-    TELEGRAM_PARSE_MODE = _RAW_PARSE_MODE.strip()
+    TELEGRAM_PARSE_MODE = PARSE_MODE = _RAW_PARSE_MODE.strip()
 TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = (
     os.getenv(
         "DISABLE_WEB_PAGE_PREVIEW",
@@ -559,8 +559,6 @@ SOURCES.extend(SOURCES_NN)
 DB_PATH: str = os.getenv("DB_PATH", "newsbot.db")
 
 # === Telegram ===
-PARSE_MODE: str = os.getenv("PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML")).strip()
-TELEGRAM_PARSE_MODE: str = PARSE_MODE
 TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = os.getenv("TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", "true").lower() in {"1", "true", "yes"}
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 ON_SEND_ERROR: str = os.getenv("ON_SEND_ERROR", "retry").strip().lower()
