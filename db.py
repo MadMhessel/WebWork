@@ -85,6 +85,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             image_url TEXT,
             image_hash TEXT,
             tg_file_id TEXT,
+            credit TEXT,
             status TEXT,
             created_at INTEGER DEFAULT (strftime('%s','now')),
             fetched_at INTEGER,
@@ -156,6 +157,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "moderation_queue", "published_msg_id", "TEXT")
     _ensure_column(conn, "moderation_queue", "image_type", "TEXT")
     _ensure_column(conn, "moderation_queue", "image_ref", "TEXT")
+    _ensure_column(conn, "moderation_queue", "credit", "TEXT")
     # editor_state now tracks which field is being edited
     _ensure_column(conn, "editor_state", "field", "TEXT")
 
