@@ -344,6 +344,19 @@ def publish_message(
     caption, long_text = compose_preview(
         title or "", body_current, url or "", parse_mode
     )
+    caption_limit = int(getattr(cfg, "CAPTION_LIMIT", 1024))
+    extra_credit: Optional[str] = None
+    if credit:
+        if parse_mode == "MarkdownV2":
+            credit_text = _escape_markdown_v2(credit)
+            credit_tag = f"_Фото: {credit_text}_"
+        else:
+            credit_text = _escape_html(credit)
+            credit_tag = f"<i>Фото: {credit_text}</i>"
+        if len(caption) + 2 + len(credit_tag) <= caption_limit:
+            caption = f"{caption}\n\n{credit_tag}"
+        else:
+            extra_credit = credit_tag
     limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
     if long_text is None and len(caption) > limit:
         caption = _smart_trim(caption, limit)
@@ -374,32 +387,20 @@ def publish_message(
                 photo, mime = dl
             else:
                 photo = None
-
-    credit_block = ""
-    if credit and photo:
-        credit_html = html.escape(str(credit))
-        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
-        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
-            caption += credit_block
-            credit_block = ""
-
     if photo:
         res = _send_photo(chat_id, photo, caption, parse_mode, mime)
         if res:
             mid, fid = res
             if fid and image_url and conn:
                 db.put_cached_file_id(conn, image_url, fid)
-            if credit_block:
-                _send_text(
-                    chat_id,
-                    credit_block.strip(),
-                    parse_mode,
-                    reply_to_message_id=mid,
-                )
+            if extra_credit:
+                _send_text(chat_id, extra_credit, parse_mode, reply_to_message_id=mid)
             if long_text:
                 _send_text(chat_id, long_text, parse_mode)
     if mid is None:
         mid = _send_text(chat_id, caption if not long_text else long_text, parse_mode)
+        if extra_credit and mid:
+            _send_text(chat_id, extra_credit, parse_mode, reply_to_message_id=mid)
     if not mid:
         return False
     sleep = float(getattr(cfg, "PUBLISH_SLEEP_BETWEEN_SEC", 0))
@@ -462,14 +463,6 @@ def send_moderation_preview(
     }
     photo: Optional[Union[BytesIO, str]] = None
     mime = None
-    credit = item.get("credit")
-    credit_block = ""
-    if credit and (item.get("tg_file_id") or item.get("image_url")):
-        credit_html = html.escape(str(credit))
-        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
-        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
-            caption += credit_block
-            credit_block = ""
     if cfg.PREVIEW_MODE != "text_only" and getattr(cfg, "ATTACH_IMAGES", True):
         photo = item.get("tg_file_id")
         if not photo and item.get("image_url"):
@@ -542,15 +535,6 @@ def publish_from_queue(
             dl = _download_image(src_url, cfg)
             if dl:
                 photo, mime = dl
-    credit = row["credit"] if "credit" in row.keys() else None
-    credit_block = ""
-    if credit and photo:
-        credit_html = html.escape(str(credit))
-        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
-        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
-            caption += credit_block
-            credit_block = ""
-
     if (
         cfg.PREVIEW_MODE != "text_only"
         and getattr(cfg, "ATTACH_IMAGES", True)
