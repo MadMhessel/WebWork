@@ -61,18 +61,21 @@ python -m config init
 
 Для более качественного сжатия текста используется модель YandexGPT. Включить
 её можно, задав в `.env` переменную `YANDEX_REWRITE_ENABLED=true` и указав
-учётные данные:
+учётные данные. Клиент поддерживает два режима:
 
 ```
-YANDEX_API_KEY=<API-ключ>
+YANDEX_API_MODE=openai   # или rest
+YANDEX_API_KEY=<API-ключ>      # для режима openai
+YANDEX_IAM_TOKEN=<IAM-токен>   # для режима rest
 YANDEX_FOLDER_ID=<folder-id>
 ```
 
-API‑ключ создаётся в [консоли Yandex Cloud](https://console.cloud.yandex.ru/):
-нужен сервисный аккаунт с ролью `ai.languageModels.user` и ключом с областью
-`yc.ai.foundationModels.execute`. `FOLDER_ID` можно посмотреть на странице
-каталога. Дополнительные параметры (`YANDEX_MODEL`, `YANDEX_TEMPERATURE`,
-`YANDEX_MAX_TOKENS`) позволяют тонко настроить генерацию.
+API‑ключ или IAM‑токен создаются в [консоли Yandex Cloud](https://console.cloud.yandex.ru/).
+Нужен сервисный аккаунт с ролью `ai.languageModels.user` и ключом/токеном с
+областью `yc.ai.foundationModels.execute`. `FOLDER_ID` можно посмотреть на
+странице каталога. Дополнительные параметры (`YANDEX_MODEL`,
+`YANDEX_TEMPERATURE`, `YANDEX_MAX_TOKENS`) позволяют тонко настроить
+генерацию.
 
 По умолчанию достаточно присутствия региональных ключевых слов. Если установить `STRICT_FILTER=1`, бот будет требовать одновременно и регион, и строительную тематику.
 

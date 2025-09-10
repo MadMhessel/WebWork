@@ -1,10 +1,9 @@
 """Client for YandexGPT used for news rewriting.
 
 This module exposes a single :func:`rewrite` function which sends a prompt to
-YandexGPT via the OpenAI‑compatible endpoint and returns processed plain text.
-Only the permanent ``Api-Key`` credential is supported; temporary IAM tokens
-are deliberately not handled.  The function implements timeouts, rate limiting
-and result post‑processing as required by the specification.
+YandexGPT and returns processed plain text. Both OpenAI-compatible and native
+REST endpoints are supported. The function implements timeouts, rate limiting
+and result post-processing as required by the specification.
 """
 
 from __future__ import annotations
@@ -123,36 +122,72 @@ class _RequestParams:
     url: str
     headers: dict
     payload: dict
+    mode: str
 
 
-def _build_request(text: str, *, target_chars: int, topic_hint: Optional[str], region_hint: Optional[str]) -> _RequestParams:
+def _build_request(
+    text: str,
+    *,
+    target_chars: int,
+    topic_hint: Optional[str],
+    region_hint: Optional[str],
+) -> _RequestParams:
     temperature = float(getattr(config, "YANDEX_TEMPERATURE", 0.2))
     max_tokens = int(getattr(config, "YANDEX_MAX_TOKENS", 800))
     top_p = float(getattr(config, "YANDEX_TOP_P", 1.0))
     model = getattr(config, "YANDEX_MODEL", "yandexgpt-lite")
     folder = getattr(config, "YANDEX_FOLDER_ID", "")
-    api_key = getattr(config, "YANDEX_API_KEY", "")
-    if not api_key or not folder:
-        raise InvalidAuthError("missing API key or folder id")
+    mode = getattr(config, "YANDEX_API_MODE", "openai").lower()
     prompt = _guard_prompt(topic_hint, region_hint)
 
-    url = "https://llm.api.cloud.yandex.net/v1/chat/completions"
-    headers = {"Authorization": f"Api-Key {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": f"gpt://{folder}/{model}/latest",
-        "messages": [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": text},
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "top_p": top_p,
-    }
-    return _RequestParams(url, headers, payload)
+    if mode == "rest":
+        iam = getattr(config, "YANDEX_IAM_TOKEN", "")
+        if not iam or not folder:
+            raise InvalidAuthError("missing IAM token or folder id")
+        url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+        headers = {
+            "Authorization": f"Bearer {iam}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "modelUri": f"gpt://{folder}/{model}",
+            "completionOptions": {
+                "temperature": temperature,
+                "maxTokens": {"value": max_tokens},
+                "topP": top_p,
+            },
+            "messages": [
+                {"role": "system", "text": prompt},
+                {"role": "user", "text": text},
+            ],
+        }
+    else:
+        api_key = getattr(config, "YANDEX_API_KEY", "")
+        if not api_key or not folder:
+            raise InvalidAuthError("missing API key or folder id")
+        url = "https://llm.api.cloud.yandex.net/v1/chat/completions"
+        headers = {
+            "Authorization": f"Api-Key {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": f"gpt://{folder}/{model}/latest",
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": text},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+        }
+        mode = "openai"
+    return _RequestParams(url, headers, payload, mode)
 
 
-def _parse_response(data: dict) -> str:
+def _parse_response(data: dict, mode: str) -> str:
     try:
+        if mode == "rest":
+            return data["result"]["alternatives"][0]["message"]["text"].strip()
         return data["choices"][0]["message"]["content"].strip()
     except Exception as exc:  # pragma: no cover - defensive
         raise ServerError("invalid response format") from exc
@@ -206,7 +241,7 @@ def rewrite(
         )
         if resp.status_code == 200:
             data = resp.json()
-            text_out = _parse_response(data)
+            text_out = _parse_response(data, params.mode)
             cleaned = _clean_text(text_out, target_chars)
             if len(text_out) > len(cleaned):
                 log.warning("yandex output truncated to %d chars", target_chars)

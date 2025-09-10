@@ -29,13 +29,8 @@ def _instance(cfg) -> Rewriter | None:
 
     global _rewriter
     if _rewriter is None:
-        enabled = bool(getattr(cfg, "YANDEX_REWRITE_ENABLED", False))
-        creds_ok = bool(getattr(cfg, "YANDEX_API_KEY", ""))
-        if enabled and creds_ok:
-            topic_hint = "строительство, инфраструктура, ЖК, дороги, мосты"
-            _rewriter = Rewriter(topic_hint=topic_hint)
-        else:
-            _rewriter = None
+        topic_hint = "строительство, инфраструктура, ЖК, дороги, мосты"
+        _rewriter = Rewriter(cfg, topic_hint=topic_hint)
     return _rewriter
 
 
@@ -58,8 +53,6 @@ def rewrite_text(original: str, cfg) -> str:
             cfg, "REGION_HINT", "Нижегородская область, Нижний Новгород"
         )
         rw = _instance(cfg)
-        if rw is None:
-            return clean_html_tags(_FIGURE_RE.sub(" ", original))
         return rw.rewrite("", original, max_len, region)
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(
@@ -89,10 +82,7 @@ def maybe_rewrite_item(item: Dict[str, Any], cfg) -> Dict[str, Any]:
         title = out.get("title", "")
         body = out.get("content", "")
         rw = _instance(cfg)
-        if rw is None:
-            out["content"] = clean_html_tags(_FIGURE_RE.sub(" ", body))
-        else:
-            out["content"] = rw.rewrite(title, body, max_len, region)
+        out["content"] = rw.rewrite(title, body, max_len, region)
         return out
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(
