@@ -8,8 +8,8 @@ import random
 from typing import Dict, Optional
 
 try:  # pragma: no cover - optional package structure
-    from . import config, images, net
-except Exception:  # pragma: no cover
+    from . import config, images
+except ImportError:  # pragma: no cover
     import config  # type: ignore
     import images  # type: ignore
     import net  # type: ignore
