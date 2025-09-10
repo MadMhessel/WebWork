@@ -30,7 +30,7 @@ class Resp:
 def test_no_fake_tg_file_id_generated(monkeypatch):
     calls = {"bytes": 0}
 
-    def fake_bytes(url, headers=None, timeout=None, allow_redirects=True, params=None):
+    def fake_bytes(url, headers=None, timeout=None, allow_redirects=True, params=None, verify=None):
         calls["bytes"] += 1
         return PNG_DATA
 

@@ -579,24 +579,24 @@ PUBLISH_SLEEP_BETWEEN_SEC: float = float(os.getenv("PUBLISH_SLEEP_BETWEEN_SEC", 
 # === Рерайт (опц.) ===
 REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "600"))
 
-# --- YandexGPT rewrite settings ---
-YANDEX_REWRITE_ENABLED = os.getenv("YANDEX_REWRITE_ENABLED", "true").lower() in {
+# --- Яндекс LLM (Foundation Models) ---
+ENABLE_LLM_REWRITE: bool = os.getenv("ENABLE_LLM_REWRITE", "0").lower() in {
     "1",
     "true",
     "yes",
 }
 YANDEX_API_MODE = os.getenv("YANDEX_API_MODE", "openai").lower()
-YANDEX_API_KEY = os.getenv("YANDEX_API_KEY", "")
-YANDEX_IAM_TOKEN = os.getenv("YANDEX_IAM_TOKEN", "")
-YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID", "")
-YANDEX_MODEL = os.getenv("YANDEX_MODEL", "yandexgpt-lite")
-YANDEX_TEMPERATURE = float(os.getenv("YANDEX_TEMPERATURE", "0.2"))
-YANDEX_MAX_TOKENS = int(os.getenv("YANDEX_MAX_TOKENS", "800"))
-YANDEX_TIMEOUT_CONNECT = float(os.getenv("YANDEX_TIMEOUT_CONNECT", "5"))
-YANDEX_TIMEOUT_READ = float(os.getenv("YANDEX_TIMEOUT_READ", "30"))
-YANDEX_RETRIES = int(os.getenv("YANDEX_RETRIES", "2"))
-YANDEX_TOP_P = float(os.getenv("YANDEX_TOP_P", "1"))
-YANDEX_REQUESTS_PER_MINUTE = int(os.getenv("YANDEX_REQUESTS_PER_MINUTE", "60"))
+YANDEX_API_KEY: str = os.getenv("YANDEX_API_KEY", "").strip()
+YANDEX_IAM_TOKEN: str = os.getenv("YANDEX_IAM_TOKEN", "").strip()
+YANDEX_FOLDER_ID: str = os.getenv("YANDEX_FOLDER_ID", "").strip()
+YANDEX_MODEL: str = os.getenv("YANDEX_MODEL", "yandexgpt-lite").strip()
+YANDEX_TEMPERATURE: float = float(os.getenv("YANDEX_TEMPERATURE", "0.2"))
+YANDEX_MAX_TOKENS: int = int(os.getenv("YANDEX_MAX_TOKENS", "800"))
+YANDEX_TIMEOUT_CONNECT: float = float(os.getenv("YANDEX_TIMEOUT_CONNECT", "5"))
+YANDEX_TIMEOUT_READ: float = float(os.getenv("YANDEX_TIMEOUT_READ", "30"))
+YANDEX_RETRIES: int = int(os.getenv("YANDEX_RETRIES", "2"))
+YANDEX_TOP_P: float = float(os.getenv("YANDEX_TOP_P", "1"))
+YANDEX_REQUESTS_PER_MINUTE: int = int(os.getenv("YANDEX_REQUESTS_PER_MINUTE", "60"))
 
 # === Кластеризация похожих заголовков (опц.) ===
 ENABLE_TITLE_CLUSTERING = os.getenv("ENABLE_TITLE_CLUSTERING", "false").lower() in {"1", "true", "yes"}

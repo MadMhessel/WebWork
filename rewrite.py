@@ -29,7 +29,7 @@ def _instance(cfg) -> Rewriter:
     global _rewriter
     if _rewriter is None:
         creds_ok = bool(getattr(cfg, "YANDEX_API_KEY", "") or getattr(cfg, "YANDEX_IAM_TOKEN", ""))
-        use_llm = bool(getattr(cfg, "YANDEX_REWRITE_ENABLED", False) and creds_ok)
+        use_llm = bool(getattr(cfg, "ENABLE_LLM_REWRITE", False) and creds_ok)
         topic_hint = "строительство, инфраструктура, ЖК, дороги, мосты"
         _rewriter = Rewriter(use_llm=use_llm, topic_hint=topic_hint)
     return _rewriter
