@@ -154,7 +154,7 @@ def rewrite_post(clean_text: str, cfg: Any | None = None) -> Dict[str, Any]:
 
     max_jaccard = float(_get_cfg(cfg, "REWRITE_MAX_JACCARD", 0.72))
     min_hamming = int(_get_cfg(cfg, "REWRITE_MIN_HAMMING", 16))
-    max_chars = int(_get_cfg(cfg, "REWRITE_MAX_CHARS", 900))
+    max_chars = int(_get_cfg(cfg, "REWRITE_MAX_CHARS", 600))
     title_len = int(_get_cfg(cfg, "REWRITE_TITLE_LEN", 120))
 
     # soft rewrite

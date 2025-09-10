@@ -545,7 +545,7 @@ RETRY_BACKOFF_SECONDS: float = float(os.getenv("RETRY_BACKOFF_SECONDS", "2.5"))
 PUBLISH_SLEEP_BETWEEN_SEC: float = float(os.getenv("PUBLISH_SLEEP_BETWEEN_SEC", "0"))
 
 # === Рерайт (опц.) ===
-REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "900"))
+REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "600"))
 EXTERNAL_AI_ENABLED = os.getenv("EXTERNAL_AI_ENABLED", "false").lower() in {"1", "true", "yes"}
 EXTERNAL_AI_ENDPOINT = os.getenv("EXTERNAL_AI_ENDPOINT", "")
 EXTERNAL_AI_KEY = os.getenv("EXTERNAL_AI_KEY", "")

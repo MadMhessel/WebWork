@@ -12,7 +12,7 @@ from .llm import LLMRewriter, LLMConfig
 @dataclass
 class RewriterChainConfig:
     order: List[str] = field(default_factory=lambda: ["llm", "rules", "noop"])
-    target_length: int = 900
+    target_length: int = 600
     llm: LLMConfig = field(default_factory=LLMConfig)
     rules: RuleConfig = field(default_factory=RuleConfig)
 
