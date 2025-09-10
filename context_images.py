@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
-import re
 import random
+import re
 from typing import Dict, Optional
 
-try:  # pragma: no cover - optional package structure
-    from . import config, images
-except ImportError:  # pragma: no cover
+if __package__:  # pragma: no cover
+    from . import config, images, net  # type: ignore
+else:  # running as a standalone script
+    import os as _os
+    import sys as _sys
+
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
     import config  # type: ignore
     import images  # type: ignore
     import net  # type: ignore
