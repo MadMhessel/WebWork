@@ -49,10 +49,16 @@ RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === HTTP-клиент ===
 HTTP_TIMEOUT_CONNECT: float = float(os.getenv("HTTP_TIMEOUT_CONNECT", "5"))
-# ТЗ: смягчённые таймауты (connect=5s, read=10s)
-HTTP_TIMEOUT_READ: float = float(os.getenv("HTTP_TIMEOUT_READ", "10"))
+# ТЗ: connect=5s, read=65s (long-poll up to 30s)
+HTTP_TIMEOUT_READ: float = float(os.getenv("HTTP_TIMEOUT_READ", "65"))
 HTTP_RETRY_TOTAL: int = int(os.getenv("HTTP_RETRY_TOTAL", "3"))
 HTTP_BACKOFF: float = float(os.getenv("HTTP_BACKOFF", "0.5"))
+SSL_NO_VERIFY_HOSTS: set[str] = {
+    h.strip().lower()
+    for h in os.getenv("SSL_NO_VERIFY_HOSTS", "").split(",")
+    if h.strip()
+}
+TELEGRAM_LONG_POLL: int = int(os.getenv("TELEGRAM_LONG_POLL", "30"))
 
 # === Флаги и режимы ===
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}
@@ -79,6 +85,30 @@ IMAGE_DENYLIST_DOMAINS = set(
     for d in os.getenv("IMAGE_DENYLIST_DOMAINS", "mc.yandex.ru,top-fwz1.mail.ru,counter,logo,pixel").split(",")
     if d.strip()
 )
+
+# --- New image subsystem flags ---
+CONTEXT_IMAGE_ENABLED: bool = os.getenv("CONTEXT_IMAGE_ENABLED", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+CONTEXT_IMAGE_PREFERRED: bool = os.getenv(
+    "CONTEXT_IMAGE_PREFERRED", "true"
+).lower() in {"1", "true", "yes"}
+CONTEXT_IMAGE_PROVIDERS: str = os.getenv(
+    "CONTEXT_IMAGE_PROVIDERS", "openverse,wikimedia"
+)
+CONTEXT_LICENSES: str = os.getenv(
+    "CONTEXT_LICENSES", "cc0,cc-by,cc-by-sa"
+)
+ALLOW_PLACEHOLDER: bool = os.getenv("ALLOW_PLACEHOLDER", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+MAX_IMAGE_BYTES: int = int(os.getenv("MAX_IMAGE_BYTES", "18874368"))
+IMAGES_CACHE_DIR: str = os.getenv("IMAGES_CACHE_DIR", "./cache/images")
+REGION_HINT: str = os.getenv("REGION_HINT", "Нижегородская область")
 
 FALLBACK_IMAGE_URL: str = os.getenv(
     "FALLBACK_IMAGE_URL",
@@ -119,13 +149,15 @@ REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
 CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 PREVIEW_MODE: str = os.getenv("PREVIEW_MODE", "auto")
-_RAW_PARSE_MODE = os.getenv("PARSE_MODE", os.getenv("TELEGRAM_PARSE_MODE", "HTML"))
+_RAW_PARSE_MODE = (
+    os.getenv("TELEGRAM_PARSE_MODE")
+    or os.getenv("PARSE_MODE")
+    or "HTML"
+)
 if _RAW_PARSE_MODE.strip().lower() == "markdownv2":
-    TELEGRAM_PARSE_MODE: str = "MarkdownV2"
-elif _RAW_PARSE_MODE.strip().lower() == "html":
-    TELEGRAM_PARSE_MODE = "HTML"
+    PARSE_MODE = TELEGRAM_PARSE_MODE = "MarkdownV2"
 else:
-    TELEGRAM_PARSE_MODE = _RAW_PARSE_MODE.strip()
+    PARSE_MODE = TELEGRAM_PARSE_MODE = "HTML"
 TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = (
     os.getenv(
         "DISABLE_WEB_PAGE_PREVIEW",

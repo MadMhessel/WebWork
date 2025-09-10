@@ -1,5 +1,5 @@
 import base64
-import requests
+from WebWork import net
 import sys
 import pathlib
 
@@ -28,18 +28,13 @@ class Resp:
 
 
 def test_no_fake_tg_file_id_generated(monkeypatch):
-    calls = {"head": 0, "get": 0}
+    calls = {"bytes": 0}
 
-    def fake_head(url, allow_redirects=True, timeout=None, headers=None):
-        calls["head"] += 1
-        return Resp(PNG_DATA)
+    def fake_bytes(url, headers=None, timeout=None, allow_redirects=True, params=None):
+        calls["bytes"] += 1
+        return PNG_DATA
 
-    def fake_get(url, stream=True, timeout=None, headers=None):
-        calls["get"] += 1
-        return Resp(PNG_DATA)
-
-    monkeypatch.setattr(requests, "head", fake_head)
-    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(net, "get_bytes", fake_bytes)
     monkeypatch.setattr(images, "MIN_WIDTH", 1)
     monkeypatch.setattr(images, "MIN_HEIGHT", 1)
     monkeypatch.setattr(images, "MIN_BYTES", 0)
@@ -53,4 +48,4 @@ def test_no_fake_tg_file_id_generated(monkeypatch):
     fid2, h2 = images.ensure_tg_file_id("http://e/img.png", conn)
     assert fid1 is None and fid2 is None
     assert h1 == h2
-    assert calls["head"] == 1 and calls["get"] == 1
+    assert calls["bytes"] == 1
