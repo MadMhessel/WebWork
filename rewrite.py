@@ -30,10 +30,7 @@ def _instance(cfg) -> Rewriter | None:
     global _rewriter
     if _rewriter is None:
         enabled = bool(getattr(cfg, "YANDEX_REWRITE_ENABLED", False))
-        creds_ok = bool(
-            getattr(cfg, "YANDEX_API_KEY", "")
-            or getattr(cfg, "YANDEX_IAM_TOKEN", "")
-        )
+        creds_ok = bool(getattr(cfg, "YANDEX_API_KEY", ""))
         if enabled and creds_ok:
             topic_hint = "строительство, инфраструктура, ЖК, дороги, мосты"
             _rewriter = Rewriter(topic_hint=topic_hint)

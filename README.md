@@ -35,9 +35,8 @@ python -m config init
   `IMAGES_CACHE_DIR`
 - `MAX_POST_LEN`, `MAX_CAPTION_LEN`, `REWRITE_TARGET_LEN`, `REGION_HINT`,
   `PARSE_MODE`, `SPLIT_LONG_POSTS`
-- `YANDEX_REWRITE_ENABLED`, `YANDEX_API_MODE`, `YANDEX_API_KEY`,
-  `YANDEX_IAM_TOKEN`, `YANDEX_FOLDER_ID`, `YANDEX_MODEL`,
-  `YANDEX_TEMPERATURE`, `YANDEX_MAX_TOKENS`
+- `YANDEX_REWRITE_ENABLED`, `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`,
+  `YANDEX_MODEL`, `YANDEX_TEMPERATURE`, `YANDEX_MAX_TOKENS`
 - ключевые слова и источники в `newsbot/config.py`
 
 ### Подсистема изображений
@@ -65,9 +64,7 @@ python -m config init
 учётные данные:
 
 ```
-YANDEX_API_MODE=openai  # или rest
-YANDEX_API_KEY=<API-ключ>         # для режима openai
-YANDEX_IAM_TOKEN=<IAM‑токен>      # для режима rest
+YANDEX_API_KEY=<API-ключ>
 YANDEX_FOLDER_ID=<folder-id>
 ```
 

@@ -1,5 +1,6 @@
 import types
 from unittest.mock import Mock
+import types
 
 import pytest
 
@@ -21,9 +22,7 @@ class DummyResp:
 def _mk_cfg(**over):
     cfg = types.SimpleNamespace(
         YANDEX_REWRITE_ENABLED=True,
-        YANDEX_API_MODE="openai",
         YANDEX_API_KEY="k",
-        YANDEX_IAM_TOKEN="t",
         YANDEX_FOLDER_ID="f",
         YANDEX_MODEL="m",
         YANDEX_TEMPERATURE=0.2,
@@ -56,22 +55,6 @@ def test_openai_parsing(monkeypatch):
     assert "ответ" in out
     assert len(out) <= 50
     post.assert_called_once()
-
-
-def test_rest_parsing(monkeypatch):
-    cfg = _mk_cfg(YANDEX_API_MODE="rest")
-    monkeypatch.setattr(yandex_llm, "config", cfg)
-    resp = DummyResp(
-        data={"result": {"alternatives": [{"message": {"text": "ok"}}]}},
-    )
-    post = Mock(return_value=resp)
-
-    class Sess:
-        def post(self, *a, **kw):
-            return post(*a, **kw)
-
-    monkeypatch.setattr(yandex_llm.http_client, "get_session", lambda: Sess())
-    assert yandex_llm.rewrite("текст", target_chars=10, topic_hint=None, region_hint=None) == "ok"
 
 
 def test_retry_on_429(monkeypatch):

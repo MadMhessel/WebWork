@@ -15,7 +15,6 @@ import yandex_llm
 logger = logging.getLogger(__name__)
 
 
-
 class Rewriter:
     """Thin wrapper around :func:`yandex_llm.rewrite`."""
 

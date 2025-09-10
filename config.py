@@ -585,9 +585,7 @@ YANDEX_REWRITE_ENABLED: bool = os.getenv("YANDEX_REWRITE_ENABLED", "0").lower() 
     "true",
     "yes",
 }
-YANDEX_API_MODE = os.getenv("YANDEX_API_MODE", "openai").lower()
 YANDEX_API_KEY: str = os.getenv("YANDEX_API_KEY", "").strip()
-YANDEX_IAM_TOKEN: str = os.getenv("YANDEX_IAM_TOKEN", "").strip()
 YANDEX_FOLDER_ID: str = os.getenv("YANDEX_FOLDER_ID", "").strip()
 YANDEX_MODEL: str = os.getenv("YANDEX_MODEL", "yandexgpt-lite").strip()
 YANDEX_TEMPERATURE: float = float(os.getenv("YANDEX_TEMPERATURE", "0.2"))
