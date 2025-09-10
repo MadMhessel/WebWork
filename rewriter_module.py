@@ -18,7 +18,8 @@ import logging
 import re
 from typing import List, Protocol
 
-from formatting import clean_html_tags, html_escape, truncate_by_chars
+from formatting import clean_html_tags, truncate_by_chars
+import yandex_llm
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,12 @@ class Strategy(Protocol):
     """Common interface for rewriting strategies."""
 
     def rewrite(
-        self, title: str, body_html: str, max_len: int, region_hint: str
+        self,
+        title: str,
+        body_html: str,
+        max_len: int,
+        region_hint: str,
+        topic_hint: str,
     ) -> str:  # pragma: no cover - protocol
         ...
 
@@ -48,7 +54,12 @@ class RuleBasedStrategy:
         return [s.strip() for s in self._SENT_RE.split(text) if s.strip()]
 
     def rewrite(
-        self, title: str, body_html: str, max_len: int, region_hint: str
+        self,
+        title: str,
+        body_html: str,
+        max_len: int,
+        region_hint: str,
+        topic_hint: str,
     ) -> str:
         # strip HTML tags and split into sentences
         plain = clean_html_tags(body_html)
@@ -60,7 +71,6 @@ class RuleBasedStrategy:
         bullets = [b for b in bullets[:6] if b]
         parts = [lead, ""] + [f"{self.bullet} {b}" for b in bullets]
         text = "\n".join(parts)
-        text = html_escape(text)
         return truncate_by_chars(text, max_len)
 
 
@@ -69,18 +79,24 @@ class RuleBasedStrategy:
 
 
 class LLMStrategy:
-    """Very small wrapper around an external LLM service.
-
-    The implementation purposely avoids making real network requests.  Instead
-    it raises :class:`RuntimeError` signalling that the service is not
-    available.  Tests ensure that :class:`Rewriter` falls back to the
-    :class:`RuleBasedStrategy` when this happens.
-    """
+    """Wrapper around YandexGPT service."""
 
     def rewrite(
-        self, title: str, body_html: str, max_len: int, region_hint: str
-    ) -> str:  # pragma: no cover - simple stub
-        raise RuntimeError("LLM service is not configured")
+        self,
+        title: str,
+        body_html: str,
+        max_len: int,
+        region_hint: str,
+        topic_hint: str,
+    ) -> str:
+        plain = clean_html_tags(body_html)
+        prompt = f"{title}\n\n{plain}".strip()
+        return yandex_llm.rewrite(
+            prompt,
+            target_chars=max_len,
+            topic_hint=topic_hint,
+            region_hint=region_hint or None,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -90,29 +106,39 @@ class LLMStrategy:
 class Rewriter:
     """Facade choosing the appropriate strategy."""
 
-    def __init__(self, use_llm: bool = False) -> None:
+    def __init__(self, use_llm: bool = False, topic_hint: str = "строительство, инфраструктура, ЖК, дороги, мосты") -> None:
         self.strategy: Strategy
         self.rule_based = RuleBasedStrategy()
+        self.topic_hint = topic_hint
         if use_llm:
             try:
                 self.strategy = LLMStrategy()
+                logger.info("using YandexGPT strategy")
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("LLM strategy unavailable: %s", exc)
                 self.strategy = self.rule_based
         else:
             self.strategy = self.rule_based
+            logger.info("using rule-based strategy")
 
     def rewrite(
         self, title: str, body_html: str, max_len: int, region_hint: str
     ) -> str:
         try:
-            text = self.strategy.rewrite(title, body_html, max_len, region_hint)
+            text = self.strategy.rewrite(
+                title, body_html, max_len, region_hint, self.topic_hint
+            )
         except Exception as exc:
             logger.warning(
                 "rewrite failed via %s: %s", type(self.strategy).__name__, exc
             )
-            text = self.rule_based.rewrite(title, body_html, max_len, region_hint)
-        return truncate_by_chars(text, max_len)
+            text = self.rule_based.rewrite(
+                title, body_html, max_len, region_hint, self.topic_hint
+            )
+        result = truncate_by_chars(text, max_len)
+        if len(result) < len(text):
+            logger.warning("rewrite truncated to %d chars", max_len)
+        return result
 
 
 __all__ = ["Rewriter", "RuleBasedStrategy", "LLMStrategy"]
