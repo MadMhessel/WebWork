@@ -12,8 +12,9 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 try:
-    from . import config, db, context_images  # type: ignore
-except ImportError:  # pragma: no cover
+    from . import config, db, context_images, net  # type: ignore
+except ImportError:  # pragma: no cover - fall back to absolute imports when
+    # running as a standalone script
     import config  # type: ignore
     import db  # type: ignore
     import context_images  # type: ignore
