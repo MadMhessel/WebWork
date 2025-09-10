@@ -28,8 +28,10 @@ def _instance(cfg) -> Rewriter:
 
     global _rewriter
     if _rewriter is None:
-        use_llm = bool(getattr(cfg, "ENABLE_LLM_REWRITE", False))
-        _rewriter = Rewriter(use_llm=use_llm)
+        creds_ok = bool(getattr(cfg, "YANDEX_API_KEY", "") or getattr(cfg, "YANDEX_IAM_TOKEN", ""))
+        use_llm = bool(getattr(cfg, "YANDEX_REWRITE_ENABLED", False) and creds_ok)
+        topic_hint = "строительство, инфраструктура, ЖК, дороги, мосты"
+        _rewriter = Rewriter(use_llm=use_llm, topic_hint=topic_hint)
     return _rewriter
 
 
@@ -48,7 +50,9 @@ def rewrite_text(original: str, cfg) -> str:
         max_len = int(
             getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000))
         )
-        region = getattr(cfg, "REGION_HINT", "")
+        region = getattr(
+            cfg, "REGION_HINT", "Нижегородская область, Нижний Новгород"
+        )
         return _instance(cfg).rewrite("", original, max_len, region)
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(
@@ -72,7 +76,9 @@ def maybe_rewrite_item(item: Dict[str, Any], cfg) -> Dict[str, Any]:
         max_len = int(
             getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000))
         )
-        region = getattr(cfg, "REGION_HINT", "")
+        region = getattr(
+            cfg, "REGION_HINT", "Нижегородская область, Нижний Новгород"
+        )
         title = out.get("title", "")
         body = out.get("content", "")
         out["content"] = _instance(cfg).rewrite(title, body, max_len, region)
