@@ -29,4 +29,6 @@ echo Дальнейшие команды:
 echo   python main.py             # запуск одного прохода
 echo   python main.py --loop      # запуск в бесконечном цикле
 
+pause
+
 endlocal
