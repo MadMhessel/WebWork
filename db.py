@@ -104,7 +104,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             hash TEXT,
             width INTEGER,
             height INTEGER,
-            tg_file_id TEXT
+            tg_file_id TEXT,
+            created_at TIMESTAMP DEFAULT (strftime('%s','now'))
         );
 
         CREATE TABLE IF NOT EXISTS editor_state (
@@ -201,8 +202,12 @@ def put_cached_file_id(
 ) -> None:
     """Store Telegram file_id for image URL."""
     conn.execute(
-        "INSERT OR REPLACE INTO images_cache(src_url, hash, width, height, tg_file_id) VALUES (?,?,?,?,?)",
-        (src_url, img_hash, width, height, tg_file_id),
+        (
+            "INSERT OR REPLACE INTO images_cache("  # noqa: E501
+            "src_url, hash, width, height, tg_file_id, created_at"  # columns
+            ") VALUES (?,?,?,?,?,COALESCE((SELECT created_at FROM images_cache WHERE src_url=?), strftime('%s','now')))"
+        ),
+        (src_url, img_hash, width, height, tg_file_id, src_url),
     )
     conn.commit()
 

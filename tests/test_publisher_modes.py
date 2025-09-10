@@ -1,8 +1,12 @@
 import sys
 import pathlib
 import sqlite3
+import sys
+from io import BytesIO
 
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.append(str(ROOT))
+sys.path.append(str(ROOT / "WebWork"))
 from WebWork import publisher, db, moderator, config
 
 
@@ -20,8 +24,8 @@ def test_publish_from_queue_prefers_url_then_caches_file_id(monkeypatch):
 
     called = {}
 
-    def fake_send_photo(chat_id, photo, caption, parse_mode):
-        called["photo"] = photo
+    def fake_send_photo(chat_id, photo, caption, parse_mode, mime=None):
+        called["photo_type"] = type(photo).__name__
         return ("m1", "fid1")
 
     def fake_send_text(chat_id, text, parse_mode):
@@ -29,10 +33,11 @@ def test_publish_from_queue_prefers_url_then_caches_file_id(monkeypatch):
 
     monkeypatch.setattr(publisher, "_send_photo", fake_send_photo)
     monkeypatch.setattr(publisher, "_send_text", fake_send_text)
+    monkeypatch.setattr(publisher, "_download_image", lambda url, cfg=config: (BytesIO(b"img"), "image/jpeg"))
 
     mid = publisher.publish_from_queue(conn, 1, cfg=config)
     assert mid == "m1"
-    assert called["photo"] == "http://img"
+    assert called["photo_type"] == "BytesIO"
     row = conn.execute("SELECT tg_file_id FROM moderation_queue WHERE id=1").fetchone()
     assert row["tg_file_id"] == "fid1"
     assert db.get_cached_file_id(conn, "http://img") == "fid1"
@@ -45,8 +50,8 @@ def test_publisher_message_with_image_url_sends_photo(monkeypatch):
     monkeypatch.setattr(config, "ATTACH_IMAGES", True)
     called = {}
 
-    def fake_send_photo(chat_id, photo, caption, parse_mode):
-        called["photo"] = photo
+    def fake_send_photo(chat_id, photo, caption, parse_mode, mime=None):
+        called["photo_type"] = type(photo).__name__
         return ("m1", "fid2")
 
     def fake_send_text(chat_id, text, parse_mode):
@@ -55,10 +60,11 @@ def test_publisher_message_with_image_url_sends_photo(monkeypatch):
 
     monkeypatch.setattr(publisher, "_send_photo", fake_send_photo)
     monkeypatch.setattr(publisher, "_send_text", fake_send_text)
+    monkeypatch.setattr(publisher, "_download_image", lambda url, cfg=config: (BytesIO(b"img"), "image/jpeg"))
 
     ok = publisher.publish_message("100", "t", "b", "u", image_url="http://img2", cfg=config)
     assert ok is True
-    assert called["photo"] == "http://img2"
+    assert called["photo_type"] == "BytesIO"
     assert db.get_cached_file_id(conn, "http://img2") == "fid2"
 
 
