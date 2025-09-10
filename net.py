@@ -30,7 +30,7 @@ def _timeout(read: Optional[float]) -> tuple[float, float]:
     return (connect, read_to)
 
 
-def _need_verify(url: str) -> bool:
+def _verify_for(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower()
     disabled = getattr(config, "SSL_NO_VERIFY_HOSTS", set())
     return host not in disabled
@@ -44,12 +44,13 @@ def _request(
     headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, str]] = None,
     stream: bool = False,
+    verify: Optional[bool] = None,
 ) -> requests.Response:
     sess = http_client.get_session()
     hdrs = dict(_BROWSER_HEADERS)
     if headers:
         hdrs.update(headers)
-    verify = _need_verify(url)
+    verify_flag = _verify_for(url) if verify is None else verify
     t = _timeout(timeout)
     total = int(getattr(config, "HTTP_RETRY_TOTAL", 3))
     backoff = float(getattr(config, "HTTP_BACKOFF", 0.5))
@@ -61,7 +62,7 @@ def _request(
                 timeout=t,
                 allow_redirects=allow_redirects,
                 headers=hdrs,
-                verify=verify,
+                verify=verify_flag,
                 params=params,
                 stream=stream,
             )
@@ -84,6 +85,7 @@ def get_text(
     allow_redirects: bool = True,
     headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, str]] = None,
+    verify: Optional[bool] = None,
 ) -> str:
     resp = _request(
         url,
@@ -91,6 +93,7 @@ def get_text(
         allow_redirects=allow_redirects,
         headers=headers,
         params=params,
+        verify=verify,
     )
     try:
         resp.raise_for_status()
@@ -106,6 +109,7 @@ def get_bytes(
     allow_redirects: bool = True,
     headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, str]] = None,
+    verify: Optional[bool] = None,
 ) -> bytes:
     resp = _request(
         url,
@@ -114,6 +118,7 @@ def get_bytes(
         headers=headers,
         params=params,
         stream=True,
+        verify=verify,
     )
     try:
         resp.raise_for_status()

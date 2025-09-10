@@ -89,6 +89,27 @@ image_stats: Dict[str, int] = {
 }
 
 
+def _verify_for(url: str) -> bool:
+    try:
+        bad = getattr(config, "SSL_NO_VERIFY_HOSTS", set())
+    except Exception:
+        bad = set()
+    host = (urlparse(url).hostname or "").lower()
+    return host not in bad
+
+
+def _is_trash_url(u: str) -> bool:
+    if not u:
+        return True
+    l = u.strip().lower()
+    if not (l.startswith("http://") or l.startswith("https://")):
+        return True
+    if l.endswith(".svg") or l.endswith(".gif"):
+        return True
+    bad = ("vk.com/rtrg", "metrika", "counter", "pixel", "stats", "spacer")
+    return any(b in l for b in bad)
+
+
 @dataclass
 class ImageCandidate:
     url: str
@@ -196,11 +217,9 @@ def extract_candidates(item: Dict) -> List[ImageCandidate]:
             continue
         if u in seen:
             continue
+        if _is_trash_url(u):
+            continue
         low = u.lower()
-        if low.startswith("data:"):
-            continue
-        if low.endswith(".svg"):
-            continue
         if PLACEHOLDER_RE.search(low):
             continue
         host = (urlparse(u).hostname or "").lower()
@@ -221,7 +240,7 @@ def select_image(item: Dict, cfg=config) -> Optional[str]:
     best_url: Optional[str] = None
     best_area = 0
     for cand in cands:
-        if not net.is_downloadable_image_url(cand.url):
+        if _is_trash_url(cand.url) or not net.is_downloadable_image_url(cand.url):
             continue
         info = probe_image(cand.url, referer=item.get("url"))
         if not info:
@@ -353,10 +372,15 @@ def probe_image(
     HEAD -> GET, проверяем размер, минимум байт, пробуем распарсить размер.
     Возвращает (sha1-hex[:16], width, height) или None.
     """
-    if not net.is_downloadable_image_url(url):
+    if _is_trash_url(url) or not net.is_downloadable_image_url(url):
         return None
     try:
-        raw = net.get_bytes(url, headers=_headers(referer), timeout=IMAGE_TIMEOUT)
+        raw = net.get_bytes(
+            url,
+            headers=_headers(referer),
+            timeout=IMAGE_TIMEOUT,
+            verify=_verify_for(url),
+        )
     except Exception:
         image_stats["download_fail"] += 1
         return None
@@ -406,10 +430,15 @@ def download_image(
     Скачивает изображение (с конвертацией webp->jpeg при наличии Pillow).
     Возвращает (bytes, mime) или None.
     """
-    if not net.is_downloadable_image_url(url):
+    if _is_trash_url(url) or not net.is_downloadable_image_url(url):
         return None
     try:
-        raw = net.get_bytes(url, headers=_headers(referer), timeout=IMAGE_TIMEOUT)
+        raw = net.get_bytes(
+            url,
+            headers=_headers(referer),
+            timeout=IMAGE_TIMEOUT,
+            verify=_verify_for(url),
+        )
     except Exception:
         image_stats["download_fail"] += 1
         return None
