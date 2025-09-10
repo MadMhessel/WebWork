@@ -61,7 +61,7 @@ ALLOWED_EXT = {
 }
 FALLBACK_IMAGE_URL = getattr(config, "FALLBACK_IMAGE_URL", "")
 ATTACH_IMAGES = bool(getattr(config, "ATTACH_IMAGES", True))
-ALLOW_PLACEHOLDER = False
+ALLOW_PLACEHOLDER = bool(getattr(config, "ALLOW_PLACEHOLDER", False))
 
 IMAGES_CACHE_DIR = Path(getattr(config, "IMAGES_CACHE_DIR", "./cache/images"))
 MAX_SIDE = 1600
@@ -251,7 +251,7 @@ def select_image(item: Dict, cfg=config) -> Optional[str]:
                 return best_ext.url
         except Exception:
             logger.debug("image_pipeline fallback failed", exc_info=True)
-    if ATTACH_IMAGES and FALLBACK_IMAGE_URL:
+    if ATTACH_IMAGES and FALLBACK_IMAGE_URL and ALLOW_PLACEHOLDER:
         return FALLBACK_IMAGE_URL
     return None
 
@@ -567,7 +567,7 @@ def resolve_image(item: Dict, conn: Optional[sqlite3.Connection] = None) -> Dict
     payload = download_image(url, referer=item.get("url"))
     if not payload:
         image_stats["download_fail"] += 1
-        if ATTACH_IMAGES and FALLBACK_IMAGE_URL:
+        if ATTACH_IMAGES and FALLBACK_IMAGE_URL and ALLOW_PLACEHOLDER:
             return {"image_url": FALLBACK_IMAGE_URL}
         return {}
 

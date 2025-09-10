@@ -81,7 +81,7 @@ filters:
   rewriter:
     enabled: true
     order: ["llm", "rules", "noop"]
-    target_length: 900
+    target_length: 600
     llm:
       provider: "openai"
       model: "gpt-4o-mini"
