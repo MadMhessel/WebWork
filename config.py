@@ -80,6 +80,30 @@ IMAGE_DENYLIST_DOMAINS = set(
     if d.strip()
 )
 
+# --- New image subsystem flags ---
+CONTEXT_IMAGE_ENABLED: bool = os.getenv("CONTEXT_IMAGE_ENABLED", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+CONTEXT_IMAGE_PREFERRED: bool = os.getenv(
+    "CONTEXT_IMAGE_PREFERRED", "false"
+).lower() in {"1", "true", "yes"}
+CONTEXT_IMAGE_PROVIDERS: str = os.getenv(
+    "CONTEXT_IMAGE_PROVIDERS", "openverse,wikimedia"
+)
+CONTEXT_LICENSES: str = os.getenv(
+    "CONTEXT_LICENSES", "cc0,cc-by,cc-by-sa"
+)
+ALLOW_PLACEHOLDER: bool = os.getenv("ALLOW_PLACEHOLDER", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+MAX_IMAGE_BYTES: int = int(os.getenv("MAX_IMAGE_BYTES", "18874368"))
+IMAGES_CACHE_DIR: str = os.getenv("IMAGES_CACHE_DIR", "./cache/images")
+REGION_HINT: str = os.getenv("REGION_HINT", "Нижегородская область")
+
 FALLBACK_IMAGE_URL: str = os.getenv(
     "FALLBACK_IMAGE_URL",
     DEFAULT_FALLBACK_IMAGE_URL,

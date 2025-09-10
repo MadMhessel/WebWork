@@ -16,10 +16,11 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 try:
-    from . import config, db  # type: ignore
+    from . import config, db, context_images  # type: ignore
 except Exception:  # pragma: no cover
     import config  # type: ignore
     import db  # type: ignore
+    import context_images  # type: ignore
 
 try:
     from PIL import Image  # type: ignore
@@ -235,22 +236,6 @@ def select_image(item: Dict, cfg=config) -> Optional[str]:
             best_url = cand.url
     if best_url:
         return best_url
-    # Fallback: try full-page HTML analysis via image_pipeline if enabled
-    if getattr(cfg, "ENABLE_IMAGE_PIPELINE", False) and item.get("url"):
-        try:
-            try:
-                from . import image_pipeline  # type: ignore
-            except Exception:  # pragma: no cover
-                import image_pipeline  # type: ignore
-            html = image_pipeline.fetch_html(item["url"])
-            cands_ext = image_pipeline.extract_image_candidates(
-                html, base_url=item["url"]
-            )
-            best_ext = image_pipeline.choose_best_candidate(cands_ext)
-            if best_ext:
-                return best_ext.url
-        except Exception:
-            logger.debug("image_pipeline fallback failed", exc_info=True)
     if ATTACH_IMAGES and FALLBACK_IMAGE_URL and ALLOW_PLACEHOLDER:
         return FALLBACK_IMAGE_URL
     return None
@@ -267,7 +252,8 @@ def _ensure_cache_schema(conn: sqlite3.Connection) -> None:
             hash      TEXT,
             width     INTEGER,
             height    INTEGER,
-            tg_file_id TEXT
+            tg_file_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
@@ -533,54 +519,74 @@ def pick_and_download(urls: List[str]) -> Optional[Dict[str, object]]:
 
 
 def resolve_image(item: Dict, conn: Optional[sqlite3.Connection] = None) -> Dict:
+    """Resolve and download image for a news item.
+
+    Returns dictionary ready for Telegram ``sendPhoto`` or empty dict if none
+    found.  Tries context providers according to configuration and always
+    returns local bytes or a cached ``tg_file_id``.
     """
-    Пытается найти и подготовить картинку для поста.
-    Возвращает dict либо пустой {}:
-      {
-        "url": "...",
-        "bytes": b"...",      # готово для sendPhoto
-        "mime": "image/jpeg",
-        "hash": "abcd1234ef...",
-        "width": 1200,
-        "height": 630,
-      }
-    """
+
     image_stats["checked"] += 1
 
+    use_context = getattr(config, "CONTEXT_IMAGE_ENABLED", True)
+    prefer_context = getattr(config, "CONTEXT_IMAGE_PREFERRED", False)
+
+    # 1) Context image first
+    if use_context and prefer_context:
+        ctx = context_images.fetch_context_image(item, config)
+        if ctx:
+            if conn:
+                fid = db.get_cached_file_id(conn, ctx["image_url"])
+                if fid:
+                    ctx["tg_file_id"] = fid
+                    ctx.pop("bytes", None)
+            image_stats["with_image"] += 1
+            return ctx
+
+    # 2) Image from original site
     url = select_image(item)
-    if not url:
-        image_stats["no_candidate"] += 1
-        return {}
-    if url == FALLBACK_IMAGE_URL:
-        return {"image_url": url}
+    if url:
+        if url == FALLBACK_IMAGE_URL:
+            return {"image_url": url}
+        fid = None
+        if conn:
+            try:
+                fid = db.get_cached_file_id(conn, url)
+            except Exception:
+                fid = None
+        if fid:
+            image_stats["with_image"] += 1
+            return {"image_url": url, "tg_file_id": fid}
+        payload = download_image(url, referer=item.get("url"))
+        if payload:
+            raw, mime = payload
+            w, h, _ = _probe_bytes(raw)
+            ihash = hashlib.sha1(raw).hexdigest()[:16]
+            image_stats["with_image"] += 1
+            return {
+                "image_url": url,
+                "bytes": raw,
+                "mime": mime,
+                "image_hash": ihash,
+                "width": int(w or 0),
+                "height": int(h or 0),
+                "tg_file_id": None,
+            }
 
-    fid = None
-    if conn:
-        try:
-            fid = db.get_cached_file_id(conn, url)
-        except Exception:
-            fid = None
-    if fid:
-        image_stats["with_image"] += 1
-        return {"image_url": url, "tg_file_id": fid}
+    # 3) Context fallback
+    if use_context:
+        ctx = context_images.fetch_context_image(item, config)
+        if ctx:
+            if conn:
+                fid = db.get_cached_file_id(conn, ctx["image_url"])
+                if fid:
+                    ctx["tg_file_id"] = fid
+                    ctx.pop("bytes", None)
+            image_stats["with_image"] += 1
+            return ctx
 
-    payload = download_image(url, referer=item.get("url"))
-    if not payload:
-        image_stats["download_fail"] += 1
-        if ATTACH_IMAGES and FALLBACK_IMAGE_URL and ALLOW_PLACEHOLDER:
-            return {"image_url": FALLBACK_IMAGE_URL}
-        return {}
-
-    raw, mime = payload
-    w, h, _ = _probe_bytes(raw)
-    ihash = hashlib.sha1(raw).hexdigest()[:16]
-    image_stats["with_image"] += 1
-    return {
-        "image_url": url,
-        "bytes": raw,
-        "mime": mime,
-        "image_hash": ihash,
-        "width": int(w or 0),
-        "height": int(h or 0),
-        "tg_file_id": None,
-    }
+    # 4) Placeholder or empty
+    if ATTACH_IMAGES and FALLBACK_IMAGE_URL and ALLOW_PLACEHOLDER:
+        return {"image_url": FALLBACK_IMAGE_URL}
+    image_stats["no_candidate"] += 1
+    return {}
