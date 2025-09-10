@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import random
+import re
 from typing import Dict, Optional
 
-try:  # pragma: no cover - allow usage both as a package and standalone module
+if __package__:  # pragma: no cover
     from . import config, images, net  # type: ignore
-except ImportError:  # pragma: no cover
-    # When executed as a script from an arbitrary directory, ensure local
-    # modules are importable
-    import os
-    import sys
+else:  # running as a standalone script
+    import os as _os
+    import sys as _sys
 
-    sys.path.append(os.path.dirname(__file__))
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
     import config  # type: ignore
     import images  # type: ignore
     import net  # type: ignore

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import hashlib
 import io
 import json
@@ -11,14 +12,13 @@ from html import unescape
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
-try:
+if __package__:  # pragma: no cover
     from . import config, db, context_images, net  # type: ignore
-except ImportError:  # pragma: no cover - fall back to absolute imports when
-    # running as a standalone script or from an arbitrary working directory
-    import os
-    import sys
+else:  # running as a standalone script
+    import os as _os
+    import sys as _sys
 
-    sys.path.append(os.path.dirname(__file__))
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
     import config  # type: ignore
     import db  # type: ignore
     import context_images  # type: ignore
