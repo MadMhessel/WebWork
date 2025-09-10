@@ -1,5 +1,4 @@
 from __future__ import annotations
-import base64
 import hashlib
 import io
 import json
@@ -8,7 +7,9 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 from html import unescape
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
@@ -22,10 +23,19 @@ except Exception:  # pragma: no cover
 
 try:
     from PIL import Image  # type: ignore
+
     PIL_OK = True
 except Exception:  # pragma: no cover
     Image = None  # type: ignore
     PIL_OK = False
+
+try:  # pragma: no cover - optional dependency
+    import imagehash  # type: ignore
+
+    IMAGEHASH_OK = True
+except Exception:  # pragma: no cover
+    imagehash = None  # type: ignore
+    IMAGEHASH_OK = False
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +50,23 @@ MIN_WIDTH = MIN_HEIGHT = int(getattr(config, "IMAGE_MIN_EDGE", 220))
 MIN_AREA = int(getattr(config, "IMAGE_MIN_AREA", 45000))
 MIN_RATIO = float(getattr(config, "IMAGE_MIN_RATIO", 0.5))
 MAX_RATIO = float(getattr(config, "IMAGE_MAX_RATIO", 3.0))
-ALLOWED_DOMAINS = {d.lower() for d in getattr(config, "IMAGE_ALLOWED_DOMAINS", set()) if d}
-ALLOWED_EXT = {e.lower() for e in getattr(config, "IMAGE_ALLOWED_EXT", {'.jpg','.jpeg','.png','.webp'})}
+ALLOWED_DOMAINS = {
+    d.lower() for d in getattr(config, "IMAGE_ALLOWED_DOMAINS", set()) if d
+}
+ALLOWED_EXT = {
+    e.lower()
+    for e in getattr(
+        config, "IMAGE_ALLOWED_EXT", {".jpg", ".jpeg", ".png", ".webp", ".avif"}
+    )
+}
 FALLBACK_IMAGE_URL = getattr(config, "FALLBACK_IMAGE_URL", "")
 ATTACH_IMAGES = bool(getattr(config, "ATTACH_IMAGES", True))
 ALLOW_PLACEHOLDER = False
+
+IMAGES_CACHE_DIR = Path(getattr(config, "IMAGES_CACHE_DIR", "./cache/images"))
+MAX_SIDE = 1600
+
+_PHASH_CACHE: Dict[str, Path] = {}
 
 # Фильтры «мусора» и плейсхолдеров
 PLACEHOLDER_RE = re.compile(
@@ -65,26 +87,39 @@ image_stats: Dict[str, int] = {
     "converted_webp": 0,
 }
 
+
 @dataclass
 class ImageCandidate:
     url: str
     source: str = ""  # enclosure|og|twitter|jsonld|content|srcset
 
+
 # -------------------- Вспомогательные функции парсинга HTML --------------------
 
-_META_OG = re.compile(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', re.I)
-_META_OG_SEC = re.compile(r'<meta[^>]+property=["\']og:image:secure_url["\'][^>]+content=["\']([^"\']+)["\']', re.I)
-_META_TW = re.compile(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', re.I)
-_JSON_LD_RE = re.compile(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
+_META_OG = re.compile(
+    r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', re.I
+)
+_META_OG_SEC = re.compile(
+    r'<meta[^>]+property=["\']og:image:secure_url["\'][^>]+content=["\']([^"\']+)["\']',
+    re.I,
+)
+_META_TW = re.compile(
+    r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', re.I
+)
+_JSON_LD_RE = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S
+)
 _IMG_SRC_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
 _IMG_DATASRC_RE = re.compile(r'<img[^>]+data-src=["\']([^"\']+)["\']', re.I)
 _IMG_SRCSET_RE = re.compile(r'<img[^>]+srcset=["\']([^"\']+)["\']', re.I)
+
 
 def _abs(base: Optional[str], url: str) -> str:
     try:
         return urljoin(base or "", url)
     except Exception:
         return url
+
 
 def _parse_srcset(srcset: str) -> List[str]:
     out: List[str] = []
@@ -96,6 +131,7 @@ def _parse_srcset(srcset: str) -> List[str]:
         if url:
             out.append(url)
     return out
+
 
 def _json_ld_images(html: str) -> List[str]:
     urls: List[str] = []
@@ -113,7 +149,9 @@ def _json_ld_images(html: str) -> List[str]:
                     urls.extend([str(x) for x in v if x])
     return urls
 
+
 # -------------------- Кандидаты и выбор --------------------
+
 
 def extract_candidates(item: Dict) -> List[ImageCandidate]:
     """
@@ -175,6 +213,7 @@ def extract_candidates(item: Dict) -> List[ImageCandidate]:
 
     return final
 
+
 def select_image(item: Dict, cfg=config) -> Optional[str]:
     """Return best image URL for item or FALLBACK."""
     cands = extract_candidates(item)
@@ -204,7 +243,9 @@ def select_image(item: Dict, cfg=config) -> Optional[str]:
             except Exception:  # pragma: no cover
                 import image_pipeline  # type: ignore
             html = image_pipeline.fetch_html(item["url"])
-            cands_ext = image_pipeline.extract_image_candidates(html, base_url=item["url"])
+            cands_ext = image_pipeline.extract_image_candidates(
+                html, base_url=item["url"]
+            )
             best_ext = image_pipeline.choose_best_candidate(cands_ext)
             if best_ext:
                 return best_ext.url
@@ -214,7 +255,9 @@ def select_image(item: Dict, cfg=config) -> Optional[str]:
         return FALLBACK_IMAGE_URL
     return None
 
+
 # -------------------- Работа с БД кэша --------------------
+
 
 def _ensure_cache_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -228,10 +271,15 @@ def _ensure_cache_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_images_cache_hash ON images_cache(hash)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_images_cache_hash ON images_cache(hash)"
+    )
     conn.commit()
 
-def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None) -> Tuple[Optional[str], Optional[str]]:
+
+def ensure_tg_file_id(
+    image_url: str, conn: Optional[sqlite3.Connection] = None
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Возвращает (tg_file_id, hash). Если записи нет — вычисляет hash/размеры и кладёт в кэш (tg_file_id остаётся None).
     """
@@ -239,7 +287,9 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
         return None, None
     if conn is not None:
         _ensure_cache_schema(conn)
-        row = conn.execute("SELECT tg_file_id, hash FROM images_cache WHERE src_url = ?", (image_url,)).fetchone()
+        row = conn.execute(
+            "SELECT tg_file_id, hash FROM images_cache WHERE src_url = ?", (image_url,)
+        ).fetchone()
         if row:
             return row["tg_file_id"], row["hash"]
 
@@ -255,7 +305,9 @@ def ensure_tg_file_id(image_url: str, conn: Optional[sqlite3.Connection] = None)
         return None, ihash
     return None, None
 
+
 # -------------------- Скачивание/валидация --------------------
+
 
 def _headers(referer: Optional[str] = None) -> Dict[str, str]:
     h = {"User-Agent": USER_AGENT, "Accept": "image/*,*/*;q=0.8"}
@@ -263,11 +315,12 @@ def _headers(referer: Optional[str] = None) -> Dict[str, str]:
         h["Referer"] = referer
     return h
 
+
 def _probe_bytes(raw: bytes) -> Tuple[Optional[int], Optional[int], Optional[str]]:
     mime = "application/octet-stream"
     w = h = None
     # простейшее определение по сигнатурам + Pillow
-    if raw.startswith(b"\xFF\xD8"):
+    if raw.startswith(b"\xff\xd8"):
         mime = "image/jpeg"
     elif raw.startswith(b"\x89PNG"):
         mime = "image/png"
@@ -288,6 +341,7 @@ def _probe_bytes(raw: bytes) -> Tuple[Optional[int], Optional[int], Optional[str
             pass
     return w, h, mime
 
+
 def _to_jpeg(raw: bytes) -> Tuple[bytes, int, int]:
     if not PIL_OK:
         raise RuntimeError("Pillow not installed, cannot convert to JPEG")
@@ -303,13 +357,18 @@ def _to_jpeg(raw: bytes) -> Tuple[bytes, int, int]:
         out = buf.getvalue()
         return out, im.size[0], im.size[1]
 
-def probe_image(url: str, referer: Optional[str] = None) -> Optional[Tuple[str, int, int]]:
+
+def probe_image(
+    url: str, referer: Optional[str] = None
+) -> Optional[Tuple[str, int, int]]:
     """
     HEAD -> GET, проверяем размер, минимум байт, пробуем распарсить размер.
     Возвращает (sha1-hex[:16], width, height) или None.
     """
     try:
-        r = requests.head(url, allow_redirects=True, timeout=TIMEOUT_HEAD, headers=_headers(referer))
+        r = requests.head(
+            url, allow_redirects=True, timeout=TIMEOUT_HEAD, headers=_headers(referer)
+        )
         if r.status_code >= 400:
             image_stats["download_fail"] += 1
             return None
@@ -318,7 +377,9 @@ def probe_image(url: str, referer: Optional[str] = None) -> Optional[Tuple[str, 
         pass
 
     try:
-        g = requests.get(url, stream=True, timeout=TIMEOUT_GET, headers=_headers(referer))
+        g = requests.get(
+            url, stream=True, timeout=TIMEOUT_GET, headers=_headers(referer)
+        )
         g.raise_for_status()
         buf = io.BytesIO()
         total = 0
@@ -369,13 +430,18 @@ def probe_image(url: str, referer: Optional[str] = None) -> Optional[Tuple[str, 
     ihash = hashlib.sha1(raw).hexdigest()[:16]
     return ihash, int(w), int(h)
 
-def download_image(url: str, referer: Optional[str] = None) -> Optional[Tuple[bytes, str]]:
+
+def download_image(
+    url: str, referer: Optional[str] = None
+) -> Optional[Tuple[bytes, str]]:
     """
     Скачивает изображение (с конвертацией webp->jpeg при наличии Pillow).
     Возвращает (bytes, mime) или None.
     """
     try:
-        g = requests.get(url, stream=True, timeout=TIMEOUT_GET, headers=_headers(referer))
+        g = requests.get(
+            url, stream=True, timeout=TIMEOUT_GET, headers=_headers(referer)
+        )
         g.raise_for_status()
         raw = g.content
     except Exception:
@@ -409,7 +475,62 @@ def download_image(url: str, referer: Optional[str] = None) -> Optional[Tuple[by
 
     return raw, (mime or "image/jpeg")
 
+
+def _save_and_hash(raw: bytes, url: str) -> Dict[str, object]:
+    """Save image to cache and compute perceptual hash."""
+
+    ts = datetime.utcnow()
+    subdir = IMAGES_CACHE_DIR / ts.strftime("%y/%m")
+    subdir.mkdir(parents=True, exist_ok=True)
+    file_path = subdir / (hashlib.sha1(url.encode("utf-8")).hexdigest()[:16] + ".jpg")
+    if IMAGEHASH_OK and PIL_OK:
+        img = Image.open(io.BytesIO(raw))
+        if img.mode in ("RGBA", "LA"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[-1])
+            img = bg
+        img.thumbnail((MAX_SIDE, MAX_SIDE))
+        img.save(file_path, format="JPEG", quality=85)
+        phash = str(imagehash.phash(img))
+        width, height = img.size
+    else:  # pragma: no cover - imagehash not available
+        with open(file_path, "wb") as f:
+            f.write(raw)
+        phash = hashlib.sha1(raw).hexdigest()
+        width = height = 0
+
+    if phash in _PHASH_CACHE:
+        file_path = _PHASH_CACHE[phash]
+    else:
+        _PHASH_CACHE[phash] = file_path
+
+    return {
+        "local_path": str(file_path),
+        "phash": phash,
+        "width": width,
+        "height": height,
+    }
+
+
+def pick_and_download(urls: List[str]) -> Optional[Dict[str, object]]:
+    """Download first valid image from URLs.
+
+    The image is validated, converted to JPEG if necessary and cached on disk.
+    A dictionary describing the image (path, hash, dimensions) is returned.
+    """
+
+    for u in urls:
+        payload = download_image(u)
+        if not payload:
+            continue
+        raw, _ = payload
+        info = _save_and_hash(raw, u)
+        return info
+    return None
+
+
 # -------------------- Главная точка для пайплайна --------------------
+
 
 def resolve_image(item: Dict, conn: Optional[sqlite3.Connection] = None) -> Dict:
     """

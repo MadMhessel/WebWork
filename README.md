@@ -31,6 +31,10 @@ python -m config init
 - `POLL_INTERVAL_SECONDS`, `FETCH_LIMIT_PER_SOURCE`
 - `HTTP_TIMEOUT_CONNECT`, `HTTP_TIMEOUT_READ`, `HTTP_RETRY_TOTAL`, `HTTP_BACKOFF`
 - `IMAGE_ALLOWED_EXT`, `IMAGE_DENYLIST_DOMAINS`, `MIN_IMAGE_BYTES`
+- `IMAGES_ENABLED`, `IMAGES_MAX_BYTES`, `IMAGES_MIN_WIDTH`, `IMAGES_CONVERT_TO_JPEG`,
+  `IMAGES_CACHE_DIR`
+- `MAX_POST_LEN`, `MAX_CAPTION_LEN`, `REWRITE_TARGET_LEN`, `REGION_HINT`,
+  `PARSE_MODE`, `SPLIT_LONG_POSTS`
 - ключевые слова и источники в `newsbot/config.py`
 
 По умолчанию достаточно присутствия региональных ключевых слов. Если установить `STRICT_FILTER=1`, бот будет требовать одновременно и регион, и строительную тематику.
@@ -95,6 +99,19 @@ python .\main.py --loop
 
 ## Ограничения Telegram
 Лимит 4096 символов; бот экранирует разметку и сокращает тело, не повреждая формат.
+
+## Схема пайплайна
+
+1. **Фильтрация** — новости отбрасываются, если не содержат упоминаний
+   Нижегородской области.
+2. **Изображения** — модуль `images` выбирает лучшую картинку, скачивает и
+   кэширует её в каталоге `./cache/images`.  Файлы меньшие 20 KB или шириной
+   менее 400 px отбрасываются.
+3. **Рерайт** — `rewriter.Rewriter` формирует укороченный безопасный текст.
+   Вначале пробуется внешняя LLM, при ошибке используется правило‑ориентированная
+   стратегия.  Длина поста ограничивается `MAX_POST_LEN`.
+4. **Публикация** — через `telegram_client` отправляется фотография с кратким
+   caption и затем при необходимости длинный текст.
 
 ## Антидубликаты
 SQLite `published_news`: UNIQUE url, индексы по `guid` и `title_norm_hash`. Повторные прогоны не шлют дубли.

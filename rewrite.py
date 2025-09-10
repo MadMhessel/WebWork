@@ -1,90 +1,88 @@
+"""Thin wrapper around :mod:`rewriter_module` used by :mod:`main`.
+
+The original project historically exposed helper functions ``rewrite_text`` and
+``maybe_rewrite_item``.  The newly introduced :class:`~rewriter_module.Rewriter`
+implements the actual logic.  To keep the rest of the code base unchanged we
+provide a small compatibility layer that wires the new class into the existing
+functions.
+"""
+
 from __future__ import annotations
 
 import logging
 import re
 from typing import Any, Dict
 
-from autorewrite.rewriter import rewrite_post
+from formatting import clean_html_tags
+from rewriter_module import Rewriter
 
 log = logging.getLogger(__name__)
 
-_TAGS_RE = re.compile(r"<[^>]+>")
 _FIGURE_RE = re.compile(r"<figure[^>]*>.*?</figure>", re.I | re.S)
 
-
-def _get_cfg_attr(cfg, name: str, default):
-    try:
-        return getattr(cfg, name)
-    except Exception:
-        return default
+_rewriter: Rewriter | None = None
 
 
-def _strip_tags(text: str) -> str:
-    t = _FIGURE_RE.sub(" ", text or "")
-    return _TAGS_RE.sub(" ", t)
+def _instance(cfg) -> Rewriter:
+    """Lazily create a :class:`Rewriter` instance based on config."""
 
-
-def _normalize_ws(text: str) -> str:
-    t = (text or "").replace("\xa0", " ")
-    t = re.sub(r"[ \t]+", " ", t)
-    t = re.sub(r"\s+\n", "\n", t)
-    t = re.sub(r"\n{3,}", "\n\n", t)
-    return t.strip()
-
-
-def _limit_length(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    cut = text[:max_chars]
-    cut = re.sub(r"\s+\S*$", "", cut).strip()
-    return cut
-
-
-def _rewrite(clean: str, cfg) -> Dict[str, Any]:
-    tg_limit = int(_get_cfg_attr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
-    rewrite_cap = int(_get_cfg_attr(cfg, "REWRITE_MAX_CHARS", min(900, tg_limit - 500)))
-    desired_len = max(200, min(rewrite_cap, tg_limit - 200))
-    return rewrite_post(text=clean, desired_len=desired_len)
+    global _rewriter
+    if _rewriter is None:
+        use_llm = bool(getattr(cfg, "ENABLE_LLM_REWRITE", False))
+        _rewriter = Rewriter(use_llm=use_llm)
+    return _rewriter
 
 
 def rewrite_text(original: str, cfg) -> str:
-    """Rewrite raw text returning only rewritten body."""
-    try:
-        if not original:
-            return ""
-        if not bool(_get_cfg_attr(cfg, "ENABLE_REWRITE", True)):
-            return _normalize_ws(_strip_tags(original))
-        clean = _normalize_ws(_strip_tags(original))
-        res = _rewrite(clean, cfg)
-        return res.get("text", "")
-    except Exception as ex:  # pragma: no cover - defensive
-        log.exception("\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0435\u0440\u0430\u0439\u0442\u0430, \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u043c \u0431\u0435\u0440\u0435\u0436\u043d\u043e\u0435 \u0441\u043e\u043a\u0440\u0430\u0449\u0435\u043d\u0438\u0435: %s", ex)
-        safe = _normalize_ws(_strip_tags(original))
-        tg_limit = int(_get_cfg_attr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
-        return _limit_length(safe, max(200, tg_limit - 200))
+    """Rewrite ``original`` body HTML using the new :class:`Rewriter`.
 
-
-def maybe_rewrite_item(item: dict, cfg) -> dict:
-    """Rewrite news item dict in-place-compatible way.
-
-    Returns a shallow copy of ``item`` with rewritten ``title`` and ``content``
-    when rewriting is enabled. Similarity metrics and warnings (if any) are
-    stored under ``rewrite_similarity`` and ``rewrite_warnings`` keys.
+    Falls back to returning a cleaned version of the input when rewriting is
+    disabled via configuration or when any unexpected error occurs.
     """
+
+    if not original:
+        return ""
     try:
-        out = dict(item)
-        if not bool(_get_cfg_attr(cfg, "ENABLE_REWRITE", True)):
-            out["content"] = _normalize_ws(_strip_tags(out.get("content", "") or ""))
+        if not bool(getattr(cfg, "ENABLE_REWRITE", True)):
+            return clean_html_tags(_FIGURE_RE.sub(" ", original))
+        max_len = int(
+            getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000))
+        )
+        region = getattr(cfg, "REGION_HINT", "")
+        return _instance(cfg).rewrite("", original, max_len, region)
+    except Exception as exc:  # pragma: no cover - defensive
+        log.exception(
+            "\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0435\u0440\u0430\u0439\u0442\u0430: %s",
+            exc,
+        )
+        return clean_html_tags(_FIGURE_RE.sub(" ", original))
+
+
+def maybe_rewrite_item(item: Dict[str, Any], cfg) -> Dict[str, Any]:
+    """Rewrite fields of ``item`` in a backwards compatible manner."""
+
+    out = dict(item)
+    try:
+        if not bool(getattr(cfg, "ENABLE_REWRITE", True)):
+            out["content"] = clean_html_tags(
+                _FIGURE_RE.sub(" ", out.get("content", "") or "")
+            )
             return out
-        clean = _normalize_ws(_strip_tags(out.get("content", "") or ""))
-        res = _rewrite(clean, cfg)
-        out["content"] = res.get("text", "")
-        if res.get("title"):
-            out["title"] = res["title"]
-        if res.get("similarity"):
-            out["rewrite_similarity"] = res["similarity"]
-        if res.get("warnings"):
-            out["rewrite_warnings"] = res["warnings"]
+
+        max_len = int(
+            getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000))
+        )
+        region = getattr(cfg, "REGION_HINT", "")
+        title = out.get("title", "")
+        body = out.get("content", "")
+        out["content"] = _instance(cfg).rewrite(title, body, max_len, region)
         return out
-    except Exception:  # pragma: no cover - defensive
-        return item
+    except Exception as exc:  # pragma: no cover - defensive
+        log.exception(
+            "\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0435\u0440\u0430\u0439\u0442\u0430: %s",
+            exc,
+        )
+        return out
+
+
+__all__ = ["rewrite_text", "maybe_rewrite_item"]
