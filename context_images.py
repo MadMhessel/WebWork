@@ -11,7 +11,12 @@ from typing import Dict, Optional
 try:  # pragma: no cover - allow usage both as a package and standalone module
     from . import config, images, net  # type: ignore
 except ImportError:  # pragma: no cover
-    # When executed as a script, fall back to absolute imports
+    # When executed as a script from an arbitrary directory, ensure local
+    # modules are importable
+    import os
+    import sys
+
+    sys.path.append(os.path.dirname(__file__))
     import config  # type: ignore
     import images  # type: ignore
     import net  # type: ignore

@@ -14,7 +14,11 @@ from urllib.parse import urljoin, urlparse
 try:
     from . import config, db, context_images, net  # type: ignore
 except ImportError:  # pragma: no cover - fall back to absolute imports when
-    # running as a standalone script
+    # running as a standalone script or from an arbitrary working directory
+    import os
+    import sys
+
+    sys.path.append(os.path.dirname(__file__))
     import config  # type: ignore
     import db  # type: ignore
     import context_images  # type: ignore
