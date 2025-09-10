@@ -1,23 +1,56 @@
+from types import SimpleNamespace
+
 from rewriter_module import Rewriter
+import yandex_llm
 
 
-def test_rule_based_preserves_numbers_and_bullets():
-    html = "<p>В регионе построили 10 домов. Ещё 5 запланировано.</p>"
-    r = Rewriter()
-    out = r.rewrite("Заголовок", html, 200, "Нижегородская область")
-    assert "10" in out and "5" in out
-    assert out.count("•") >= 1
+def test_uses_yandex_llm(monkeypatch):
+    called = {}
+
+    def fake(prompt, target_chars, topic_hint, region_hint):
+        called['args'] = (prompt, target_chars, topic_hint, region_hint)
+        return "переписанный текст"
+
+    monkeypatch.setattr(yandex_llm, "rewrite", fake)
+    cfg = SimpleNamespace(
+        YANDEX_REWRITE_ENABLED=True,
+        YANDEX_API_MODE="openai",
+        YANDEX_API_KEY="k",
+        YANDEX_FOLDER_ID="f",
+    )
+    r = Rewriter(cfg)
+    out = r.rewrite("Заголовок", "<p>Текст</p>", 200, "Нижегородская область")
+    assert out == "переписанный текст"
+    assert called['args'][1] == 200
 
 
-def test_fallback_from_llm():
-    html = "<p>Тестовое сообщение.</p>"
-    r = Rewriter(use_llm=True)
-    out = r.rewrite("Title", html, 50, "")
-    assert "Тестовое сообщение" in out
+def test_returns_original_on_error(monkeypatch):
+    def fake(*a, **k):
+        raise yandex_llm.ServerError("boom")
+
+    monkeypatch.setattr(yandex_llm, "rewrite", fake)
+    cfg = SimpleNamespace(
+        YANDEX_REWRITE_ENABLED=True,
+        YANDEX_API_MODE="openai",
+        YANDEX_API_KEY="k",
+        YANDEX_FOLDER_ID="f",
+    )
+    r = Rewriter(cfg)
+    out = r.rewrite("t", "<p>купить квартиру</p>", 100, "")
+    assert "купить" not in out
 
 
-def test_length_limited():
-    body = "<p>" + "a" * 5000 + "</p>"
-    r = Rewriter()
-    out = r.rewrite("t", body, 100, "")
-    assert len(out) <= 100
+def test_length_limited(monkeypatch):
+    def fake(prompt, target_chars, topic_hint, region_hint):
+        return "a" * 5000
+
+    monkeypatch.setattr(yandex_llm, "rewrite", fake)
+    cfg = SimpleNamespace(
+        YANDEX_REWRITE_ENABLED=True,
+        YANDEX_API_MODE="openai",
+        YANDEX_API_KEY="k",
+        YANDEX_FOLDER_ID="f",
+    )
+    r = Rewriter(cfg)
+    out = r.rewrite("t", "<p>x</p>", 100, "")
+    assert len(out) == 100

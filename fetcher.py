@@ -27,6 +27,12 @@ _HOST_FAILS: Dict[str, float] = {}
 _FAIL_TTL = 30 * 60  # 30 minutes
 
 
+def _verify_for(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    bad = getattr(config, "SSL_NO_VERIFY_HOSTS", set())
+    return host not in bad
+
+
 def _first_http_url(candidates: Iterable[str]) -> str:
     """Return first URL starting with http(s) from iterable."""
     for url in candidates:
@@ -100,7 +106,10 @@ def _fetch_text(
         return ""
     try:
         read_to = timeout[1] if timeout else None
-        return net.get_text(url, timeout=read_to, allow_redirects=allow_redirects)
+        verify = _verify_for(url)
+        return net.get_text(
+            url, timeout=read_to, allow_redirects=allow_redirects, verify=verify
+        )
     except requests.exceptions.SSLError as ex:
         logger.warning("TLS_FAIL %s: %s", host, ex)
     except requests.exceptions.ConnectionError as ex:

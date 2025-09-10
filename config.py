@@ -578,9 +578,25 @@ PUBLISH_SLEEP_BETWEEN_SEC: float = float(os.getenv("PUBLISH_SLEEP_BETWEEN_SEC", 
 
 # === Рерайт (опц.) ===
 REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "600"))
-EXTERNAL_AI_ENABLED = os.getenv("EXTERNAL_AI_ENABLED", "false").lower() in {"1", "true", "yes"}
-EXTERNAL_AI_ENDPOINT = os.getenv("EXTERNAL_AI_ENDPOINT", "")
-EXTERNAL_AI_KEY = os.getenv("EXTERNAL_AI_KEY", "")
+
+# --- Яндекс LLM (Foundation Models) ---
+YANDEX_REWRITE_ENABLED: bool = os.getenv("YANDEX_REWRITE_ENABLED", "0").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+YANDEX_API_MODE: str = os.getenv("YANDEX_API_MODE", "openai").strip().lower()
+YANDEX_API_KEY: str = os.getenv("YANDEX_API_KEY", "").strip()
+YANDEX_IAM_TOKEN: str = os.getenv("YANDEX_IAM_TOKEN", "").strip()
+YANDEX_FOLDER_ID: str = os.getenv("YANDEX_FOLDER_ID", "").strip()
+YANDEX_MODEL: str = os.getenv("YANDEX_MODEL", "yandexgpt-lite").strip()
+YANDEX_TEMPERATURE: float = float(os.getenv("YANDEX_TEMPERATURE", "0.2"))
+YANDEX_MAX_TOKENS: int = int(os.getenv("YANDEX_MAX_TOKENS", "800"))
+YANDEX_TIMEOUT_CONNECT: float = float(os.getenv("YANDEX_TIMEOUT_CONNECT", "5"))
+YANDEX_TIMEOUT_READ: float = float(os.getenv("YANDEX_TIMEOUT_READ", "30"))
+YANDEX_RETRIES: int = int(os.getenv("YANDEX_RETRIES", "2"))
+YANDEX_TOP_P: float = float(os.getenv("YANDEX_TOP_P", "1"))
+YANDEX_REQUESTS_PER_MINUTE: int = int(os.getenv("YANDEX_REQUESTS_PER_MINUTE", "60"))
 
 # === Кластеризация похожих заголовков (опц.) ===
 ENABLE_TITLE_CLUSTERING = os.getenv("ENABLE_TITLE_CLUSTERING", "false").lower() in {"1", "true", "yes"}

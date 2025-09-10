@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 _FIGURE_RE = re.compile(r"<figure[^>]*>.*?</figure>", re.I | re.S)
 
+
 _rewriter: Rewriter | None = None
 
 
@@ -28,8 +29,8 @@ def _instance(cfg) -> Rewriter:
 
     global _rewriter
     if _rewriter is None:
-        use_llm = bool(getattr(cfg, "ENABLE_LLM_REWRITE", False))
-        _rewriter = Rewriter(use_llm=use_llm)
+        topic_hint = "строительство, инфраструктура, ЖК, дороги, мосты"
+        _rewriter = Rewriter(cfg, topic_hint=topic_hint)
     return _rewriter
 
 
@@ -48,8 +49,11 @@ def rewrite_text(original: str, cfg) -> str:
         max_len = int(
             getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000))
         )
-        region = getattr(cfg, "REGION_HINT", "")
-        return _instance(cfg).rewrite("", original, max_len, region)
+        region = getattr(
+            cfg, "REGION_HINT", "Нижегородская область, Нижний Новгород"
+        )
+        rw = _instance(cfg)
+        return rw.rewrite("", original, max_len, region)
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(
             "\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0435\u0440\u0430\u0439\u0442\u0430: %s",
@@ -72,10 +76,13 @@ def maybe_rewrite_item(item: Dict[str, Any], cfg) -> Dict[str, Any]:
         max_len = int(
             getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000))
         )
-        region = getattr(cfg, "REGION_HINT", "")
+        region = getattr(
+            cfg, "REGION_HINT", "Нижегородская область, Нижний Новгород"
+        )
         title = out.get("title", "")
         body = out.get("content", "")
-        out["content"] = _instance(cfg).rewrite(title, body, max_len, region)
+        rw = _instance(cfg)
+        out["content"] = rw.rewrite(title, body, max_len, region)
         return out
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(
