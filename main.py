@@ -57,7 +57,10 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     cnt_published = 0
     cnt_not_sent = 0
     cnt_errors = 0
-    image_start = images.image_stats["with_image"]
+    images_enabled = bool(getattr(config, "ALLOW_IMAGES", False)) and bool(
+        getattr(config, "ATTACH_IMAGES", False)
+    )
+    image_start = images.image_stats["with_image"] if images_enabled else 0
 
     for it in items_iter:
         cnt_total += 1
@@ -120,18 +123,21 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "tags": list(tags),
             }
 
-            img_info = images.resolve_image(item_clean, conn)
-            item_clean["image_url"] = img_info.get("image_url", "")
-            if img_info.get("tg_file_id"):
-                item_clean["tg_file_id"] = img_info["tg_file_id"]
-            if img_info.get("image_hash"):
-                item_clean["image_hash"] = img_info["image_hash"]
-            if img_info.get("bytes"):
-                item_clean["image_bytes"] = img_info["bytes"]
-                if img_info.get("mime"):
-                    item_clean["image_mime"] = img_info.get("mime")
-            if img_info.get("credit"):
-                item_clean["credit"] = img_info["credit"]
+            if images_enabled:
+                img_info = images.resolve_image(item_clean, conn)
+                item_clean["image_url"] = img_info.get("image_url", "")
+                if img_info.get("tg_file_id"):
+                    item_clean["tg_file_id"] = img_info["tg_file_id"]
+                if img_info.get("image_hash"):
+                    item_clean["image_hash"] = img_info["image_hash"]
+                if img_info.get("bytes"):
+                    item_clean["image_bytes"] = img_info["bytes"]
+                    if img_info.get("mime"):
+                        item_clean["image_mime"] = img_info.get("mime")
+                if img_info.get("credit"):
+                    item_clean["credit"] = img_info["credit"]
+            else:
+                item_clean.pop("image_url", None)
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
 
@@ -157,7 +163,9 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             cnt_errors += 1
             logger.exception("[ERROR] url=%s | %s", it.get("url", ""), ex)
 
-    with_image = images.image_stats["with_image"] - image_start
+    with_image = (
+        images.image_stats["with_image"] - image_start if images_enabled else 0
+    )
     logger.info(
         "ИТОГО: получено=%d, релевантные=%d, дублей_в_пакете_URL=%d, почти_дублей_в_пакете=%d, "
         "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d, с_картинкой=%d",
