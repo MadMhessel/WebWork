@@ -29,6 +29,46 @@ def is_moderator(user_id: int) -> bool:
         return False
 
 
+def _normalize_chat_identifier(value: Any) -> set[str]:
+    """Convert chat identifiers (id, username, dict) into comparable strings."""
+
+    items: set[str] = set()
+    if value is None:
+        return items
+    if isinstance(value, dict):
+        # Inline keyboard callbacks may omit ``from`` when admins act as a channel.
+        items |= _normalize_chat_identifier(value.get("id"))
+        items |= _normalize_chat_identifier(value.get("username"))
+        return items
+    if isinstance(value, int):
+        items.add(str(value))
+        return items
+    text = str(value).strip()
+    if not text:
+        return items
+    lowered = text.lower()
+    items.add(lowered)
+    if lowered.startswith("@"):
+        items.add(lowered[1:])
+    try:
+        items.add(str(int(text)))
+    except ValueError:
+        pass
+    return items
+
+
+def is_sender_authorized(sender_chat: Optional[Dict[str, Any]]) -> bool:
+    """Check if message sent on behalf of a chat should be treated as moderator."""
+
+    if not sender_chat:
+        return False
+    allowed = _normalize_chat_identifier(getattr(config, "REVIEW_CHAT_ID", ""))
+    if not allowed:
+        return False
+    sender = _normalize_chat_identifier(sender_chat)
+    return bool(allowed & sender)
+
+
 def _dump_json_field(value: Any) -> Optional[str]:
     if value is None:
         return None

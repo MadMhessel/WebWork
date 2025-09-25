@@ -90,12 +90,26 @@ def _handle_update(conn, session, update: dict) -> None:
         return
     user_id = int(msg.get("from", {}).get("id", 0))
     text = msg.get("text", "")
-    chat_id = msg.get("chat", {}).get("id")
+    chat = msg.get("chat", {})
+    chat_id = chat.get("id")
+    sender_chat = msg.get("sender_chat")
     if text is None:
         return
-    if not moderator.is_moderator(user_id):
+    allowed = moderator.is_moderator(user_id)
+    if not allowed and sender_chat:
+        sender_chat_id = sender_chat.get("id")
+        try:
+            if sender_chat_id is not None and moderator.is_moderator(int(sender_chat_id)):
+                allowed = True
+        except (TypeError, ValueError):
+            pass
+        if not allowed and moderator.is_sender_authorized(sender_chat):
+            allowed = True
+    if not allowed:
         if text.startswith("/"):
-            publisher.send_message(str(user_id), "Нет доступа", cfg=config)
+            target = user_id or chat_id
+            if target:
+                publisher.send_message(str(target), "Нет доступа", cfg=config)
         return
     if text.startswith("/queue"):
         parts = text.strip().split()
