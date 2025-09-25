@@ -1,350 +1,135 @@
-SOURCES_NN = [{'id': 'gov_nobl',
-  'name': 'Правительство Нижегородской области',
-  'url': 'https://nobl.ru/',
-  'type': 'html',
-  'tags': ['область', 'власть', 'экономика', 'строительство', 'инвестиции', 'ЖКХ', 'транспорт'],
-  'priority': 10,
-  'enabled': True},
- {'id': 'city_nnov',
-  'name': 'Администрация Нижнего Новгорода',
-  'url': 'https://admgor.nnov.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород',
-           'власть',
-           'городская_среда',
-           'стройка',
-           'дорожные_работы',
-           'транспорт',
-           'ЖКХ',
-           'афиша'],
-  'priority': 10,
-  'enabled': True},
- {'id': 'zsno',
-  'name': 'Законодательное собрание НО',
-  'url': 'https://www.zsno.ru/',
-  'type': 'html',
-  'tags': ['область', 'власть', 'законопроекты', 'бюджет'],
-  'priority': 6,
-  'enabled': True},
- {'id': 'minstroy_no',
-  'name': 'Минстрой Нижегородской области',
-  'url': 'https://minstroy.nobl.ru/',
-  'type': 'html',
-  'tags': ['область', 'строительство', 'госпрограммы', 'реновация', 'капремонт'],
-  'priority': 10,
-  'enabled': True},
- {'id': 'gsn_no',
-  'name': 'Инспекция госстройнадзора НО',
-  'url': 'https://gsn.nobl.ru/',
-  'type': 'html',
-  'tags': ['область', 'строительство', 'надзор', 'проверки', 'безопасность'],
-  'priority': 9,
-  'enabled': True},
- {'id': 'mingkh_no',
-  'name': 'Минэнерго и ЖКХ НО',
-  'url': 'https://mingkh.nobl.ru/',
-  'type': 'html',
-  'tags': ['область', 'ЖКХ', 'тепло', 'вода', 'электроснабжение', 'регулирование'],
-  'priority': 9,
-  'enabled': True},
- {'id': 'eco_no',
-  'name': 'Минэкологии НО',
-  'url': 'https://eco.nobl.ru/',
-  'type': 'html',
-  'tags': ['область', 'экология', 'ОХВ', 'природопользование', 'ОВОС'],
-  'priority': 6,
-  'enabled': True},
- {'id': 'invest_portal_no',
-  'name': 'Инвестпортал Нижегородской области',
-  'url': 'https://nn-invest.ru/',
-  'type': 'html',
-  'tags': ['область', 'инвестиции', 'промышленность', 'строительство', 'инфраструктура', 'ГЧП'],
-  'priority': 7,
-  'enabled': True},
- {'id': 'korporacia_razv_no',
-  'name': 'Корпорация развития НО',
-  'url': 'https://nn-invest.ru/support/',
-  'type': 'html',
-  'tags': ['область', 'инвестиции', 'инфраструктура', 'индустрия', 'строительство'],
-  'priority': 6,
-  'enabled': True},
- {'id': 'frp_no',
-  'name': 'Фонд развития промышленности НО',
-  'url': 'https://frpnn.ru/',
-  'type': 'html',
-  'tags': ['область', 'промышленность', 'инвестиции', 'производство'],
-  'priority': 5,
-  'enabled': True},
- {'id': 'dzerzhinsk_adm',
-  'name': 'Администрация Дзержинска',
-  'url': 'https://xn--80aiaefejqmp4ap.xn--p1ai/',
-  'type': 'html',
-  'tags': ['дзержинск', 'муниципалитет', 'строительство', 'городская_среда', 'транспорт'],
-  'priority': 7,
-  'enabled': True},
- {'id': 'sarov_adm',
-  'name': 'Администрация Сарова (площадка nobl)',
-  'url': 'https://adm-sarov.nobl.ru/presscenter/news/',
-  'type': 'html',
-  'tags': ['саров', 'муниципалитет', 'строительство', 'городская_среда'],
-  'priority': 6,
-  'enabled': True},
- {'id': 'bor_city_council',
-  'name': 'Совет депутатов г.о. Бор',
-  'url': 'https://www.biabor-official.ru/',
-  'type': 'html',
-  'tags': ['бор', 'муниципалитет', 'бюджет', 'нормативка'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'bor_portal',
-  'name': 'Портал города Бор «Твой Бор»',
-  'url': 'https://tvoy-bor.ru/news.html',
-  'type': 'html',
-  'tags': ['бор', 'муниципалитет', 'общество', 'афиша', 'городская_среда'],
-  'priority': 3,
-  'enabled': True},
- {'id': 'arzamas_city_duma',
-  'name': 'Городская дума Арзамаса',
-  'url': 'https://xn--80aaaaogr5bdsqgk6a.xn--p1ai/novosti/',
-  'type': 'html',
-  'tags': ['арзамас', 'муниципалитет', 'решения', 'бюджет'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'metro_nnov',
-  'name': 'Нижегородское метро',
-  'url': 'https://metronn.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'транспорт', 'метро', 'добавочные_рейсы', 'ограничения'],
-  'priority': 8,
-  'enabled': True},
- {'id': 'aeroport_strigino',
-  'name': 'Аэропорт Нижнего Новгорода (Стригино)',
-  'url': 'https://ar-goj.ru/about/news/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'транспорт', 'авиа', 'ограничения', 'расписание'],
-  'priority': 8,
-  'enabled': True},
- {'id': 'gorkovskaya_zhd',
-  'name': 'Горьковская железная дорога (РЖД)',
-  'url': 'https://gzd.rzd.ru/',
-  'type': 'html',
-  'tags': ['область', 'транспорт', 'жд', 'расписание', 'инфраструктура'],
-  'priority': 7,
-  'enabled': True},
- {'id': 'cableway',
-  'name': 'Нижегородская канатная дорога',
-  'url': 'https://strelkann.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'транспорт', 'канатка', 'ограничения'],
-  'priority': 5,
-  'enabled': True},
- {'id': 'siticard',
-  'name': 'Ситикард (городской транспорт, Э-тариф)',
-  'url': 'https://siticard.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'транспорт', 'оплата', 'новые_маршруты'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'vodokanal_nn',
-  'name': 'Нижегородский водоканал',
-  'url': 'https://www.vodokanal-nn.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'ЖКХ', 'вода', 'ремонты', 'переключения'],
-  'priority': 9,
-  'enabled': True},
- {'id': 'tplus_nn',
-  'name': 'ПАО «Т Плюс» (Нижегородский филиал)',
-  'url': 'https://www.tplusgroup.ru/org/novgorod/',
-  'type': 'html',
-  'tags': ['область', 'тепло', 'ЖКХ', 'ремонты', 'подключения'],
-  'priority': 8,
-  'enabled': True},
- {'id': 'nizhnovenergo',
-  'name': 'Россети ЦП — филиал «Нижновэнерго»',
-  'url': 'https://mrsk-cp.ru/affiliates/nizhnovenergo/news/',
-  'type': 'html',
-  'tags': ['область', 'электроснабжение', 'ЖКХ', 'плановые_отключения', 'инциденты'],
-  'priority': 8,
-  'enabled': True},
- {'id': 'mchs_52',
-  'name': 'ГУ МЧС по Нижегородской области',
-  'url': 'https://52.mchs.gov.ru/deyatelnost/press-centr/novosti',
-  'type': 'html',
-  'tags': ['область', 'мчс', 'погода', 'ЧС', 'предупреждения'],
-  'priority': 9,
-  'enabled': True},
- {'id': 'mvd_52',
-  'name': 'ГУ МВД по Нижегородской области',
-  'url': 'https://52.mvd.ru/news/2/',
-  'type': 'html',
-  'tags': ['область', 'полиция', 'происшествия', 'ДТП', 'рейды'],
-  'priority': 6,
-  'enabled': True},
- {'id': 'gibdd_52',
-  'name': 'ГИБДД ГУ МВД по НО',
-  'url': 'https://52.xn--b1aew.xn--p1ai/',
-  'type': 'html',
-  'tags': ['область', 'дорожное_движение', 'ограничения', 'профилактика'],
-  'priority': 5,
-  'enabled': True},
- {'id': 'vv_ugms',
-  'name': 'Верхне-Волжское УГМС (погода/гидрология)',
-  'url': 'https://vvugms.meteorf.ru/',
-  'type': 'html',
-  'tags': ['область', 'погода', 'гидрология', 'предупреждения'],
-  'priority': 6,
-  'enabled': True},
- {'id': 'tour_city',
-  'name': 'Туристический портал города Нижнего Новгорода',
-  'url': 'https://nn-grad.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'туризм', 'афиша', 'городская_среда'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'tour_region',
-  'name': 'Туристический портал Нижегородской области',
-  'url': 'https://nn-tourist.ru/',
-  'type': 'html',
-  'tags': ['область', 'туризм', 'маршруты', 'афиша'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'parks_dir',
-  'name': 'Дирекция парков и скверов НН',
-  'url': 'https://parkinnov.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'парки', 'благоустройство', 'афиша'],
-  'priority': 5,
-  'enabled': True},
- {'id': 'philharmonia',
-  'name': 'Нижегородская филармония',
-  'url': 'https://www.philharmonia-nn.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'культура', 'афиша'],
-  'priority': 3,
-  'enabled': True},
- {'id': 'drama_theatre',
-  'name': 'Театр драмы им. М. Горького',
-  'url': 'https://dramateatr-nn.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'культура', 'афиша'],
-  'priority': 3,
-  'enabled': True},
- {'id': 'unn',
-  'name': 'ННГУ им. Лобачевского',
-  'url': 'https://www.unn.ru/site/about/news',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'образование', 'наука', 'ИT', 'кадры'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'nttu',
-  'name': 'НГТУ им. Р.Е. Алексеева',
-  'url': 'https://www.nntu.ru/news/all/vse-novosti',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'образование', 'инженерия', 'промышленность'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'pimunn',
-  'name': 'ПИМУ (медуниверситет)',
-  'url': 'https://pimunn.ru/news/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'медицина', 'образование', 'здоровье'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'minin_univer',
-  'name': 'Мининский университет',
-  'url': 'https://mininuniver.ru/about/news',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'образование', 'культура'],
-  'priority': 3,
-  'enabled': True},
- {'id': 'hse_nn',
-  'name': 'НИУ ВШЭ — Нижний Новгород',
-  'url': 'https://nnov.hse.ru/news/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'образование', 'ИТ', 'наука', 'стартапы'],
-  'priority': 3,
-  'enabled': True},
- {'id': 'newsnn',
-  'name': 'NewsNN',
-  'url': 'https://newsnn.ru/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'городская_среда', 'экономика', 'происшествия', 'афиша'],
-  'priority': 7,
-  'enabled': True},
- {'id': 'vgoroden',
-  'name': 'В городе N',
-  'url': 'https://www.vgoroden.ru/',
-  'type': 'html',
-  'tags': ['нижний_новгород', 'медиа', 'городская_среда', 'транспорт', 'ЖКХ'],
-  'priority': 7,
-  'enabled': True},
- {'id': 'vremyan',
-  'name': 'Время Н',
-  'url': 'https://www.vremyan.ru/news',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'экономика', 'общество', 'спорт'],
-  'priority': 6,
-  'enabled': True},
- {'id': 'nnru',
-  'name': 'НН.ру',
-  'url': 'https://www.nn.ru/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'городская_среда', 'транспорт', 'происшествия'],
-  'priority': 6,
-  'enabled': True},
- {'id': 'nta_pfo',
-  'name': 'НТА-Приволжье',
-  'url': 'https://nta-pfo.ru/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'экономика', 'ЖКХ', 'промышленность'],
-  'priority': 5,
-  'enabled': True},
- {'id': 'aif_nn',
-  'name': 'Аргументы и факты — НН',
-  'url': 'https://www.aif-nn.ru/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'общество', 'ЗОЖ', 'культура'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'mk_nn',
-  'name': 'МК Нижний Новгород',
-  'url': 'https://nn.mk.ru/news/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'общество', 'спорт', 'происшествия'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'nntv',
-  'name': 'ННТВ (госТВ)',
-  'url': 'https://nntv.tv/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'видео', 'официальные_сводки'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'volga_tv',
-  'name': 'Телекомпания «Волга 24»',
-  'url': 'https://volga24.tv/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'видео', 'городская_среда'],
-  'priority': 3,
-  'enabled': True},
- {'id': 'vestinn',
-  'name': 'ГТРК «Вести Нижний Новгород»',
-  'url': 'https://vestinn.ru/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'видео', 'официальные_сводки'],
-  'priority': 4,
-  'enabled': True},
- {'id': 'nia_nn',
-  'name': 'НИА «Нижний Новгород»',
-  'url': 'https://www.niann.ru/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'экономика', 'транспорт', 'ЖКХ', 'культура'],
-  'priority': 5,
-  'enabled': True},
- {'id': 'progorod',
-  'name': 'ПроГород Нижний Новгород',
-  'url': 'https://progorodnn.ru/',
-  'type': 'html',
-  'tags': ['область', 'медиа', 'происшествия', 'общество'],
-  'priority': 3,
-  'enabled': True}]
+from __future__ import annotations
+
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, Dict, List
+from urllib.parse import urlparse
+
+import hashlib
+import re
+import yaml
+
+_DEFAULTS_CACHE: Dict[str, Any] | None = None
+_SOURCES_CACHE: List[Dict[str, Any]] | None = None
+VERSION_REQUIRED = 2
+_RUBRICS = {"kazusy", "objects", "persons"}
+
+
+def _load_yaml() -> Dict[str, Any]:
+    path = Path(__file__).resolve().with_name("sources_nn.yaml")
+    with path.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if int(data.get("version", 0)) != VERSION_REQUIRED:
+        raise ValueError(
+            f"Неверная версия конфигурации: {data.get('version')}, ожидается {VERSION_REQUIRED}"
+        )
+    return data
+
+
+def _normalize_domain(value: str | None) -> str:
+    if not value:
+        return ""
+    domain = value.strip().lower()
+    if domain.startswith("http"):
+        parsed = urlparse(domain)
+        domain = parsed.hostname or ""
+    elif domain.startswith("//"):
+        parsed = urlparse("http:" + domain)
+        domain = parsed.hostname or ""
+    if domain.startswith("www."):
+        domain = domain[4:]
+    try:
+        domain = domain.encode("idna").decode("ascii")
+    except Exception:
+        pass
+    return domain
+
+
+_slug_re = re.compile(r"[^a-z0-9]+")
+
+
+def _merge_defaults(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    defaults = deepcopy(data.get("defaults") or {})
+    sources_raw = data.get("sources") or []
+    result: List[Dict[str, Any]] = []
+    for entry in sources_raw:
+        merged = deepcopy(defaults)
+        merged.update(entry or {})
+
+        url = (merged.get("url") or "").strip()
+        if not url:
+            raise ValueError("Источник без url")
+
+        stype = str(merged.get("type") or "").lower()
+        if stype not in {"rss", "html"}:
+            raise ValueError(f"Неподдерживаемый type={stype} у {merged.get('name') or url}")
+        merged["type"] = stype
+
+        try:
+            tl = int(merged.get("trust_level", 1))
+        except (TypeError, ValueError):
+            raise ValueError(f"Некорректный trust_level у {merged.get('name') or url}")
+        if tl not in (1, 2, 3):
+            raise ValueError(f"trust_level={tl} вне диапазона у {merged.get('name') or url}")
+        merged["trust_level"] = tl
+
+        rubrics_raw = merged.get("rubrics_allowed")
+        if rubrics_raw:
+            rubrics = {str(r).strip() for r in rubrics_raw if str(r).strip()}
+        else:
+            rubrics = set(_RUBRICS)
+        if not rubrics.issubset(_RUBRICS):
+            raise ValueError(
+                f"rubrics_allowed содержит неизвестные значения: {rubrics - _RUBRICS}"
+            )
+        merged["rubrics_allowed"] = sorted(rubrics)
+
+        domain = _normalize_domain(merged.get("source_domain") or merged.get("url"))
+        merged["source_domain"] = domain
+        merged.setdefault("enabled", True)
+        merged.setdefault("rate_limit_per_minute", 12)
+        merged.setdefault("retry", {"attempts": 2, "backoff_ms": 500})
+        merged.setdefault("min_text_length", 200)
+        merged.setdefault("enable_video_scrape", False)
+        merged.setdefault("min_image_width", 900)
+        if "name" not in merged:
+            merged["name"] = domain or merged.get("url", "")
+
+        parsed = urlparse(url if url.startswith(("http://", "https://")) else ("http://" + url))
+        path_key = _slug_re.sub("-", (parsed.path or "/").strip("/").lower()).strip("-") or "root"
+        base_id = f"{domain}:{path_key}"
+        short = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
+        merged.setdefault("id", f"{base_id}:{short}")
+        result.append(merged)
+    return result
+
+
+def _build_sources() -> List[Dict[str, Any]]:
+    global _DEFAULTS_CACHE
+    data = _load_yaml()
+    _DEFAULTS_CACHE = deepcopy(data.get("defaults") or {})
+    return _merge_defaults(data)
+
+
+SOURCES_NN = _build_sources()
+
+SOURCES_BY_DOMAIN: Dict[str, List[Dict[str, Any]]] = {}
+for src in SOURCES_NN:
+    dom = src.get("source_domain", "")
+    if not dom:
+        continue
+    SOURCES_BY_DOMAIN.setdefault(dom, []).append(src)
+
+SOURCES_BY_ID: Dict[str, Dict[str, Any]] = {}
+for src in SOURCES_NN:
+    key = str(src.get("id") or src.get("name"))
+    if key in SOURCES_BY_ID:
+        raise ValueError(f"Дубликат id источника: {key}")
+    SOURCES_BY_ID[key] = src
+
+
+def get_sources_by_domain(domain: str) -> List[Dict[str, Any]]:
+    """Вернуть список источников по домену с учётом нормализации."""
+
+    return SOURCES_BY_DOMAIN.get(_normalize_domain(domain), [])
+

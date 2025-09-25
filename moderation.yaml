@@ -1,0 +1,51 @@
+block:
+  - pattern: "@profanity_ru"
+    label: "ненормативная лексика"
+  - pattern: "\\b(жесть|жутк\\w*|шок\\w*|кров\\w*|расчлен\\w*|труп\\w*|отруб\\w*|\\b18\\+\\b)"
+    label: "шок-контент"
+  - pattern: "\\b(агитаци\\w*|выбор\\w*\\s+агитац\\w*|партия\\s+\\w+\\s+призывает)\\b"
+    label: "политическая агитация"
+  - pattern: "\\b(на правах рекламы|продам|скидк\\w*\\s+\\d+%|акци\\w*\\s+только сегодня)\\b"
+    label: "реклама/спам"
+
+hold_for_review:
+  - id: heavy_incident
+    pattern: "\\b(погиб|смерт\\w*|тяжел\\w*\\s+травм|обруш\\w*|обвал\\w*|ЧП\\b|ДТП\\b)\\b"
+    label: "тяжёлый инцидент"
+  - id: defamation
+    pattern: "\\b(вор|коррупц\\w*|взяточ\\w*|мошенн\\w*|саботаж\\w*|преступл\\w*)\\b"
+    label: "обвинение"
+  - id: personal_data
+    pattern: "\\b(паспорт|ИНН|тел\\.?\\s*\\+?7|адрес:\\s*ул\\.|дом\\s*\\d+)\\b"
+    label: "персональные данные"
+  - id: sensationalism
+    pattern: "\\b(сенсац\\w*|невероятн\\w*|\\b100\\%\\b доказано|шокирующ\\w*)\\b"
+    label: "сенсация"
+
+confirmation_rules:
+  - if: "hold_for_review.match(defamation|heavy_incident)"
+    require:
+      any:
+        - sources_with_trust_level_gte: 3
+        - independent_sources_count_gte: 2
+  - if: "rubric == 'objects'"
+    require:
+      any:
+        - official_source_present: true
+        - independent_sources_count_gte: 2
+
+deprioritize:
+  - pattern: "\\b(ипотек\\w*|скидк\\w*\\s+на\\s+квартир\\w*|PR\\s*материал|пресс-релиз)\\b"
+    label: "низкий приоритет"
+
+rubric_overrides:
+  kazusy:
+    block:
+      - pattern: "\\b(кров\\w*|расчлен\\w*|труп\\w*|гибель\\w*)\\b"
+        label: "тяжёлый контент"
+    hold_for_review:
+      - id: kazus_injury
+        pattern: "\\b(травм\\w*|обруш\\w*|наруш\\w*\\s+ТБ|серьезн\\w*\\s+поврежд)\\b"
+        label: "инцидент в казусах"
+    require_quality_note: true
+

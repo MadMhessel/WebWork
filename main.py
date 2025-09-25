@@ -5,17 +5,30 @@ import sys
 import time
 import threading
 from typing import Dict, List, Tuple
+from urllib.parse import urlparse
 
 import config, logging_setup, fetcher, filters, dedup, db, rewrite, tagging, classifieds
-import moderator as moderation
+import moderator
 import bot_updates
 from utils import normalize_whitespace, compute_title_hash
+import moderation
 try:  # pragma: no cover - publisher may be optional in tests
     import publisher  # type: ignore
 except Exception:  # pragma: no cover
     publisher = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_domain_value(domain: str) -> str:
+    domain = (domain or "").strip().lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    try:
+        domain = domain.encode("idna").decode("ascii")
+    except Exception:
+        pass
+    return domain
 
 
 def _publisher_init() -> None:
@@ -28,13 +41,13 @@ def _publisher_send_direct(item: Dict) -> bool:
     if not publisher:
         return False
     chat_id = getattr(config, "CHANNEL_CHAT_ID", "") or getattr(config, "CHANNEL_ID", "")
-    return publisher.publish_message(
+    mid = publisher.publish_structured_item(
         chat_id,
-        item.get("title", ""),
-        item.get("content", ""),
-        item.get("url", ""),
+        item,
         cfg=config,
+        rewrite_item=False,
     )
+    return bool(mid)
 
 def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     items_iter = fetcher.fetch_all(
@@ -43,6 +56,9 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
 
     seen_urls: set = set()
     seen_title_hashes: set = set()
+
+    sources_by_name = getattr(config, "SOURCES_BY_NAME", {})
+    sources_by_domain = getattr(config, "SOURCES_BY_DOMAIN_ALL", {})
 
     cnt_total = 0
     cnt_relevant = 0
@@ -104,6 +120,46 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "topic": bool(topic_ok),
             }
 
+            source_meta = dict(sources_by_name.get(src, {}))
+            domain = _normalize_domain_value(source_meta.get("source_domain"))
+
+            if not domain:
+                parsed = urlparse(url)
+                domain = _normalize_domain_value(parsed.hostname or "")
+
+            domain_sources = sources_by_domain.get(domain, []) if domain else []
+            if domain_sources:
+                matched = None
+                if url:
+                    for candidate in domain_sources:
+                        cand_url = str(candidate.get("url") or "").strip()
+                        if cand_url and url.startswith(cand_url):
+                            matched = candidate
+                            break
+                if not matched:
+                    matched = domain_sources[0]
+                combined = dict(source_meta)
+                combined.update(matched)
+                source_meta = combined
+                domain = source_meta.get("source_domain", domain)
+
+            if not domain:
+                parsed = urlparse(url)
+                domain = _normalize_domain_value(parsed.hostname or "")
+
+            allowed_rubrics = list(source_meta.get("rubrics_allowed", [])) or [
+                "objects",
+                "persons",
+                "kazusy",
+            ]
+            rubric = "objects" if "objects" in allowed_rubrics else allowed_rubrics[0]
+
+            trust_level = 0
+            try:
+                trust_level = int(source_meta.get("trust_level") or 0)
+            except (TypeError, ValueError):
+                trust_level = 0
+
             item_clean = {
                 "source": src,
                 "source_id": src,
@@ -115,13 +171,47 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "published_at": it.get("published_at") or "",
                 "tags": list(tags),
                 "reasons": filter_meta,
+                "rubric": rubric,
+                "source_domain": domain or "",
+                "trust_level": trust_level,
             }
+
+            block = moderation.run_blocklists(item_clean)
+            if block.blocked:
+                logger.info(
+                    "[BLOCK] %s | %s | причина: %s",
+                    src,
+                    title,
+                    block.label or block.pattern,
+                )
+                continue
+
+            flags = moderation.run_hold_flags(item_clean)
+            sources_ctx = []
+            if source_meta:
+                meta_copy = dict(source_meta)
+                if domain and not meta_copy.get("source_domain"):
+                    meta_copy["source_domain"] = domain
+                if trust_level >= 3:
+                    meta_copy.setdefault("is_official", True)
+                sources_ctx.append(meta_copy)
+            confirmation = moderation.check_confirmation_requirements(
+                item_clean, {"sources": sources_ctx, "flags": flags}
+            )
+            trust_summary = moderation.summarize_trust(sources_ctx)
+            quality_note = any(flag.requires_quality_note for flag in flags)
+
+            item_clean["moderation_flags"] = [flag.to_dict() for flag in flags]
+            item_clean["needs_confirmation"] = confirmation.needs_confirmation
+            item_clean["confirmation_reasons"] = confirmation.reasons
+            item_clean["quality_note_required"] = quality_note
+            item_clean["trust_summary"] = trust_summary
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
 
             remember_success = False
             if getattr(config, "ENABLE_MODERATION", False):
-                mod_id = moderation.enqueue_and_preview(item_clean, conn)
+                mod_id = moderator.enqueue_and_preview(item_clean, conn)
                 if mod_id:
                     cnt_queued += 1
                     remember_success = True

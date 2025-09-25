@@ -1,13 +1,16 @@
 import os
+from urllib.parse import urlparse
 from pathlib import Path
 
 from dotenv import load_dotenv
 from platformdirs import user_config_dir
 
 try:  # pragma: no cover - список источников региона
-    from sources_nn import SOURCES_NN
+    from sources_nn import SOURCES_NN, SOURCES_BY_DOMAIN, SOURCES_BY_ID
 except Exception:  # pragma: no cover - файл может отсутствовать
     SOURCES_NN: list[dict] = []
+    SOURCES_BY_DOMAIN: dict[str, list[dict]] = {}
+    SOURCES_BY_ID: dict[str, dict] = {}
 
 
 # Load environment variables from user configuration directory and optional local .env
@@ -499,6 +502,26 @@ SOURCES = [
 
 # Дополняем основными источниками региона
 SOURCES.extend(SOURCES_NN)
+
+# Быстрые индексы по источникам: по имени и домену
+SOURCES_BY_NAME: dict[str, dict] = {}
+SOURCES_BY_DOMAIN_ALL: dict[str, list[dict]] = {}
+for src in SOURCES:
+    name = (src.get("name") or "").strip()
+    if name:
+        SOURCES_BY_NAME[name] = src
+    domain = src.get("source_domain")
+    if not domain:
+        url = src.get("url", "")
+        domain = (urlparse(url).hostname or "").lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+    if domain:
+        try:
+            domain = domain.encode("idna").decode("ascii")
+        except Exception:
+            pass
+        SOURCES_BY_DOMAIN_ALL.setdefault(domain, []).append(src)
 
 # === Хранилище ===
 # (DB_PATH определяется выше и использует CONFIG_DIR по умолчанию)
