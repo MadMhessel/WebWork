@@ -28,7 +28,6 @@ try:  # pragma: no cover - simple fallback handling
         ENABLE_MODERATION as DEFAULT_ENABLE_MODERATION,
         REVIEW_CHAT_ID as DEFAULT_REVIEW_CHAT_ID,
         MODERATOR_IDS as DEFAULT_MODERATOR_IDS,
-        FALLBACK_IMAGE_URL as DEFAULT_FALLBACK_IMAGE_URL,
     )
 except Exception:  # pragma: no cover - executed only when defaults missing
     DEFAULT_BOT_TOKEN = ""
@@ -36,7 +35,6 @@ except Exception:  # pragma: no cover - executed only when defaults missing
     DEFAULT_ENABLE_MODERATION = False
     DEFAULT_REVIEW_CHAT_ID = ""
     DEFAULT_MODERATOR_IDS: set[int] = set()
-    DEFAULT_FALLBACK_IMAGE_URL = "https://example.com/placeholder.png"
 
 # === Базовые настройки бота ===
 # Support both legacy names and new explicit TELEGRAM_* variables
@@ -65,55 +63,7 @@ ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "tru
 STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "false").lower() in {"1", "true", "yes"}
 ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", str(DEFAULT_ENABLE_MODERATION)).lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
-ALLOW_IMAGES: bool = os.getenv("ALLOW_IMAGES", "false").lower() in {"1", "true", "yes"}  # разрешить обработку изображений
-MIN_IMAGE_BYTES: int = int(os.getenv("MIN_IMAGE_BYTES", "4096"))  # минимальный размер файла изображения
-IMAGE_TIMEOUT: int = int(os.getenv("IMAGE_TIMEOUT", "15"))  # таймаут загрузки изображений (сек)
-IMAGE_ALLOWED_DOMAINS = set(
-    s.strip().lower()
-    for s in os.getenv("IMAGE_ALLOWED_DOMAINS", "").split(",")
-    if s.strip()
-)
-IMAGE_MIN_RATIO: float = float(os.getenv("IMAGE_MIN_RATIO", "0.5"))
-IMAGE_MAX_RATIO: float = float(os.getenv("IMAGE_MAX_RATIO", "3.0"))
-IMAGE_ALLOWED_EXT = set(
-    e.strip().lower()
-    for e in os.getenv("IMAGE_ALLOWED_EXT", ".jpg,.jpeg,.png,.webp").split(",")
-    if e.strip()
-)
-IMAGE_DENYLIST_DOMAINS = set(
-    d.strip().lower()
-    for d in os.getenv("IMAGE_DENYLIST_DOMAINS", "mc.yandex.ru,top-fwz1.mail.ru,counter,logo,pixel").split(",")
-    if d.strip()
-)
-
-# --- New image subsystem flags ---
-CONTEXT_IMAGE_ENABLED: bool = os.getenv("CONTEXT_IMAGE_ENABLED", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-CONTEXT_IMAGE_PREFERRED: bool = os.getenv(
-    "CONTEXT_IMAGE_PREFERRED", "false"
-).lower() in {"1", "true", "yes"}
-CONTEXT_IMAGE_PROVIDERS: str = os.getenv(
-    "CONTEXT_IMAGE_PROVIDERS", "openverse,wikimedia"
-)
-CONTEXT_LICENSES: str = os.getenv(
-    "CONTEXT_LICENSES", "cc0,cc-by,cc-by-sa"
-)
-ALLOW_PLACEHOLDER: bool = os.getenv("ALLOW_PLACEHOLDER", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-MAX_IMAGE_BYTES: int = int(os.getenv("MAX_IMAGE_BYTES", "18874368"))
-IMAGES_CACHE_DIR: str = os.getenv("IMAGES_CACHE_DIR", "./cache/images")
 REGION_HINT: str = os.getenv("REGION_HINT", "Нижегородская область")
-
-FALLBACK_IMAGE_URL: str = os.getenv(
-    "FALLBACK_IMAGE_URL",
-    DEFAULT_FALLBACK_IMAGE_URL,
-).strip()
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -139,16 +89,10 @@ MODERATOR_IDS: set[int] = {
     if x.strip()
 }
 ALLOWED_MODERATORS = MODERATOR_IDS
-ATTACH_IMAGES: bool = os.getenv("ATTACH_IMAGES", "false").lower() in {"1", "true", "yes"}
-ENABLE_IMAGE_PIPELINE: bool = os.getenv("ENABLE_IMAGE_PIPELINE", "false").lower() in {"1", "true", "yes"}
-MAX_MEDIA_PER_POST: int = int(os.getenv("MAX_MEDIA_PER_POST", "10"))
-IMAGE_MIN_EDGE: int = int(os.getenv("IMAGE_MIN_EDGE", "220"))
-IMAGE_MIN_AREA: int = int(os.getenv("IMAGE_MIN_AREA", "45000"))
 SNOOZE_MINUTES: int = int(os.getenv("SNOOZE_MINUTES", "0"))
 REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
 CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
-PREVIEW_MODE: str = os.getenv("PREVIEW_MODE", "auto")
 _RAW_PARSE_MODE = (
     os.getenv("TELEGRAM_PARSE_MODE")
     or os.getenv("PARSE_MODE")
@@ -560,25 +504,6 @@ PUBLISH_SLEEP_BETWEEN_SEC: float = float(os.getenv("PUBLISH_SLEEP_BETWEEN_SEC", 
 
 # === Рерайт (опц.) ===
 REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "600"))
-
-# --- Яндекс LLM (Foundation Models) ---
-YANDEX_REWRITE_ENABLED: bool = os.getenv("YANDEX_REWRITE_ENABLED", "0").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-YANDEX_API_MODE: str = os.getenv("YANDEX_API_MODE", "openai").strip().lower()
-YANDEX_API_KEY: str = os.getenv("YANDEX_API_KEY", "").strip()
-YANDEX_IAM_TOKEN: str = os.getenv("YANDEX_IAM_TOKEN", "").strip()
-YANDEX_FOLDER_ID: str = os.getenv("YANDEX_FOLDER_ID", "").strip()
-YANDEX_MODEL: str = os.getenv("YANDEX_MODEL", "yandexgpt-lite").strip()
-YANDEX_TEMPERATURE: float = float(os.getenv("YANDEX_TEMPERATURE", "0.2"))
-YANDEX_MAX_TOKENS: int = int(os.getenv("YANDEX_MAX_TOKENS", "800"))
-YANDEX_TIMEOUT_CONNECT: float = float(os.getenv("YANDEX_TIMEOUT_CONNECT", "5"))
-YANDEX_TIMEOUT_READ: float = float(os.getenv("YANDEX_TIMEOUT_READ", "30"))
-YANDEX_RETRIES: int = int(os.getenv("YANDEX_RETRIES", "2"))
-YANDEX_TOP_P: float = float(os.getenv("YANDEX_TOP_P", "1"))
-YANDEX_REQUESTS_PER_MINUTE: int = int(os.getenv("YANDEX_REQUESTS_PER_MINUTE", "60"))
 
 # === Кластеризация похожих заголовков (опц.) ===
 ENABLE_TITLE_CLUSTERING = os.getenv("ENABLE_TITLE_CLUSTERING", "false").lower() in {"1", "true", "yes"}

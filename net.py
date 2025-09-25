@@ -127,20 +127,3 @@ def get_bytes(
         resp.close()
 
 
-_PIXEL_PATTERNS = ["vk.com/rtrg", "metrika", "pixel", "counter", "stats"]
-
-
-def is_downloadable_image_url(u: str) -> bool:
-    if not u:
-        return False
-    u = u.strip()
-    parsed = urlparse(u)
-    if parsed.scheme not in {"http", "https"}:
-        return False
-    low = u.lower()
-    if any(p in low for p in _PIXEL_PATTERNS):
-        return False
-    _, ext = os.path.splitext(parsed.path)
-    if ext.lower() in {".svg", ".gif"}:
-        return False
-    return True

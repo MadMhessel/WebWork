@@ -52,7 +52,6 @@ MOCK_ITEMS: List[Dict[str, str]] = [
         "title": "В Нижнем Новгороде началось строительство новой школы",
         "content": "Проект реализуется в рамках нацпрограммы. Подрядчик приступил к работам на площадке.",
         "published_at": "2025-09-04T10:00:00+03:00",
-        "image_url": "",
     },
     {
         "source": "MOCK",
@@ -61,7 +60,6 @@ MOCK_ITEMS: List[Dict[str, str]] = [
         "title": "В Казани стартовало строительство моста",
         "content": "Работы начались на участке через реку, подрядчик определён.",
         "published_at": "2025-09-04T10:05:00+03:00",
-        "image_url": "",
     },
     {
         "source": "MOCK",
@@ -70,7 +68,6 @@ MOCK_ITEMS: List[Dict[str, str]] = [
         "title": "В Нижнем Новгороде прошёл городской фестиваль",
         "content": "Жители посетили концерт и выставки на набережной.",
         "published_at": "2025-09-04T10:10:00+03:00",
-        "image_url": "",
     },
     {
         "source": "MOCK",
@@ -79,7 +76,6 @@ MOCK_ITEMS: List[Dict[str, str]] = [
         "title": "Началось строительство школы в Нижнем Новгороде",
         "content": "Генподрядчик вывел технику, подготовительные работы начаты.",
         "published_at": "2025-09-04T10:15:00+03:00",
-        "image_url": "",
     },
     {
         "source": "MOCK",
@@ -88,7 +84,6 @@ MOCK_ITEMS: List[Dict[str, str]] = [
         "title": "Строительство школы стартовало в Нижнем Новгороде",
         "content": "Объект планируют сдать в 2026 году, предусмотрена инфраструктура.",
         "published_at": "2025-09-04T10:20:00+03:00",
-        "image_url": "",
     },
 ]
 
@@ -175,77 +170,6 @@ def _extract_html_content(soup) -> str:
     return content
 
 
-def _extract_html_image_url(soup, base_url: str = "") -> str:
-    if not soup:
-        return ""
-    # meta tags: OpenGraph and Twitter cards
-    for attrs in [
-        {"property": "og:image"},
-        {"property": "og:image:url"},
-        {"name": "twitter:image"},
-        {"name": "twitter:image:src"},
-        {"property": "twitter:image"},
-        {"property": "twitter:image:src"},
-    ]:
-        tag = soup.find("meta", attrs=attrs)
-        if tag and tag.get("content"):
-            return urljoin(base_url, tag["content"].strip())
-    # link rel="image_src"
-    link = soup.find("link", attrs={"rel": "image_src"})
-    if link and link.get("href"):
-        return urljoin(base_url, link["href"].strip())
-    # first <img>
-    img = soup.find("img")
-    if img and img.get("src"):
-        return urljoin(base_url, img["src"].strip())
-    return ""
-
-
-def _validate_image_url(url: str) -> str:
-    """Check that URL points to an actual image by downloading a small portion."""
-    if not net.is_downloadable_image_url(url):
-        return ""
-    try:
-        data = net.get_bytes(url, timeout=5)
-    except Exception as ex:
-        logger.warning(
-            "Отказ скачивания картинки %s: %s",
-            shorten_url(url),
-            ex,
-        )
-        return ""
-    if data.startswith(b"\xff\xd8") or data.startswith(b"\x89PNG") or data[:4] == b"RIFF":
-        return url
-    logger.warning(
-        "Отказ скачивания картинки %s: тип неизвестен",
-        shorten_url(url),
-    )
-    return ""
-def _extract_html_image_url_basic(soup) -> str:
-    if not soup:
-        return ""
-    # meta tags: OpenGraph and Twitter cards
-    for attrs in [
-        {"property": "og:image"},
-        {"property": "og:image:url"},
-        {"name": "twitter:image"},
-        {"name": "twitter:image:src"},
-        {"property": "twitter:image"},
-        {"property": "twitter:image:src"},
-    ]:
-        tag = soup.find("meta", attrs=attrs)
-        if tag and tag.get("content"):
-            return tag["content"].strip()
-    # link rel="image_src"
-    link = soup.find("link", attrs={"rel": "image_src"})
-    if link and link.get("href"):
-        return link["href"].strip()
-    # first <img>
-    img = soup.find("img")
-    if img and img.get("src"):
-        return img["src"].strip()
-    return ""
-
 def _parse_html_article(
     source_name: str,
     url: str,
@@ -255,7 +179,7 @@ def _parse_html_article(
     html_text = _fetch_text(url, timeout=timeout)
     if not html_text:
         return None
-    title, content, published_at, image_url = "", "", "", ""
+    title, content, published_at = "", "", ""
     soup = None
     if BeautifulSoup is not None:
         try:
@@ -263,17 +187,6 @@ def _parse_html_article(
             title = _extract_html_title(soup)
             published_at = _extract_html_published_at(soup)
             content = _extract_html_content(soup)
-            img_candidate = _extract_html_image_url(soup, url)
-            validated_url = _validate_image_url(img_candidate)
-            if validated_url:
-                image_url = validated_url
-                logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
-            else:
-                img = _extract_html_image_url_basic(soup)
-                if img:
-                    candidate = urljoin(url, img)
-                    if net.is_downloadable_image_url(candidate):
-                        image_url = candidate
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
             soup = None
@@ -304,7 +217,6 @@ def _parse_html_article(
         "title": title,
         "content": content,
         "published_at": published_at,
-        "image_url": image_url or "",
     }
 
 # -------------------- RSS --------------------
@@ -319,7 +231,6 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     content_val = ""
     html_blobs: List[str] = []
     summary_raw = ""
-    candidates: List[str] = []
     try:
         if getattr(entry, "content", None):
             blocks: List[str] = []
@@ -332,42 +243,11 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
         summary_raw = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
         if not content_val:
             content_val = summary_raw
-
-        for m in getattr(entry, "media_content", []) or []:
-            u = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
-            if u:
-                candidates.append(u)
-        for m in getattr(entry, "media_thumbnail", []) or []:
-            u = getattr(m, "url", "") or (m.get("url") if isinstance(m, dict) else "")
-            if u:
-                candidates.append(u)
-        for en in getattr(entry, "enclosures", []) or []:
-            u = getattr(en, "href", "") or getattr(en, "url", "")
-            if isinstance(en, dict):
-                u = en.get("href") or en.get("url") or u
-            if u:
-                candidates.append(u)
-        for ln in getattr(entry, "links", []) or []:
-            rel = getattr(ln, "rel", "") or (ln.get("rel") if isinstance(ln, dict) else "")
-            type_ = getattr(ln, "type", "") or (ln.get("type") if isinstance(ln, dict) else "")
-            href = getattr(ln, "href", "") or getattr(ln, "url", "")
-            if isinstance(ln, dict):
-                href = ln.get("href") or ln.get("url") or href
-            if rel == "enclosure" and type_.startswith("image/") and href:
-                candidates.append(href)
     except Exception as ex:
-        logger.warning("Отказ извлечения картинки из RSS: %s", ex)
+        logger.debug("Не удалось разобрать контент RSS: %s", ex)
 
     if summary_raw:
         html_blobs.append(summary_raw)
-    img_re = re.compile(r"""<img[^>]+src=['\"]([^'\"]+)['\"]""", flags=re.I)
-    for blob in html_blobs:
-        for img in img_re.findall(blob):
-            candidates.append(img)
-
-    image_url = _validate_image_url(_first_http_url(candidates))
-    if image_url:
-        logger.debug("Источник '%s', картинка: %s", source_name, shorten_url(image_url))
 
     title = normalize_whitespace(title)
     content_val = normalize_whitespace(content_val)
@@ -380,7 +260,6 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
         "title": title,
         "content": content_val,
         "published_at": published_at,
-        "image_url": image_url or "",
     }
 
 def fetch_rss(
@@ -541,18 +420,6 @@ def fetch_html_list(
         # 5) загрузим карточку материала
         detail = _parse_html_article(name, link_abs, timeout=timeout)
         if not detail:
-            img_el = None
-            img_css = sels.get("image") or "img"
-            img_attr = (sels.get("image_attr") or "src").strip()
-            try:
-                img_el = node.select_one(img_css)
-            except Exception:
-                img_el = None
-            img_src = ""
-            if img_el and img_el.get(img_attr):
-                raw_src = img_el.get(img_attr).strip()
-                img_src = urljoin(base_url, raw_src)
-
             out.append({
                 "source": name,
                 "guid": link_abs,
@@ -560,7 +427,6 @@ def fetch_html_list(
                 "title": title_list or "(без заголовка)",
                 "content": "",
                 "published_at": date_text or "",
-                "image_url": img_src,
             })
             continue
 
@@ -573,7 +439,6 @@ def fetch_html_list(
             "title": title_final,
             "content": detail.get("content") or "",
             "published_at": detail.get("published_at") or date_text or "",
-            "image_url": detail.get("image_url") or "",
         })
 
     logger.info("Получено %d записей из HTML-листа: %s", len(out), name)
@@ -615,8 +480,6 @@ def fetch_all(
                 items = fetch_rss(s, limit=limit, timeout=timeout)
 
             for it in items:
-                if "image_url" not in it:
-                    it["image_url"] = ""
                 yield it
             time.sleep(0.2)
         except Exception as ex:

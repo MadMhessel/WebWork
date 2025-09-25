@@ -24,58 +24,19 @@ python -m config init
 
 Поддерживаются следующие переменные:
 - `BOT_TOKEN`, `CHANNEL_ID`, `REVIEW_CHAT_ID`, `CHANNEL_CHAT_ID`
-- `MODERATOR_IDS`, `ATTACH_IMAGES`, `MAX_MEDIA_PER_POST`, `IMAGE_MIN_EDGE`, `IMAGE_MIN_AREA`, `IMAGE_DOMAINS_DENYLIST`
-- `SNOOZE_MINUTES`, `REVIEW_TTL_HOURS`, `RETRY_LIMIT`
+- `MODERATOR_IDS`, `SNOOZE_MINUTES`, `REVIEW_TTL_HOURS`, `RETRY_LIMIT`
 - `ENABLE_REWRITE`, `STRICT_FILTER`, `LOG_LEVEL`
 - `ON_SEND_ERROR`, `PUBLISH_MAX_RETRIES`, `RETRY_BACKOFF_SECONDS`
 - `POLL_INTERVAL_SECONDS`, `FETCH_LIMIT_PER_SOURCE`
 - `HTTP_TIMEOUT_CONNECT`, `HTTP_TIMEOUT_READ`, `HTTP_RETRY_TOTAL`, `HTTP_BACKOFF`
-- `IMAGE_ALLOWED_EXT`, `IMAGE_DENYLIST_DOMAINS`, `MIN_IMAGE_BYTES`
-- `IMAGES_ENABLED`, `IMAGES_MAX_BYTES`, `IMAGES_MIN_WIDTH`, `IMAGES_CONVERT_TO_JPEG`,
-  `IMAGES_CACHE_DIR`
-- `MAX_POST_LEN`, `MAX_CAPTION_LEN`, `REWRITE_TARGET_LEN`, `REGION_HINT`,
-  `PARSE_MODE`, `SPLIT_LONG_POSTS`
-- `YANDEX_REWRITE_ENABLED`, `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`,
-  `YANDEX_MODEL`, `YANDEX_TEMPERATURE`, `YANDEX_MAX_TOKENS`
+- `MAX_POST_LEN`, `CAPTION_LIMIT`, `REGION_HINT`, `PARSE_MODE`
 - ключевые слова и источники в `newsbot/config.py`
 
-### Подсистема изображений
+### Рерайт
 
-Новая архитектура обработки изображений гарантирует отправку только реальных
-фото. Бот скачивает файлы локально, проверяет размеры и лицензии и использует
-кэш `images_cache` с полем `created_at` для повторного использования `tg_file_id`.
-Поддерживается поиск контекстных изображений из открытых источников
-(Openverse, Wikimedia). Основные параметры окружения:
-
-- `CONTEXT_IMAGE_ENABLED` — разрешить поиск контекстных фото (по умолчанию `true`)
-- `CONTEXT_IMAGE_PREFERRED` — пробовать контекстные фото раньше сайта (`false`)
-- `CONTEXT_IMAGE_PROVIDERS` — список провайдеров, порядок задаёт приоритет
-- `CONTEXT_LICENSES` — белый список лицензий (`cc0,cc-by,cc-by-sa`)
-- `ALLOW_PLACEHOLDER` и `FALLBACK_IMAGE_URL` — включение заглушки (по умолчанию выключено)
-
-Если изображение не найдено, бот публикует сообщение без фото. В Telegram
-никогда не отправляются внешние URL — используется только локальный файл или
-уже сохранённый `tg_file_id`.
-
-### Рерайт через YandexGPT
-
-Для более качественного сжатия текста используется модель YandexGPT. Включить
-её можно, задав в `.env` переменную `YANDEX_REWRITE_ENABLED=true` и указав
-учётные данные. Клиент поддерживает два режима:
-
-```
-YANDEX_API_MODE=openai   # или rest
-YANDEX_API_KEY=<API-ключ>      # для режима openai
-YANDEX_IAM_TOKEN=<IAM-токен>   # для режима rest
-YANDEX_FOLDER_ID=<folder-id>
-```
-
-API‑ключ или IAM‑токен создаются в [консоли Yandex Cloud](https://console.cloud.yandex.ru/).
-Нужен сервисный аккаунт с ролью `ai.languageModels.user` и ключом/токеном с
-областью `yc.ai.foundationModels.execute`. `FOLDER_ID` можно посмотреть на
-странице каталога. Дополнительные параметры (`YANDEX_MODEL`,
-`YANDEX_TEMPERATURE`, `YANDEX_MAX_TOKENS`) позволяют тонко настроить
-генерацию.
+Базовый модуль рерайта работает полностью локально и не требует внешних LLM.
+Он сокращает HTML‑тело новости и формирует безопасный текст под ограничение
+Telegram.
 
 По умолчанию достаточно присутствия региональных ключевых слов. Если установить `STRICT_FILTER=1`, бот будет требовать одновременно и регион, и строительную тематику.
 
@@ -95,8 +56,8 @@ API‑ключ или IAM‑токен создаются в [консоли Yan
    - `TELEGRAM_BOT_TOKEN` – токен бота;
    - `CHANNEL_CHAT_ID` (или `CHANNEL_ID`) – целевой канал;
    - при модерации (`ENABLE_MODERATION=1`) задайте `REVIEW_CHAT_ID` и `MODERATOR_IDS`.
-3. При необходимости скорректируйте лимиты Telegram и параметры изображений
-   (`CAPTION_LIMIT`, `TELEGRAM_MESSAGE_LIMIT`, `ATTACH_IMAGES`, `FALLBACK_IMAGE_URL`).
+3. При необходимости скорректируйте лимиты Telegram (`CAPTION_LIMIT`,
+   `TELEGRAM_MESSAGE_LIMIT`).
 4. Запустите `python main.py`.
 
 ## Запуск
@@ -144,14 +105,10 @@ python .\main.py --loop
 
 1. **Фильтрация** — новости отбрасываются, если не содержат упоминаний
    Нижегородской области.
-2. **Изображения** — модуль `images` выбирает лучшую картинку, скачивает и
-   кэширует её в каталоге `./cache/images`.  Файлы меньшие 20 KB или шириной
-   менее 400 px отбрасываются.
-3. **Рерайт** — `rewriter.Rewriter` формирует укороченный безопасный текст.
-   Вначале пробуется внешняя LLM, при ошибке используется правило‑ориентированная
-   стратегия.  Длина поста ограничивается `MAX_POST_LEN`.
-4. **Публикация** — через `telegram_client` отправляется фотография с кратким
-   caption и затем при необходимости длинный текст.
+2. **Рерайт** — `rewriter.Rewriter` формирует укороченный безопасный текст.
+   Длина поста ограничивается `MAX_POST_LEN`.
+3. **Публикация** — текст отправляется в канал с учётом лимитов Telegram и
+   автоматических ретраев.
 
 ## Антидубликаты
 SQLite `published_news`: UNIQUE url, индексы по `guid` и `title_norm_hash`. Повторные прогоны не шлют дубли.

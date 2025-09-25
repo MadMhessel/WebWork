@@ -1,27 +1,18 @@
 import json
 import logging
 import time
-from io import BytesIO
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional
 import sqlite3
 
 import requests
-import html
 
 from formatting import clean_html_tags, html_escape, truncate_by_chars
 
-try:  # Pillow is optional
-    from PIL import Image  # type: ignore
-except Exception:  # pragma: no cover
-    Image = None  # type: ignore
-
-try:
-    from . import config, db, rewrite, http_client
-except ImportError:  # pragma: no cover
+try:  # pragma: no cover - package import in production
+    from . import config, rewrite
+except ImportError:  # pragma: no cover - direct script execution
     import config  # type: ignore
-    import db  # type: ignore
     import rewrite  # type: ignore
-    import http_client  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +46,7 @@ def _ensure_client() -> bool:
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
+
 _MD_V2_RESERVED = "_*[]()~`>#+-=|{}.!\\"
 
 
@@ -63,8 +55,6 @@ def _escape_markdown_v2(text: str) -> str:
 
 
 def _escape_html(text: str) -> str:
-    """Delegate HTML escaping to :mod:`formatting`."""
-
     return html_escape(text or "")
 
 
@@ -90,10 +80,8 @@ def _smart_trim(text: str, max_chars: int) -> str:
 
 
 def _sanitize_md_tail(text: str) -> str:
-    """Remove trailing characters that may break MarkdownV2."""
     if text is None:
         return text
-    # drop dangling escape or formatting markers
     while text and text[-1] in _MD_V2_RESERVED:
         if len(text) >= 2 and text[-2] == "\\":
             break
@@ -131,7 +119,6 @@ def _normalize_parse_mode(mode: str) -> str:
 
 
 def format_preview(post: Dict[str, Any], cfg=config) -> tuple[str, Optional[str]]:
-    """Format a news post for Telegram preview with escaping and limits."""
     parse_mode = _normalize_parse_mode(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     )
@@ -162,7 +149,7 @@ def _api_post(
             logger.error("Telegram %s ok=false: %s", method, r.text)
             return None
         return j
-    except Exception as ex:  # pragma: no cover
+    except Exception as ex:  # pragma: no cover - network failure guard
         logger.exception("Исключение при вызове Telegram %s: %s", method, ex)
         return None
 
@@ -194,69 +181,25 @@ def _send_text(
     return str(j.get("result", {}).get("message_id"))
 
 
-def _send_photo(
-    chat_id: str,
-    photo: Union[BytesIO, str],
-    caption: str,
-    parse_mode: str,
-    mime: Optional[str] = None,
-    reply_markup: Optional[dict] = None,
-) -> Optional[Tuple[str, Optional[str]]]:
-    payload: Dict[str, Any] = {
-        "chat_id": chat_id,
-        "caption": caption,
-        "parse_mode": parse_mode,
-    }
-    if reply_markup is not None:
-        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+def _send_with_retry(action: Callable[[], Optional[str]], cfg=config) -> Optional[str]:
+    mode = getattr(cfg, "ON_SEND_ERROR", "retry").lower()
+    retries = max(0, int(getattr(cfg, "PUBLISH_MAX_RETRIES", 0)))
+    backoff = max(0.0, float(getattr(cfg, "RETRY_BACKOFF_SECONDS", 0.0)))
 
-    photo_kind = "upload" if isinstance(photo, BytesIO) else "file_id"
-    logger.info(
-        "Sending photo: parse_mode=%s caption_len=%d type=%s",
-        parse_mode,
-        len(caption or ""),
-        photo_kind,
-    )
-
-    if isinstance(photo, BytesIO):
-        if not mime:
-            raise ValueError("mime required when uploading BytesIO")
-        files = {"photo": ("image", photo, mime)}
-    else:
-        if str(photo).startswith("http"):
-            raise ValueError("photo URL not allowed; provide BytesIO or file_id")
-        files = None
-        payload["photo"] = photo
-
-    if not _ensure_client():
-        return None
-    url = f"{_client_base_url}/sendPhoto"
-    r = None
-    try:
-        r = requests.post(url, data=payload, files=files, timeout=30)
-        if r.status_code != 200:
-            logger.error("sendPhoto failed: HTTP %s", r.status_code)
-            success = False
-            j = None
-        else:
-            j = r.json()
-            success = bool(j.get("ok"))
-            if not success:
-                logger.error("sendPhoto failed: %s", r.text[:200])
-    except Exception as ex:  # pragma: no cover
-        logger.exception("Exception during sendPhoto: %s", ex)
-        success = False
-        j = None
-    if not success:
-        return None
-
-    res = j.get("result", {}) if j else {}
-    fid = None
-    try:
-        fid = res.get("photo", [{}])[-1].get("file_id")
-    except Exception:
-        fid = None
-    return str(res.get("message_id")), fid
+    for attempt in range(retries + 1):
+        mid = action()
+        if mid:
+            return mid
+        if mode == "ignore":
+            return None
+        if mode == "raise":
+            raise RuntimeError("Не удалось отправить сообщение в Telegram")
+        if mode != "retry" or attempt == retries:
+            break
+        sleep_for = backoff * (attempt + 1)
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -271,63 +214,12 @@ def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
     return _send_text(chat_id, text, parse_mode)
 
 
-def _download_image(url: str, cfg=config) -> Optional[Tuple[BytesIO, str]]:
-    t = float(getattr(cfg, "IMAGE_TIMEOUT", 15))
-    timeout = (t, t)
-    max_bytes = int(getattr(cfg, "IMAGE_MAX_BYTES", 5 * 1024 * 1024))
-    min_bytes = int(getattr(cfg, "MIN_IMAGE_BYTES", 4096))
-    session = http_client.get_session()
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Language": "ru,en;q=0.8",
-        "Referer": url,
-    }
-    try:
-        with session.get(
-            url, timeout=timeout, stream=True, headers=headers, allow_redirects=True
-        ) as r:
-            if r.status_code != 200:
-                return None
-            ctype = (r.headers.get("Content-Type") or "").split(";")[0]
-            if not ctype.startswith("image/"):
-                return None
-            cl = r.headers.get("Content-Length")
-            if cl and int(cl) > max_bytes:
-                return None
-            data = BytesIO()
-            for chunk in r.iter_content(8192):
-                if not chunk:
-                    continue
-                data.write(chunk)
-                if data.tell() > max_bytes:
-                    return None
-            if data.tell() < min_bytes:
-                return None
-            data.seek(0)
-            if ctype in {"image/webp", "image/avif"} and Image is not None:
-                try:
-                    with Image.open(data) as im:
-                        converted = BytesIO()
-                        im.save(converted, format="JPEG", quality=85)
-                        converted.seek(0)
-                        return converted, "image/jpeg"
-                except Exception:
-                    return None
-            return data, ctype
-    except Exception:  # pragma: no cover
-        return None
-
-
 def publish_message(
     chat_id: str,
     title: str,
     body: str,
     url: str,
-    image_url: Optional[str] = None,
-    image_bytes: Optional[bytes] = None,
-    image_mime: Optional[str] = None,
-    credit: Optional[str] = None,
+    *,
     cfg=config,
 ) -> bool:
     if not chat_id:
@@ -335,92 +227,39 @@ def publish_message(
     parse_mode = _normalize_parse_mode(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     )
-    limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
     item = {"title": title, "content": body, "url": url}
-    if image_url:
-        item["image_url"] = image_url
     rewritten = rewrite.maybe_rewrite_item(item, cfg)
     body_current = rewritten.get("content", "") or ""
-    caption, long_text = compose_preview(
-        title or "", body_current, url or "", parse_mode
-    )
-    caption_limit = int(getattr(cfg, "CAPTION_LIMIT", 1024))
-    extra_credit: Optional[str] = None
-    if credit:
-        if parse_mode == "MarkdownV2":
-            credit_text = _escape_markdown_v2(credit)
-            credit_tag = f"_Фото: {credit_text}_"
-        else:
-            credit_text = _escape_html(credit)
-            credit_tag = f"<i>Фото: {credit_text}</i>"
-        if len(caption) + 2 + len(credit_tag) <= caption_limit:
-            caption = f"{caption}\n\n{credit_tag}"
-        else:
-            extra_credit = credit_tag
-    limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
-    if long_text is None and len(caption) > limit:
-        caption = _smart_trim(caption, limit)
+    caption, long_text = compose_preview(title or "", body_current, url or "", parse_mode)
 
-    mid: Optional[str] = None
-    photo: Optional[Union[BytesIO, str]] = None
-    mime = None
-    conn: Optional[sqlite3.Connection] = None
-    if image_bytes:
-        photo = BytesIO(image_bytes)
-        mime = image_mime or "image/jpeg"
-        if image_url:
-            try:
-                conn = db.connect()
-            except Exception:  # pragma: no cover
-                conn = None
-    elif image_url:
-        try:
-            conn = db.connect()
-        except Exception:  # pragma: no cover
-            conn = None
-        cached = db.get_cached_file_id(conn, image_url) if conn else None
-        if cached:
-            photo = cached
-        else:
-            dl = _download_image(image_url, cfg)
-            if dl:
-                photo, mime = dl
-            else:
-                photo = None
+    messages: list[str] = []
+    if caption:
+        messages.append(caption)
+    if long_text and long_text != caption:
+        messages.append(long_text)
 
-    credit_block = ""
-    if credit and photo:
-        credit_html = html.escape(str(credit))
-        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
-        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
-            caption += credit_block
-            credit_block = ""
+    msg_limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
+    last_mid: Optional[str] = None
+    for idx, text in enumerate(messages):
+        trimmed = text if len(text) <= msg_limit else _smart_trim(text, msg_limit)
 
-    if photo:
-        res = _send_photo(chat_id, photo, caption, parse_mode, mime)
-        if res:
-            mid, fid = res
-            if fid and image_url and conn:
-                db.put_cached_file_id(conn, image_url, fid)
-            if credit_block:
-                _send_text(
-                    chat_id,
-                    credit_block.strip(),
-                    parse_mode,
-                    reply_to_message_id=mid,
-                )
-            if long_text:
-                _send_text(chat_id, long_text, parse_mode)
-    if mid is None:
-        mid = _send_text(chat_id, caption if not long_text else long_text, parse_mode)
-        if extra_credit and mid:
-            _send_text(chat_id, extra_credit, parse_mode, reply_to_message_id=mid)
-    if not mid:
-        return False
+        def _send() -> Optional[str]:
+            return _send_text(
+                chat_id,
+                trimmed,
+                parse_mode,
+                reply_to_message_id=last_mid if idx > 0 else None,
+            )
+
+        mid = _send_with_retry(_send, cfg)
+        if not mid:
+            return False
+        last_mid = mid
+
     sleep = float(getattr(cfg, "PUBLISH_SLEEP_BETWEEN_SEC", 0))
     if sleep > 0:
         time.sleep(sleep)
-    return True
+    return bool(messages)
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +270,6 @@ def publish_message(
 def answer_callback_query(
     callback_query_id: str, text: Optional[str] = None, show_alert: bool = False
 ) -> None:
-    """Acknowledge a button callback to stop the Telegram client's spinner."""
     payload: Dict[str, Any] = {"callback_query_id": callback_query_id}
     if text:
         payload["text"] = text
@@ -440,8 +278,7 @@ def answer_callback_query(
     _api_post("answerCallbackQuery", payload)
 
 
-def remove_moderation_buttons(chat_id: str, message_id: Union[int, str]) -> None:
-    """Remove inline keyboard from moderation preview message."""
+def remove_moderation_buttons(chat_id: str, message_id: int | str) -> None:
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "message_id": message_id,
@@ -453,7 +290,6 @@ def remove_moderation_buttons(chat_id: str, message_id: Union[int, str]) -> None
 def send_moderation_preview(
     chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config
 ) -> Optional[str]:
-    """Send preview message with inline buttons for moderation."""
     caption, long_text = format_preview(item, cfg)
     parse_mode = _normalize_parse_mode(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
@@ -475,55 +311,33 @@ def send_moderation_preview(
             [{"text": "🔗", "url": item.get("url", "") or ""}],
         ]
     }
-    photo: Optional[Union[BytesIO, str]] = None
-    mime = None
-    credit = item.get("credit")
-    credit_block = ""
-    if credit and (item.get("tg_file_id") or item.get("image_url")):
-        credit_html = html.escape(str(credit))
-        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
-        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
-            caption += credit_block
-            credit_block = ""
-    if cfg.PREVIEW_MODE != "text_only" and getattr(cfg, "ATTACH_IMAGES", True):
-        photo = item.get("tg_file_id")
-        if not photo and item.get("image_url"):
-            src = item["image_url"]
-            try:
-                conn = db.connect()
-            except Exception:  # pragma: no cover
-                conn = None
-            cached = db.get_cached_file_id(conn, src) if conn else None
-            if cached:
-                photo = cached
-            else:
-                dl = _download_image(src, cfg)
-                if dl:
-                    photo, mime = dl
-    mid = None
-    if photo:
-        res = _send_photo(chat_id, photo, caption, parse_mode, mime, reply_markup=keyboard)
-        if res:
-            mid = res[0]
-            if credit_block:
-                _send_text(
-                    chat_id,
-                    credit_block.strip(),
-                    parse_mode,
-                    reply_to_message_id=mid,
-                )
-            if long_text:
-                _send_text(chat_id, long_text, parse_mode)
-            return mid
-        logger.warning(
-            "Failed to send photo preview for mod_id=%s; falling back to text", mod_id
-        )
-    return _send_text(
-        chat_id,
-        caption if not long_text else long_text,
-        parse_mode,
-        reply_markup=keyboard,
-    )
+
+    messages: list[str] = []
+    if caption:
+        messages.append(caption)
+    if long_text and long_text != caption:
+        messages.append(long_text)
+
+    msg_limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
+    mid: Optional[str] = None
+    for idx, text in enumerate(messages):
+        trimmed = text if len(text) <= msg_limit else _smart_trim(text, msg_limit)
+
+        def _send() -> Optional[str]:
+            return _send_text(
+                chat_id,
+                trimmed,
+                parse_mode,
+                reply_markup=keyboard if idx == 0 else None,
+                reply_to_message_id=mid if idx > 0 else None,
+            )
+
+        new_mid = _send_with_retry(_send, cfg)
+        if not new_mid:
+            return mid if mid else None
+        if idx == 0:
+            mid = new_mid
+    return mid
 
 
 def publish_from_queue(
@@ -544,58 +358,50 @@ def publish_from_queue(
     )
     caption, long_text = compose_preview(title, body, url, parse_mode)
     chat_id = getattr(cfg, "CHANNEL_CHAT_ID", "") or getattr(cfg, "CHANNEL_ID", "")
-    mid: Optional[str] = None
-    photo: Optional[Union[BytesIO, str]] = row["tg_file_id"]
-    mime = None
-    src_url = None
-    if not photo and row["image_url"]:
-        src_url = row["image_url"]
-        cached = db.get_cached_file_id(conn, src_url)
-        if cached:
-            photo = cached
-        else:
-            dl = _download_image(src_url, cfg)
-            if dl:
-                photo, mime = dl
-    credit = row["credit"] if "credit" in row.keys() else None
-    credit_block = ""
-    if credit and photo:
-        credit_html = html.escape(str(credit))
-        credit_block = f"\n\n<i>Фото: {credit_html}</i>"
-        if len(caption) + len(credit_block) <= cfg.CAPTION_LIMIT:
-            caption += credit_block
-            credit_block = ""
 
-    if (
-        cfg.PREVIEW_MODE != "text_only"
-        and getattr(cfg, "ATTACH_IMAGES", True)
-        and photo
-    ):
-        res = _send_photo(chat_id, photo, caption, parse_mode, mime)
-        if res:
-            mid, fid = res
-            if fid and src_url:
-                db.put_cached_file_id(conn, src_url, fid)
-                conn.execute(
-                    "UPDATE moderation_queue SET tg_file_id = ?, image_hash = ? WHERE id = ?",
-                    (fid, None, mod_id),
-                )
-                conn.commit()
-            if credit_block:
-                _send_text(
-                    chat_id,
-                    credit_block.strip(),
-                    parse_mode,
-                    reply_to_message_id=mid,
-                )
-            if long_text:
-                _send_text(chat_id, long_text, parse_mode)
-    if mid is None:
-        mid = _send_text(chat_id, caption if not long_text else long_text, parse_mode)
-    if mid:
-        conn.execute(
-            "UPDATE moderation_queue SET status = ?, channel_message_id = ?, published_at = strftime('%s','now') WHERE id = ?",
-            ("PUBLISHED", mid, mod_id),
-        )
-        conn.commit()
+    messages: list[str] = []
+    if caption:
+        messages.append(caption)
+    if long_text and long_text != caption:
+        messages.append(long_text)
+
+    msg_limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
+    mid: Optional[str] = None
+    for idx, text in enumerate(messages):
+        trimmed = text if len(text) <= msg_limit else _smart_trim(text, msg_limit)
+
+        def _send() -> Optional[str]:
+            return _send_text(
+                chat_id,
+                trimmed,
+                parse_mode,
+                reply_to_message_id=mid if idx > 0 else None,
+            )
+
+        new_mid = _send_with_retry(_send, cfg)
+        if not new_mid:
+            return mid if mid else None
+        if idx == 0:
+            mid = new_mid
+    if not mid:
+        return None
+
+    conn.execute(
+        "UPDATE moderation_queue SET status = ?, channel_message_id = ?, published_at = strftime('%s','now') WHERE id = ?",
+        ("PUBLISHED", mid, mod_id),
+    )
+    conn.commit()
     return mid
+
+
+__all__ = [
+    "init_telegram_client",
+    "send_message",
+    "publish_message",
+    "compose_preview",
+    "format_preview",
+    "answer_callback_query",
+    "remove_moderation_buttons",
+    "send_moderation_preview",
+    "publish_from_queue",
+]
