@@ -3,7 +3,7 @@ import logging
 import os
 import sqlite3
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 try:
@@ -205,6 +205,25 @@ def exists_title_hash(conn: sqlite3.Connection, title_hash: str) -> bool:
         return False
     cur = conn.execute("SELECT 1 FROM dedup WHERE title_hash = ? LIMIT 1", (title_hash,))
     return cur.fetchone() is not None
+
+
+def fetch_recent_titles(
+    conn: sqlite3.Connection, since_ts: int, limit: int
+) -> List[Tuple[str, str]]:
+    """Return recent titles and their hashes from the items table."""
+
+    cur = conn.execute(
+        """
+        SELECT title, title_hash
+          FROM items
+         WHERE added_ts IS NULL OR added_ts >= ?
+         ORDER BY COALESCE(added_ts, 0) DESC
+         LIMIT ?
+        """,
+        (since_ts, limit),
+    )
+    rows = cur.fetchall()
+    return [((row["title"] or ""), (row["title_hash"] or "")) for row in rows]
 
 # ---------- Insert helpers ----------
 

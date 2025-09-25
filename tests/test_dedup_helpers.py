@@ -4,7 +4,7 @@ import time
 
 # ensure parent directory of package is on path
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
-from WebWork import db
+from WebWork import db, dedup, config
 
 def test_exists_helpers():
     conn = db.connect(':memory:')
@@ -89,3 +89,50 @@ def test_prune_old_records():
         batch_limit=10,
     )
     assert removed_disabled == {"items": 0, "dedup": 0}
+
+
+def test_title_clustering_detects_similar(monkeypatch):
+    conn = db.connect(':memory:')
+    db.init_schema(conn)
+
+    original = {
+        'url': 'http://example.com/story',
+        'guid': 'guid-original',
+        'title': 'Крупный пожар произошёл на заводе Нижнего Новгорода',
+        'content': 'detail',
+        'source': 'test',
+    }
+    dedup.remember(conn, original)
+
+    monkeypatch.setattr(config, 'ENABLE_TITLE_CLUSTERING', True)
+    monkeypatch.setattr(config, 'CLUSTER_LOOKBACK_DAYS', 30)
+    monkeypatch.setattr(config, 'CLUSTER_SIM_THRESHOLD', 0.55)
+    monkeypatch.setattr(config, 'CLUSTER_MAX_CANDIDATES', 50)
+
+    candidate_title = 'На нижегородском заводе случился сильный пожар'
+    assert dedup.calc_title_hash(original['title']) != dedup.calc_title_hash(candidate_title)
+
+    assert dedup.is_duplicate(
+        'http://example.com/other',
+        'guid-other',
+        candidate_title,
+        conn,
+    )
+
+
+def test_title_clustering_disabled(monkeypatch):
+    conn = db.connect(':memory:')
+    db.init_schema(conn)
+
+    base = {
+        'url': 'http://example.com/base',
+        'guid': 'guid-base',
+        'title': 'В области открыли новый детский сад',
+    }
+    dedup.remember(conn, base)
+
+    monkeypatch.setattr(config, 'ENABLE_TITLE_CLUSTERING', False)
+    monkeypatch.setattr(config, 'CLUSTER_LOOKBACK_DAYS', 30)
+
+    candidate = 'В регионе появился современный детский сад'
+    assert not dedup.is_duplicate('http://example.com/new', 'guid-new', candidate, conn)

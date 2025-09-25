@@ -113,21 +113,25 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
 
+            remember_success = False
             if getattr(config, "ENABLE_MODERATION", False):
                 mod_id = moderation.enqueue_and_preview(item_clean, conn)
                 if mod_id:
                     cnt_queued += 1
+                    remember_success = True
                 else:
                     cnt_not_sent += 1
             else:
                 sent = _publisher_send_direct(item_clean)
                 if sent:
                     cnt_published += 1
+                    remember_success = True
                 else:
                     cnt_not_sent += 1
 
-            # запоминаем в БД
-            dedup.remember(conn, item_clean)
+            if remember_success:
+                # запоминаем в БД только успешно поставленные/отправленные материалы
+                dedup.remember(conn, item_clean)
 
         except KeyboardInterrupt:
             raise
