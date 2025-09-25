@@ -2,19 +2,22 @@
 import logging
 import time
 import re
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import urljoin, urlparse
 
 import feedparser
 import requests
 
 try:
-    from . import config, net
-    from .utils import normalize_whitespace, shorten_url
+    from . import config, net, dedup
+    from .utils import canonicalize_url, normalize_whitespace, shorten_url
     from .parsers import html as html_parsers
 except ImportError:  # pragma: no cover
     import config, net  # type: ignore
-    from utils import normalize_whitespace, shorten_url  # type: ignore
+    import dedup  # type: ignore
+    from utils import canonicalize_url, normalize_whitespace, shorten_url  # type: ignore
     html_parsers = None  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -28,6 +31,23 @@ except Exception:
 _HOST_FAILS: Dict[str, float] = {}
 _HOST_FAIL_STATS: Dict[str, Dict[str, float]] = {}
 _FAIL_TTL = 30 * 60  # 30 minutes
+_HTTP_CACHE: Dict[str, Dict[str, str]] = {}
+
+_MONTHS_RU = {
+    "январ": 1,
+    "феврал": 2,
+    "март": 3,
+    "апрел": 4,
+    "май": 5,
+    "мая": 5,
+    "июн": 6,
+    "июл": 7,
+    "август": 8,
+    "сентябр": 9,
+    "октябр": 10,
+    "ноябр": 11,
+    "декабр": 12,
+}
 
 
 def _ensure_host_stats(host: str, now: Optional[float] = None) -> Dict[str, float]:
@@ -108,6 +128,131 @@ def reset_host_fail_stats() -> None:
     _HOST_FAIL_STATS.clear()
 
 
+def _cache_key(url: str) -> str:
+    key = canonicalize_url(url)
+    return key or url
+
+
+def _conditional_headers(url: str) -> Dict[str, str]:
+    data = _HTTP_CACHE.get(_cache_key(url))
+    if not data:
+        return {}
+    headers: Dict[str, str] = {}
+    etag = data.get("etag")
+    last_modified = data.get("last_modified")
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+    return headers
+
+
+def _store_response_headers(url: str, headers: Dict[str, str]) -> None:
+    if not headers:
+        return
+    etag = headers.get("ETag") or headers.get("etag")
+    last_modified = headers.get("Last-Modified") or headers.get("last-modified")
+    if not etag and not last_modified:
+        return
+    key = _cache_key(url)
+    _HTTP_CACHE[key] = {}
+    if etag:
+        _HTTP_CACHE[key]["etag"] = etag
+    if last_modified:
+        _HTTP_CACHE[key]["last_modified"] = last_modified
+
+
+def _parse_datetime(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    lower = text.lower()
+    now = datetime.now(timezone.utc)
+
+    time_match = re.search(r"(\d{1,2}:\d{2})", lower)
+    time_parts: Tuple[int, int] | None = None
+    if time_match:
+        try:
+            hh, mm = time_match.group(1).split(":", 1)
+            time_parts = (int(hh), int(mm))
+        except Exception:
+            time_parts = None
+
+    if "сегодня" in lower:
+        base = now
+        if time_parts:
+            base = base.replace(hour=time_parts[0], minute=time_parts[1], second=0, microsecond=0)
+        return base
+    if "вчера" in lower:
+        base = now - timedelta(days=1)
+        if time_parts:
+            base = base.replace(hour=time_parts[0], minute=time_parts[1], second=0, microsecond=0)
+        return base
+
+    try:
+        iso = text.replace("Z", "+00:00")
+        return datetime.fromisoformat(iso)
+    except Exception:
+        pass
+
+    try:
+        return parsedate_to_datetime(text)
+    except Exception:
+        pass
+
+    for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%Y", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+
+    m = re.search(
+        r"(\d{1,2})\s+([а-яё]+)\s+(\d{4})(?:\s+г(?:ода)?)?(?:\s+(\d{1,2}:\d{2}))?",
+        lower,
+    )
+    if m:
+        day = int(m.group(1))
+        month_txt = m.group(2)
+        year = int(m.group(3))
+        month = None
+        for stem, num in _MONTHS_RU.items():
+            if month_txt.startswith(stem):
+                month = num
+                break
+        if month:
+            hour = 0
+            minute = 0
+            if m.group(4):
+                try:
+                    hour, minute = map(int, m.group(4).split(":", 1))
+                except Exception:
+                    hour = minute = 0
+            try:
+                return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+    return None
+
+
+def _is_recent(published_at: str) -> bool:
+    days_back = int(getattr(config, "FETCH_DAYS_BACK", 7))
+    if days_back <= 0:
+        return True
+    dt = _parse_datetime(published_at or "")
+    if not dt:
+        return True
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(dt.tzinfo)
+    return (now - dt) <= timedelta(days=days_back)
+
+
 def _verify_for(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower()
     bad = getattr(config, "SSL_NO_VERIFY_HOSTS", set())
@@ -186,11 +331,19 @@ def _fetch_text(
     try:
         read_to = timeout[1] if timeout else None
         verify = _verify_for(url)
-        text = net.get_text(
-            url, timeout=read_to, allow_redirects=allow_redirects, verify=verify
+        headers = _conditional_headers(url)
+        text, resp_headers, status = net.get_text_with_meta(
+            url,
+            timeout=read_to,
+            allow_redirects=allow_redirects,
+            headers=headers or None,
+            verify=verify,
         )
         _HOST_FAILS.pop(host, None)
         _record_host_success(host, now=now)
+        if status == 304:
+            return ""
+        _store_response_headers(url, resp_headers)
         return text
     except requests.exceptions.SSLError as ex:
         logger.warning("TLS_FAIL %s: %s", host, ex)
@@ -310,10 +463,11 @@ def _parse_html_article(
             pass
     if not title:
         return None
+    canon_url = canonicalize_url(url)
     item = {
         "source": source_name,
-        "guid": url,
-        "url": url,
+        "guid": canon_url or url,
+        "url": canon_url or url,
         "title": title,
         "content": content,
         "published_at": published_at,
@@ -356,10 +510,15 @@ def _entry_to_item_rss(source_name: str, entry) -> Optional[Dict[str, str]]:
     content_val = normalize_whitespace(content_val)
     if not title:
         return None
+    url_norm = canonicalize_url(link)
+    guid_norm = guid.strip()
+    if guid_norm.startswith("http") or guid_norm.startswith("//"):
+        guid_norm = canonicalize_url(guid_norm)
+
     return {
         "source": source_name,
-        "guid": guid,
-        "url": link,
+        "guid": guid_norm,
+        "url": url_norm,
         "title": title,
         "content": content_val,
         "published_at": published_at,
@@ -385,6 +544,9 @@ def fetch_rss(
         for e in fp.entries[:limit]:
             item = _entry_to_item_rss(name, e)
             if item:
+                if not _is_recent(item.get("published_at") or ""):
+                    logger.debug("[SKIP_OLD] %s %s", name, item.get("url"))
+                    continue
                 items.append(item)
         logger.info("Получено %d записей из RSS: %s", len(items), name)
         return items
@@ -566,7 +728,7 @@ def fetch_html_list(
         href = (link_el.get("href").strip() if link_el and link_el.get("href") else "")
         if not href:
             continue
-        link_abs = urljoin(base_url, href)
+        link_abs = canonicalize_url(urljoin(base_url, href))
         if link_abs in seen_links:
             continue
         seen_links.add(link_abs)
@@ -608,6 +770,9 @@ def fetch_html_list(
             name, link_abs, timeout=timeout, selectors=selectors_article
         )
         if not detail:
+            if not _is_recent(date_text or ""):
+                logger.debug("[SKIP_OLD] %s %s", name, link_abs)
+                continue
             out.append({
                 "source": name,
                 "guid": link_abs,
@@ -621,13 +786,18 @@ def fetch_html_list(
         # финальный заголовок/контент
         title_final = detail.get("title") or title_list or ""
         content_final = detail.get("content") or lead_text or ""
+        detail_url = canonicalize_url(detail.get("url") or link_abs)
+        published_final = detail.get("published_at") or date_text or ""
+        if not _is_recent(published_final):
+            logger.debug("[SKIP_OLD] %s %s", name, detail_url)
+            continue
         out.append({
             "source": name,
-            "guid": detail.get("guid") or link_abs,
-            "url": detail.get("url") or link_abs,
+            "guid": detail.get("guid") or detail_url,
+            "url": detail_url,
             "title": title_final,
             "content": content_final,
-            "published_at": detail.get("published_at") or date_text or "",
+            "published_at": published_final,
         })
 
     logger.info("Получено %d записей из HTML-листа: %s", len(out), name)
@@ -652,6 +822,14 @@ def fetch_all(
     чтобы подходящие новости сразу отправлялись на модерацию.
     """
     limit = int(limit_per_source or getattr(config, "FETCH_LIMIT_PER_SOURCE", 30))
+    sim_threshold = float(
+        getattr(
+            config,
+            "BATCH_SIMILARITY_THRESHOLD",
+            getattr(config, "CLUSTER_SIM_THRESHOLD", 0.85),
+        )
+    )
+    batch_profiles: List[Tuple[set[str], set[str]]] = []
     for s in sources:
         if not s.get("enabled", True):
             logger.info("Источник '%s' отключен конфигом", s.get("name"))
@@ -688,6 +866,18 @@ def fetch_all(
                 items = fetch_rss(s, limit=limit, timeout=timeout)
 
             for it in items:
+                title = it.get("title") or ""
+                similar, profile = dedup.similar_to_any(
+                    title, batch_profiles, threshold=sim_threshold
+                )
+                if similar:
+                    logger.debug(
+                        "[SKIP_SIMILAR] %s | %s",
+                        s.get("name"),
+                        title[:160],
+                    )
+                    continue
+                batch_profiles.append(profile)
                 yield it
             time.sleep(0.2)
         except Exception as ex:

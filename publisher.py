@@ -338,6 +338,36 @@ def _build_moderation_header(mod_id: int, item: Dict[str, Any]) -> str:
 
 _TOKEN_RE = re.compile(r"<[^>]+>|[^<]+")
 _SELF_CLOSING_TAGS = {"br", "br/", "hr", "img", "input", "meta", "link"}
+_ALLOWED_TAGS = {"b", "i", "u", "s", "a", "code", "pre", "blockquote", "br"}
+_BLOCKING_TAGS = {"a", "code", "pre", "blockquote"}
+_MIN_CHUNK_LENGTH = 160
+_BR_RE = re.compile(r"<br\s*/?>", re.I)
+
+
+def _sanitize_for_telegram_html(text: str) -> str:
+    if not text:
+        return ""
+
+    cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = cleaned.replace("&nbsp;", " ")
+    cleaned = re.sub(r"<\s*strong[^>]*>", "<b>", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*/\s*strong\s*>", "</b>", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*em[^>]*>", "<i>", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*/\s*em\s*>", "</i>", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*p(?!re)[^>]*>", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*/\s*p(?!re)\s*>", "<br><br>", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*hr[^>]*>", "<br><br>", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*/?\s*(?:div|section)[^>]*>", "<br>", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*li[^>]*>", "<br>• ", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*/\s*li\s*>", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*/?\s*(?:ul|ol)[^>]*>", "<br>", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*span[^>]*>", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"<\s*/\s*span\s*>", "", cleaned, flags=re.I)
+    cleaned = _BR_RE.sub("<br>", cleaned)
+    cleaned = re.sub(r"(?:<br>\s*){3,}", "<br><br>", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = cleaned.strip()
+    return cleaned
 
 
 def _parse_tag(token: str) -> tuple[str, str] | None:
@@ -360,94 +390,208 @@ def _parse_tag(token: str) -> tuple[str, str] | None:
     return "start", name
 
 
+def _closing_suffix(stack_state: list[tuple[str, str]]) -> str:
+    return "".join(f"</{name}>" for name, _ in reversed(stack_state))
+
+
+def _extend_entity_piece(
+    piece: str, remainder: str, *, current_len: int, closing_len: int, limit: int
+) -> str:
+    if "&" not in piece:
+        return piece
+    last_amp = piece.rfind("&")
+    if last_amp == -1 or ";" in piece[last_amp:]:
+        return piece
+    extra_end = remainder.find(";")
+    if extra_end == -1:
+        return piece
+    candidate = piece + remainder[: extra_end + 1]
+    if current_len + len(candidate) + closing_len <= limit:
+        return candidate
+    return piece
+
+
 def split_html_message(text: str, limit: int = 4000) -> list[str]:
     """Split ``text`` into HTML-safe chunks respecting ``limit`` characters."""
 
-    if not text:
+    sanitized = _sanitize_for_telegram_html(text)
+    if not sanitized:
         return []
 
     limit = max(1, int(limit))
-    tokens = list(_TOKEN_RE.findall(text))
+    tokens = list(_TOKEN_RE.findall(sanitized))
     parts: list[str] = []
     stack: list[tuple[str, str]] = []
     current: list[str] = []
     current_len = 0
+    snapshot: dict[str, Any] | None = None
 
     def closing_length() -> int:
-        return sum(len(f"</{name}>") for name, _ in stack)
+        return len(_closing_suffix(stack))
 
-    def flush() -> None:
-        nonlocal current, current_len
-        if not current:
-            return
-        closing = "".join(f"</{name}>" for name, _ in reversed(stack))
-        chunk = "".join(current) + closing
-        if chunk:
-            parts.append(chunk)
+    def reset_state(state: list[tuple[str, str]]) -> None:
+        nonlocal stack, current, current_len
+        stack = list(state)
         current = [token for _, token in stack]
         current_len = sum(len(token) for _, token in stack)
 
-    for token in tokens:
+    def emit_chunk(tokens_subset: list[str], stack_state: list[tuple[str, str]]) -> None:
+        chunk = "".join(tokens_subset) + _closing_suffix(stack_state)
+        plain = re.sub(r"<[^>]+>", "", chunk)
+        if chunk.strip() and plain.strip():
+            parts.append(chunk)
+
+    def flush_current() -> None:
+        nonlocal snapshot
+        if not current:
+            return
+        emit_chunk(current, stack)
+        snapshot = None
+        reset_state(stack)
+
+    def flush_snapshot() -> None:
+        nonlocal snapshot, idx
+        if not snapshot:
+            flush_current()
+            return
+        emit_chunk(snapshot["tokens"], snapshot["stack"])
+        reset_state(snapshot["stack"])
+        idx = snapshot["index"]
+        snapshot = None
+
+    def record_safe(index: int) -> None:
+        return
+
+    idx = 0
+    while idx < len(tokens):
+        token = tokens[idx]
         tag = _parse_tag(token)
         if tag is None:
             remaining = token
             while remaining:
-                free = limit - (current_len + closing_length())
-                if free <= 0:
-                    flush()
-                    if current_len >= limit:
-                        break
+                avail = limit - (current_len + closing_length())
+                if avail <= 0:
+                    if snapshot:
+                        flush_snapshot()
+                        continue
+                    if current:
+                        flush_current()
+                        continue
+                    avail = limit - closing_length()
+                    if avail <= 0:
+                        avail = limit
+                if current and (len(remaining) + current_len + closing_length() > limit):
+                    flush_current()
                     continue
-                piece = remaining[:free]
+                piece = remaining[:avail]
+                piece = _extend_entity_piece(
+                    piece,
+                    remaining[avail:],
+                    current_len=current_len,
+                    closing_len=closing_length(),
+                    limit=limit,
+                )
+                if not piece:
+                    piece = remaining[:avail]
                 current.append(piece)
                 current_len += len(piece)
-                remaining = remaining[free:]
+                remaining = remaining[len(piece) :]
+                if current_len + closing_length() >= limit:
+                    if snapshot:
+                        remaining = piece + remaining
+                        flush_snapshot()
+                        continue
+                    else:
+                        flush_current()
+                        continue
+            idx += 1
             continue
 
         kind, name = tag
+        if name not in _ALLOWED_TAGS:
+            idx += 1
+            continue
+
         token_len = len(token)
-        if kind == "start":
+        if kind == "start" and name != "br":
             while current_len + token_len + closing_length() > limit and current:
-                flush()
+                if snapshot:
+                    flush_snapshot()
+                else:
+                    flush_current()
             current.append(token)
             current_len += token_len
             stack.append((name, token))
+            if name in _BLOCKING_TAGS:
+                snapshot = None
+            idx += 1
             continue
-        if kind == "self":
-            if current_len + token_len + closing_length() > limit and current:
-                flush()
-            current.append(token)
+
+        if kind == "self" or (kind == "start" and name == "br"):
+            token_text = "<br>" if name == "br" else token
+            token_len = len(token_text)
+            while current_len + token_len + closing_length() > limit and current:
+                if snapshot:
+                    flush_snapshot()
+                else:
+                    flush_current()
+            current.append(token_text)
             current_len += token_len
+            if name == "br":
+                record_safe(idx + 1)
+            idx += 1
             continue
+
         # closing tag
         if stack and stack[-1][0] == name:
             while current_len + token_len + closing_length() - len(f"</{name}>") > limit and current:
-                flush()
+                if snapshot:
+                    flush_snapshot()
+                else:
+                    flush_current()
             current.append(token)
             current_len += token_len
             stack.pop()
+            if not stack:
+                record_safe(idx + 1)
         else:
-            # treat as plain text if mismatched
+            # mismatched closing treated as text
             remaining = token
             while remaining:
-                free = limit - (current_len + closing_length())
-                if free <= 0:
-                    flush()
-                    if current_len >= limit:
-                        break
-                    continue
-                piece = remaining[:free]
+                avail = limit - (current_len + closing_length())
+                if avail <= 0:
+                    if snapshot:
+                        flush_snapshot()
+                        continue
+                    if current:
+                        flush_current()
+                        continue
+                    avail = limit
+                piece = remaining[:avail]
                 current.append(piece)
                 current_len += len(piece)
-                remaining = remaining[free:]
+                remaining = remaining[len(piece) :]
+        idx += 1
 
     if current:
-        closing = "".join(f"</{name}>" for name, _ in reversed(stack))
-        chunk = "".join(current) + closing
-        if chunk:
-            parts.append(chunk)
+        emit_chunk(current, stack)
 
-    return [part for part in parts if part.strip()]
+    if not parts:
+        return []
+
+    merged: list[str] = []
+    i = 0
+    while i < len(parts):
+        chunk = parts[i]
+        if i < len(parts) - 1 and len(chunk) < _MIN_CHUNK_LENGTH:
+            nxt = parts[i + 1]
+            if len(chunk) + len(nxt) <= limit:
+                chunk = chunk + "\n\n" + nxt
+                i += 1
+        merged.append(chunk)
+        i += 1
+
+    return merged
 
 
 def _build_publication_header(item: Dict[str, Any]) -> str:
@@ -539,7 +683,8 @@ def _api_post(
     if not _ensure_client():
         return None
     url = f"{_client_base_url}/{method}"
-    while True:
+    max_attempts = 2
+    for attempt in range(max_attempts):
         try:
             r = requests.post(url, data=payload, files=files, timeout=30)
         except Exception as ex:  # pragma: no cover - network failure guard
@@ -547,6 +692,18 @@ def _api_post(
             return None
 
         text = r.text
+        if r.status_code == 429 and attempt == 0:
+            retry_after = 0
+            try:
+                j = r.json()
+                retry_after = int((j.get("parameters") or {}).get("retry_after", 0))
+            except Exception:
+                retry_after = 0
+            if retry_after > 0:
+                logger.warning("FloodWait: retry_after=%s", retry_after)
+                time.sleep(retry_after)
+                continue
+
         try:
             data = r.json()
         except ValueError:
@@ -554,26 +711,13 @@ def _api_post(
             return None
 
         if not data.get("ok"):
-            error_code = data.get("error_code")
-            if error_code == 429:
-                retry_after = data.get("parameters", {}).get("retry_after")
-                if retry_after:
-                    try:
-                        sleep_for = float(retry_after)
-                    except (TypeError, ValueError):
-                        sleep_for = None
-                    if sleep_for and sleep_for > 0:
-                        logger.warning(
-                            "Telegram %s rate limited, повтор через %s с", method, sleep_for
-                        )
-                        time.sleep(sleep_for)
-                        continue
             logger.error("Telegram %s ok=false: %s", method, text)
             return None
         if r.status_code != 200:
             logger.error("Ошибка HTTP %s: %s %s", method, r.status_code, text)
             return None
         return data
+    return None
 
 
 def _send_text(

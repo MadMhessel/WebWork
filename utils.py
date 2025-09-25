@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 import html
-import re
 import hashlib
+import re
 from typing import Any, Dict
+from urllib.parse import parse_qsl, urlparse, urlunparse, urlencode
 
 
 def shorten_url(url: str, max_len: int = 100) -> str:
@@ -39,6 +40,42 @@ def compute_title_hash(title: str) -> str:
 def safe_get(d: Dict[str, Any], key: str, default: str = "") -> str:
     v = d.get(key, default)
     return v if isinstance(v, str) else default
+
+
+def canonicalize_url(url: str) -> str:
+    """Normalize tracking parameters and fragments in URLs."""
+
+    if not url:
+        return ""
+
+    try:
+        parsed = urlparse(url, scheme="http")
+    except Exception:
+        return url
+
+    scheme = parsed.scheme.lower() if parsed.scheme else "https"
+    if scheme in {"", "http"}:
+        scheme = "https"
+
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    if not netloc and parsed.hostname:
+        netloc = parsed.hostname
+
+    netloc = (netloc or "").lower()
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+
+    path = (path or "").rstrip("/") or "/"
+
+    query_params = [
+        (k, v)
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if not (k.lower().startswith("utm_") or k.lower() in {"yclid", "fbclid"})
+    ]
+    query = urlencode(query_params, doseq=True)
+
+    return urlunparse((scheme, netloc, path, "", query, ""))
 
 
 _MD_RESERVED = "_*[]()~`>#+-=|{}.!\\"

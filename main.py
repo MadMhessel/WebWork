@@ -186,8 +186,10 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 )
                 continue
 
-            flags = moderation.run_hold_flags(item_clean)
-            sources_ctx = []
+            flags_hold = moderation.run_hold_flags(item_clean)
+            flags_deprio = moderation.run_deprioritize_flags(item_clean)
+            all_flags = flags_hold + flags_deprio
+            sources_ctx: List[Dict[str, Any]] = []
             if source_meta:
                 meta_copy = dict(source_meta)
                 if domain and not meta_copy.get("source_domain"):
@@ -195,13 +197,13 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 if trust_level >= 3:
                     meta_copy.setdefault("is_official", True)
                 sources_ctx.append(meta_copy)
-            confirmation = moderation.check_confirmation_requirements(
-                item_clean, {"sources": sources_ctx, "flags": flags}
+            confirmation = moderation.needs_confirmation(
+                item_clean, all_flags, {"sources": sources_ctx, "flags": all_flags}
             )
             trust_summary = moderation.summarize_trust(sources_ctx)
-            quality_note = any(flag.requires_quality_note for flag in flags)
+            quality_note = any(flag.requires_quality_note for flag in all_flags)
 
-            item_clean["moderation_flags"] = [flag.to_dict() for flag in flags]
+            item_clean["moderation_flags"] = [flag.to_dict() for flag in all_flags]
             item_clean["needs_confirmation"] = confirmation.needs_confirmation
             item_clean["confirmation_reasons"] = confirmation.reasons
             item_clean["quality_note_required"] = quality_note

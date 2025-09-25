@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 import json
@@ -93,6 +92,13 @@ def _expand_entry(entry: Any) -> List[Dict[str, Any]]:
     return [{"pattern": pattern, "label": label, "id": key}]
 
 
+def _make_flag(entry: Dict[str, Any], *, requires_quality_note: bool = False) -> Flag:
+    pattern = str(entry.get("pattern") or "")
+    key = str(entry.get("id") or entry.get("key") or entry.get("label") or pattern or "")
+    label = str(entry.get("label") or key)
+    return Flag(key=key, pattern=pattern, label=label, requires_quality_note=requires_quality_note)
+
+
 def _get_patterns(kind: str, rubric: Optional[str] = None) -> List[Dict[str, Any]]:
     key = (kind, rubric or "")
     cached = _PATTERN_CACHE.get(key)
@@ -156,9 +162,7 @@ def run_hold_flags(item: Dict[str, Any]) -> List[Flag]:
         if not pattern:
             continue
         if re.search(pattern, text, flags=re.I | re.U):
-            key = str(entry.get("id") or entry.get("key") or entry.get("label") or pattern)
-            label = entry.get("label") or key
-            flags.append(Flag(key=key, pattern=pattern, label=label, requires_quality_note=quality_note))
+            flags.append(_make_flag(entry, requires_quality_note=quality_note))
     return flags
 
 
@@ -178,6 +182,31 @@ def _extract_flag_keys(flags: Sequence[Any]) -> set[str]:
             except Exception:
                 continue
     return keys
+
+
+def _to_mapping(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _item_has_geo_and_topic(item: Dict[str, Any]) -> bool:
+    reasons = _to_mapping(item.get("reasons"))
+    region = bool(reasons.get("region") or reasons.get("region_ok"))
+    topic = bool(reasons.get("topic") or reasons.get("topic_ok"))
+    return region and topic
 
 
 def _source_domains(sources: Sequence[Dict[str, Any]]) -> set[str]:
@@ -213,6 +242,27 @@ def _official_present(sources: Sequence[Dict[str, Any]]) -> bool:
     return False
 
 
+def run_deprioritize_flags(item: Dict[str, Any]) -> List[Flag]:
+    rubric = item.get("rubric")
+    text = _normalize_text(item)
+    if not text:
+        return []
+    matches: List[Flag] = []
+    for entry in _get_patterns("deprioritize", rubric):
+        pattern = entry.get("pattern")
+        if not pattern:
+            continue
+        if re.search(pattern, text, flags=re.I | re.U):
+            matches.append(_make_flag(entry))
+
+    rules = _load_rules()
+    if matches and rules.get("allow_promo_if_objects_and_geo"):
+        rubric_name = (item.get("rubric") or "").strip()
+        if rubric_name == "objects" and _item_has_geo_and_topic(item):
+            matches = [flag for flag in matches if flag.key != "promo"]
+    return matches
+
+
 def _evaluate_requirement(req: Dict[str, Any], sources: Sequence[Dict[str, Any]]) -> bool:
     if "sources_with_trust_level_gte" in req:
         target = int(req.get("sources_with_trust_level_gte") or 0)
@@ -226,12 +276,14 @@ def _evaluate_requirement(req: Dict[str, Any], sources: Sequence[Dict[str, Any]]
     return False
 
 
-def check_confirmation_requirements(
-    item: Dict[str, Any], sources_ctx: Dict[str, Any]
+def needs_confirmation(
+    item: Dict[str, Any], flags: Sequence[Any] | Any, sources_ctx: Dict[str, Any]
 ) -> ConfirmationVerdict:
     rubric = item.get("rubric") or sources_ctx.get("rubric")
-    flags = sources_ctx.get("flags") or item.get("moderation_flags") or []
-    flag_keys = _extract_flag_keys(flags)
+    parsed_flags = parse_flags(flags)
+    if not parsed_flags:
+        parsed_flags = parse_flags(sources_ctx.get("flags"))
+    flag_keys = _extract_flag_keys(parsed_flags)
     sources: Sequence[Dict[str, Any]] = sources_ctx.get("sources") or []
 
     reasons: List[str] = []
@@ -258,10 +310,18 @@ def check_confirmation_requirements(
         ok = True
         if "any" in requirement:
             options = requirement.get("any") or []
-            ok = any(_evaluate_requirement(opt, sources) for opt in options if isinstance(opt, dict))
+            ok = any(
+                _evaluate_requirement(opt, sources)
+                for opt in options
+                if isinstance(opt, dict)
+            )
         elif "all" in requirement:
             options = requirement.get("all") or []
-            ok = all(_evaluate_requirement(opt, sources) for opt in options if isinstance(opt, dict))
+            ok = all(
+                _evaluate_requirement(opt, sources)
+                for opt in options
+                if isinstance(opt, dict)
+            )
         else:
             ok = _evaluate_requirement(requirement, sources)
 
@@ -271,6 +331,13 @@ def check_confirmation_requirements(
     return ConfirmationVerdict(needs_confirmation=bool(reasons), reasons=reasons)
 
 
+def check_confirmation_requirements(
+    item: Dict[str, Any], sources_ctx: Dict[str, Any]
+) -> ConfirmationVerdict:
+    flags = sources_ctx.get("flags") or item.get("moderation_flags") or []
+    return needs_confirmation(item, flags, sources_ctx)
+
+
 def serialize_flags(flags: Iterable[Flag]) -> str:
     return json.dumps([flag.to_dict() for flag in flags], ensure_ascii=False)
 
@@ -278,30 +345,35 @@ def serialize_flags(flags: Iterable[Flag]) -> str:
 def parse_flags(data: Any) -> List[Flag]:
     if not data:
         return []
-    raw: Any
+    if isinstance(data, Flag):
+        return [data]
+    if isinstance(data, list):
+        flags: List[Flag] = []
+        for entry in data:
+            flags.extend(parse_flags(entry))
+        return [flag for flag in flags if isinstance(flag, Flag)]
+    if isinstance(data, dict):
+        if any(key in data for key in ("pattern", "key", "label", "id")) and not (
+            "title" in data or "content" in data
+        ):
+            flag = _make_flag(data, requires_quality_note=bool(data.get("requires_quality_note")))
+            return [flag]
+        item = dict(data)
+        return run_hold_flags(item) + run_deprioritize_flags(item)
     if isinstance(data, str):
-        try:
-            raw = json.loads(data)
-        except json.JSONDecodeError:
+        text = data.strip()
+        if not text:
             return []
-    else:
-        raw = data
-    out: List[Flag] = []
-    for entry in raw:
-        if isinstance(entry, Flag):
-            out.append(entry)
-            continue
-        if not isinstance(entry, dict):
-            continue
-        out.append(
-            Flag(
-                key=str(entry.get("key") or entry.get("id") or ""),
-                pattern=str(entry.get("pattern") or ""),
-                label=str(entry.get("label") or ""),
-                requires_quality_note=bool(entry.get("requires_quality_note")),
-            )
-        )
-    return out
+        if text.startswith("{") or text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if parsed is not None:
+                return parse_flags(parsed)
+        item = {"title": text, "content": text}
+        return run_hold_flags(item) + run_deprioritize_flags(item)
+    return []
 
 
 def summarize_trust(sources: Sequence[Dict[str, Any]]) -> Dict[str, float]:
