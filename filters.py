@@ -105,13 +105,18 @@ def is_relevant(title: str, content: str, cfg) -> Tuple[bool, bool, bool, str]:
     strict = bool(getattr(cfg, "STRICT_FILTER", True))
 
     region_kw = _normalize_keywords(getattr(cfg, "REGION_KEYWORDS", []))
-    topic_kw  = _normalize_keywords(getattr(cfg, "CONSTRUCTION_KEYWORDS", []))
+    topic_kw = _normalize_keywords(getattr(cfg, "CONSTRUCTION_KEYWORDS", []))
+    global_kw = _normalize_keywords(getattr(cfg, "GLOBAL_KEYWORDS", []))
 
     text_for_check = f"{title}\n{_slice_head(content, head_chars)}"
     region_ok = contains_any(text_for_check, region_kw)
-    topic_ok  = contains_any(text_for_check, topic_kw)
+    topic_ok = contains_any(text_for_check, topic_kw)
+    global_ok = contains_any(text_for_check, global_kw)
 
-    ok = (region_ok and topic_ok) if strict else (region_ok or topic_ok)
+    if strict:
+        ok = (region_ok and topic_ok) or global_ok
+    else:
+        ok = region_ok or topic_ok or global_ok
 
     if ok:
         reason = ""
@@ -124,8 +129,13 @@ def is_relevant(title: str, content: str, cfg) -> Tuple[bool, bool, bool, str]:
             reason = "нет слов тематики"
 
     logger.debug(
-        "is_relevant(strict=%s, head=%d) => region=%s topic=%s title='%s'",
-        strict, head_chars, region_ok, topic_ok, title[:120]
+        "is_relevant(strict=%s, head=%d) => region=%s topic=%s global=%s title='%s'",
+        strict,
+        head_chars,
+        region_ok,
+        topic_ok,
+        global_ok,
+        title[:120],
     )
     return ok, region_ok, topic_ok, reason
 
@@ -148,6 +158,9 @@ def is_relevant_for_source(title: str, content: str, source_name: str, cfg) -> T
     relax = bool(getattr(cfg, "WHITELIST_RELAX", True))
 
     ok, region_ok, topic_ok, reason = is_relevant(title, content, cfg)
+    if ok:
+        return ok, region_ok, topic_ok, reason
+
     if src and src in wl and relax:
         ok = region_ok or topic_ok
         if ok:

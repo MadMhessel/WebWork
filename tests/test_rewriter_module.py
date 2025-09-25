@@ -1,56 +1,49 @@
 from types import SimpleNamespace
 
+from rewriter.base import RewriterResult
 from rewriter_module import Rewriter
-import yandex_llm
+from rewriter.rules import RuleBasedRewriter
 
 
-def test_uses_yandex_llm(monkeypatch):
-    called = {}
+def test_uses_rule_engine(monkeypatch):
+    called: dict[str, object] = {}
 
-    def fake(prompt, target_chars, topic_hint, region_hint):
-        called['args'] = (prompt, target_chars, topic_hint, region_hint)
-        return "переписанный текст"
+    def fake_rewrite(self, item, *, max_len=None):  # type: ignore[no-redef]
+        called["title"] = item.title
+        called["text"] = item.text
+        called["max_len"] = max_len
+        return RewriterResult(ok=True, title=item.title, text="переписано", provider="test")
 
-    monkeypatch.setattr(yandex_llm, "rewrite", fake)
-    cfg = SimpleNamespace(
-        YANDEX_REWRITE_ENABLED=True,
-        YANDEX_API_MODE="openai",
-        YANDEX_API_KEY="k",
-        YANDEX_FOLDER_ID="f",
-    )
+    monkeypatch.setattr(RuleBasedRewriter, "rewrite", fake_rewrite, raising=False)
+    cfg = SimpleNamespace()
     r = Rewriter(cfg)
     out = r.rewrite("Заголовок", "<p>Текст</p>", 200, "Нижегородская область")
-    assert out == "переписанный текст"
-    assert called['args'][1] == 200
+
+    assert out == "переписано"
+    assert called["title"] == "Заголовок"
+    assert called["text"] == "Текст"
+    assert called["max_len"] == 200
 
 
-def test_returns_original_on_error(monkeypatch):
-    def fake(*a, **k):
-        raise yandex_llm.ServerError("boom")
-
-    monkeypatch.setattr(yandex_llm, "rewrite", fake)
-    cfg = SimpleNamespace(
-        YANDEX_REWRITE_ENABLED=True,
-        YANDEX_API_MODE="openai",
-        YANDEX_API_KEY="k",
-        YANDEX_FOLDER_ID="f",
-    )
+def test_returns_clean_text_by_default():
+    cfg = SimpleNamespace()
     r = Rewriter(cfg)
-    out = r.rewrite("t", "<p>купить квартиру</p>", 100, "")
+    out = r.rewrite("t", "<p>купить квартиру у нас</p>", 100, "")
     assert "купить" not in out
+    assert "квартиру" in out
 
 
 def test_length_limited(monkeypatch):
-    def fake(prompt, target_chars, topic_hint, region_hint):
-        return "a" * 5000
+    def fake_rewrite(self, item, *, max_len=None):  # type: ignore[no-redef]
+        return RewriterResult(
+            ok=True,
+            title=item.title,
+            text="a" * 5000,
+            provider="test",
+        )
 
-    monkeypatch.setattr(yandex_llm, "rewrite", fake)
-    cfg = SimpleNamespace(
-        YANDEX_REWRITE_ENABLED=True,
-        YANDEX_API_MODE="openai",
-        YANDEX_API_KEY="k",
-        YANDEX_FOLDER_ID="f",
-    )
+    monkeypatch.setattr(RuleBasedRewriter, "rewrite", fake_rewrite, raising=False)
+    cfg = SimpleNamespace()
     r = Rewriter(cfg)
     out = r.rewrite("t", "<p>x</p>", 100, "")
     assert len(out) == 100
