@@ -20,12 +20,14 @@ pip install beautifulsoup4
 python -m config init
 ```
 
-Можно также скопировать шаблон `.env.example` и заполнить его.
+Можно также скопировать шаблон `.env.example` и заполнить его — список переменных
+ограничен только реально поддерживаемыми опциями, чтобы избежать путаницы с
+неиспользуемыми параметрами изображений или внешних LLM.
 
 Поддерживаются следующие переменные:
 - `BOT_TOKEN`, `CHANNEL_ID`, `REVIEW_CHAT_ID`, `CHANNEL_CHAT_ID`
 - `MODERATOR_IDS`, `SNOOZE_MINUTES`, `REVIEW_TTL_HOURS`, `RETRY_LIMIT`
-- `ENABLE_REWRITE`, `STRICT_FILTER`, `LOG_LEVEL`
+- `ENABLE_REWRITE`, `STRICT_FILTER`, `LOG_LEVEL`, `DRY_RUN`
 - `ON_SEND_ERROR`, `PUBLISH_MAX_RETRIES`, `RETRY_BACKOFF_SECONDS`
 - `POLL_INTERVAL_SECONDS`, `FETCH_LIMIT_PER_SOURCE`
 - `HTTP_TIMEOUT_CONNECT`, `HTTP_TIMEOUT_READ`, `HTTP_RETRY_TOTAL`, `HTTP_BACKOFF`
@@ -58,7 +60,16 @@ Telegram.
    - при модерации (`ENABLE_MODERATION=1`) задайте `REVIEW_CHAT_ID` и `MODERATOR_IDS`.
 3. При необходимости скорректируйте лимиты Telegram (`CAPTION_LIMIT`,
    `TELEGRAM_MESSAGE_LIMIT`).
-4. Запустите `python main.py`.
+4. При необходимости включите безопасный режим `DRY_RUN=1`, чтобы проверить фильтры без публикаций.
+5. Запустите `python main.py`.
+
+## Режим DRY-RUN
+
+Установите `DRY_RUN=1`, чтобы бот не делал HTTP-запросы в Telegram. Все отправки
+будут логироваться сообщением `[DRY-RUN: READY]`, а остальные шаги пайплайна —
+фильтрация, рерайт, дедупликация — выполняются как в бою. Это позволяет
+безопасно проверять настройки `.env`, источники и правила без риска
+нежелательных публикаций.
 
 ## Запуск
 Разово:
@@ -69,6 +80,9 @@ python main.py
 ```bash
 python main.py --loop
 ```
+
+Для локального теста без отправки в Telegram установите `DRY_RUN=1` в `.env`
+или передайте переменную окружения при запуске: `DRY_RUN=1 python main.py`.
 
 ## Запуск через PowerShell
 Полный пример для Windows:
@@ -93,6 +107,60 @@ python .\main.py
 
 # запуск в бесконечном цикле
 python .\main.py --loop
+```
+
+## Развертывание службы
+
+### Systemd (Linux)
+
+Создайте юнит `/etc/systemd/system/newsbot.service`:
+
+```ini
+[Unit]
+Description=NewsBot aggregator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/newsbot
+ExecStart=/opt/newsbot/.venv/bin/python -m main --loop
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Скопируйте код в `/opt/newsbot`, создайте виртуальное окружение, заполните
+`~newsbot/.config/NewsBot/.env` и включите службу:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now newsbot.service
+```
+
+### Docker
+
+Минимальный `Dockerfile` для непрерывного запуска:
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install --no-cache-dir -r requirements.txt
+CMD ["python", "main.py", "--loop"]
+```
+
+При запуске пробросьте `.env` и том с базой данных:
+
+```bash
+docker build -t newsbot .
+docker run -d --name newsbot \
+  -v $HOME/.config/NewsBot/.env:/root/.config/NewsBot/.env:ro \
+  -v newsbot_db:/root/.config/NewsBot/newsbot.db \
+  newsbot
 ```
 
 ## Формат логов
@@ -122,6 +190,21 @@ SQLite ведёт две таблицы: `items` хранит опубликов
 - `DEDUP_RETENTION_DAYS` — срок хранения отпечатков в `dedup`.
 - `DB_PRUNE_BATCH` — сколько строк удаляется за один проход (чтобы не держать
   блокировки слишком долго).
+
+### Бэкапы
+
+База SQLite находится по пути `~/.config/NewsBot/newsbot.db`. Для безопасного
+резервного копирования выполните:
+
+```bash
+sqlite3 ~/.config/NewsBot/newsbot.db \
+  ".timeout 2000" \
+  ".backup '/var/backups/newsbot-$(date +%F).db'"
+```
+
+В Docker-окружении подключите том `newsbot_db` и периодически копируйте файл
+`newsbot.db`. Проверяйте каждую копию командой
+`sqlite3 backup.db 'PRAGMA integrity_check;'`.
 
 ## Мониторинг источников
 Бот ведёт статистику неудачных запросов к источникам. Если хост подряд

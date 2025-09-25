@@ -62,6 +62,7 @@ TELEGRAM_LONG_POLL: int = int(os.getenv("TELEGRAM_LONG_POLL", "30"))
 ENABLE_REWRITE: bool = os.getenv("ENABLE_REWRITE", "true").lower() in {"1", "true", "yes"}
 STRICT_FILTER: bool = os.getenv("STRICT_FILTER", "false").lower() in {"1", "true", "yes"}
 ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", str(DEFAULT_ENABLE_MODERATION)).lower() in {"1", "true", "yes"}
+DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() in {"1", "true", "yes"}
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
 REGION_HINT: str = os.getenv("REGION_HINT", "Нижегородская область")
 
@@ -140,9 +141,9 @@ def validate_config() -> None:
     """Validate critical configuration values with clear errors."""
 
     missing: list[str] = []
-    if BOT_TOKEN in {"", "YOUR_TELEGRAM_BOT_TOKEN"}:
+    if not DRY_RUN and BOT_TOKEN in {"", "YOUR_TELEGRAM_BOT_TOKEN"}:
         missing.append("TELEGRAM_BOT_TOKEN")
-    if not str(CHANNEL_CHAT_ID) and not CHANNEL_ID:
+    if not DRY_RUN and not str(CHANNEL_CHAT_ID) and not CHANNEL_ID:
         missing.append("CHANNEL_CHAT_ID or CHANNEL_ID")
     if ENABLE_MODERATION:
         if str(REVIEW_CHAT_ID) in {"", "@your_review_channel"}:
