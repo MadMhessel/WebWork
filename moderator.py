@@ -29,12 +29,26 @@ def is_moderator(user_id: int) -> bool:
         return False
 
 
+def _dump_json_field(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return json.dumps(str(value), ensure_ascii=False)
+
+
 def enqueue_item(item: Dict[str, Any], conn: sqlite3.Connection) -> Optional[int]:
+    tags_json = _dump_json_field(item.get("tags"))
+    reasons_json = _dump_json_field(item.get("reasons"))
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO moderation_queue
-        (source_id, url, guid, title, summary, content, image_url, image_hash, tg_file_id, credit, status, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
+        (source_id, url, guid, title, summary, content, image_url, image_hash, tg_file_id, credit, tags, reasons, status, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
         """,
         (
             item.get("source_id"),
@@ -47,6 +61,8 @@ def enqueue_item(item: Dict[str, Any], conn: sqlite3.Connection) -> Optional[int
             item.get("image_hash"),
             item.get("tg_file_id"),
             item.get("credit"),
+            tags_json,
+            reasons_json,
             PENDING_REVIEW,
         ),
     )

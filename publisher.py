@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 import sqlite3
 
@@ -129,6 +130,151 @@ def format_preview(post: Dict[str, Any], cfg=config) -> tuple[str, Optional[str]
     body = post.get("content", "") or post.get("text", "")
     url = post.get("url", "")
     return compose_preview(title, body, url, parse_mode)
+
+
+def _parse_json_like(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
+    return value
+
+
+def _normalize_tags(value: Any) -> list[str]:
+    raw = _parse_json_like(value)
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
+        parts = [str(p).strip() for p in raw]
+    else:
+        return []
+    seen = []
+    for part in parts:
+        if part and part not in seen:
+            seen.append(part)
+    return seen
+
+
+def _format_filter_flags(value: Any) -> str:
+    raw = _parse_json_like(value)
+    if not isinstance(raw, dict):
+        return ""
+
+    def _truthy(val: Any) -> Optional[bool]:
+        if val is None:
+            return None
+        if isinstance(val, str):
+            v = val.strip().lower()
+            if v in {"", "null"}:
+                return None
+            if v in {"1", "true", "yes", "y", "да"}:
+                return True
+            if v in {"0", "false", "no", "n", "нет"}:
+                return False
+        try:
+            return bool(int(val))
+        except Exception:
+            try:
+                return bool(val)
+            except Exception:
+                return None
+
+    region = _truthy(raw.get("region"))
+    if region is None:
+        region = _truthy(raw.get("region_ok"))
+    topic = _truthy(raw.get("topic"))
+    if topic is None:
+        topic = _truthy(raw.get("topic_ok"))
+
+    parts: list[str] = []
+    if region is not None:
+        parts.append(f"регион {'✅' if region else '✖️'}")
+    if topic is not None:
+        parts.append(f"тематика {'✅' if topic else '✖️'}")
+
+    if not parts:
+        return ""
+
+    note = raw.get("note") or raw.get("reason")
+    tail = f" ({note})" if note else ""
+    return "⚙️ Фильтр: " + ", ".join(parts) + tail
+
+
+def _format_relative_timestamp(ts_value: Any) -> Optional[str]:
+    if ts_value is None:
+        return None
+    try:
+        ts = int(float(ts_value))
+    except Exception:
+        return None
+    if ts <= 0:
+        return None
+    dt = datetime.fromtimestamp(ts)
+    now = datetime.now()
+    delta = now - dt
+    total_seconds = int(delta.total_seconds())
+    if total_seconds < 0:
+        total_seconds = 0
+
+    if total_seconds < 60:
+        rel = "менее минуты назад"
+    elif total_seconds < 3600:
+        minutes = max(1, total_seconds // 60)
+        rel = f"{minutes} мин назад"
+    elif total_seconds < 86400:
+        hours = max(1, total_seconds // 3600)
+        rel = f"{hours} ч назад"
+    else:
+        days = max(1, total_seconds // 86400)
+        rel = f"{days} дн назад"
+    stamp = dt.strftime("%d.%m %H:%M")
+    return f"{stamp} ({rel})"
+
+
+def _build_moderation_header(mod_id: int, item: Dict[str, Any]) -> str:
+    pieces: list[str] = []
+
+    source = (
+        item.get("source_title")
+        or item.get("source")
+        or item.get("source_id")
+        or ""
+    )
+    header = f"🗞 <b>#{mod_id}</b>"
+    if source:
+        header += f" • {_escape_html(str(source))}"
+
+    fetched_line = _format_relative_timestamp(item.get("fetched_at"))
+    if fetched_line:
+        header += f" • {fetched_line}"
+
+    pieces.append(header)
+
+    tags = _normalize_tags(item.get("tags"))
+    if tags:
+        pieces.append("🏷️ " + _escape_html(", ".join(tags)))
+
+    filter_line = _format_filter_flags(item.get("reasons"))
+    if filter_line:
+        pieces.append(filter_line)
+
+    credit = item.get("credit")
+    if credit:
+        pieces.append("👤 " + _escape_html(str(credit)))
+
+    pieces.append(
+        "ℹ️ Используйте кнопки ниже, чтобы утвердить, отредактировать или отложить запись."
+    )
+
+    return "\n".join(piece for piece in pieces if piece).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +450,7 @@ def send_moderation_preview(
     parse_mode = _normalize_parse_mode(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     )
+    header = _build_moderation_header(mod_id, item)
     keyboard = {
         "inline_keyboard": [
             [{"text": "✅ Утвердить", "callback_data": f"mod:{mod_id}:approve"}],
@@ -324,7 +471,10 @@ def send_moderation_preview(
 
     messages: list[str] = []
     if caption:
-        messages.append(caption)
+        first = f"{header}\n\n{caption}" if header else caption
+        messages.append(first.strip())
+    elif header:
+        messages.append(header)
     if long_text and long_text != caption:
         messages.append(long_text)
 

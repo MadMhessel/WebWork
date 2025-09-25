@@ -1,3 +1,4 @@
+import json
 import sys
 import pathlib
 import sqlite3
@@ -40,10 +41,17 @@ def test_queue_and_publish(monkeypatch):
         "content": "c",
         "summary": "s",
         "image_url": "",
+        "tags": ["nn", "строительство"],
+        "reasons": {"region": True, "topic": True},
     }
 
     mod_id = moderator.enqueue_item(item, conn)
     assert mod_id is not None
+    row = conn.execute(
+        "SELECT tags, reasons FROM moderation_queue WHERE id=?", (mod_id,)
+    ).fetchone()
+    assert json.loads(row["tags"]) == ["nn", "строительство"]
+    assert json.loads(row["reasons"]) == {"region": True, "topic": True}
     moderator.send_preview(conn, mod_id)
     assert preview_calls == {"chat": "100", "id": mod_id}
     assert moderator.is_moderator(1)
