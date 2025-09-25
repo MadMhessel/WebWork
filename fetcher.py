@@ -24,7 +24,86 @@ except Exception:
     BeautifulSoup = None
 
 _HOST_FAILS: Dict[str, float] = {}
+_HOST_FAIL_STATS: Dict[str, Dict[str, float]] = {}
 _FAIL_TTL = 30 * 60  # 30 minutes
+
+
+def _ensure_host_stats(host: str, now: Optional[float] = None) -> Dict[str, float]:
+    stats = _HOST_FAIL_STATS.get(host)
+    if stats is None:
+        stats = {
+            "count": 0,
+            "total_failures": 0,
+            "first_failure_ts": 0.0,
+            "last_failure_ts": 0.0,
+            "last_recovery_ts": 0.0,
+            "recoveries": 0,
+            "alerted_at": 0.0,
+        }
+        _HOST_FAIL_STATS[host] = stats
+    if now is not None:
+        stats["last_checked_ts"] = now
+    return stats
+
+
+def _record_host_failure(host: str, *, now: Optional[float] = None) -> None:
+    now = now or time.time()
+    stats = _ensure_host_stats(host, now)
+    stats["count"] = int(stats.get("count", 0)) + 1
+    stats["total_failures"] = int(stats.get("total_failures", 0)) + 1
+    if not stats.get("first_failure_ts"):
+        stats["first_failure_ts"] = now
+    stats["last_failure_ts"] = now
+
+    threshold = max(1, int(getattr(config, "HOST_FAIL_ALERT_THRESHOLD", 5)))
+    window = max(0, int(getattr(config, "HOST_FAIL_ALERT_WINDOW_SEC", 1800)))
+    cooldown = max(60, int(getattr(config, "HOST_FAIL_ALERT_COOLDOWN_SEC", 900)))
+
+    if stats["count"] >= threshold:
+        within_window = window <= 0 or (now - stats["first_failure_ts"]) <= window
+        last_alert = stats.get("alerted_at", 0.0)
+        if within_window and (now - last_alert) >= cooldown:
+            logger.warning(
+                "Источник %s недоступен %d раз подряд", host, stats["count"]
+            )
+            stats["alerted_at"] = now
+
+
+def _record_host_success(host: str, *, now: Optional[float] = None) -> None:
+    now = now or time.time()
+    stats = _ensure_host_stats(host, now)
+    if stats.get("count", 0):
+        downtime = now - float(stats.get("first_failure_ts") or now)
+        attempts = stats.get("count", 0)
+        logger.info(
+            "Источник %s восстановился после %d неудачных попыток за %.1f мин.",
+            host,
+            attempts,
+            max(0.0, downtime / 60),
+        )
+        stats["recoveries"] = int(stats.get("recoveries", 0)) + 1
+    stats["count"] = 0
+    stats["first_failure_ts"] = 0.0
+    stats["alerted_at"] = 0.0
+    stats["last_recovery_ts"] = now
+
+
+def get_host_fail_stats(active_only: bool = False) -> Dict[str, Dict[str, float]]:
+    """Return snapshot of host failure statistics."""
+
+    out: Dict[str, Dict[str, float]] = {}
+    for host, stats in _HOST_FAIL_STATS.items():
+        if active_only and int(stats.get("count", 0)) <= 0:
+            continue
+        out[host] = dict(stats)
+    return out
+
+
+def reset_host_fail_stats() -> None:
+    """Helper primarily for tests to reset failure accounting."""
+
+    _HOST_FAILS.clear()
+    _HOST_FAIL_STATS.clear()
 
 
 def _verify_for(url: str) -> bool:
@@ -98,13 +177,19 @@ def _fetch_text(
     host = (urlparse(url).hostname or "").lower()
     now = time.time()
     if host in _HOST_FAILS and now - _HOST_FAILS[host] < _FAIL_TTL:
+        stats = _HOST_FAIL_STATS.get(host)
+        if stats is not None:
+            stats["last_failure_ts"] = now
         return ""
     try:
         read_to = timeout[1] if timeout else None
         verify = _verify_for(url)
-        return net.get_text(
+        text = net.get_text(
             url, timeout=read_to, allow_redirects=allow_redirects, verify=verify
         )
+        _HOST_FAILS.pop(host, None)
+        _record_host_success(host, now=now)
+        return text
     except requests.exceptions.SSLError as ex:
         logger.warning("TLS_FAIL %s: %s", host, ex)
     except requests.exceptions.ConnectionError as ex:
@@ -112,6 +197,7 @@ def _fetch_text(
     except Exception as ex:
         logger.debug("fetch error %s: %s", host, ex)
     _HOST_FAILS[host] = now
+    _record_host_failure(host, now=now)
     return ""
 
 # -------------------- HTML article --------------------

@@ -15,6 +15,7 @@ from typing import Any, Dict
 
 from formatting import clean_html_tags
 from rewriter_module import Rewriter
+from utils import ensure_text_fits_parse_mode
 
 log = logging.getLogger(__name__)
 
@@ -43,51 +44,62 @@ def rewrite_text(original: str, cfg) -> str:
 
     if not original:
         return ""
+    max_len = int(getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000)))
+    parse_mode = getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     try:
         if not bool(getattr(cfg, "ENABLE_REWRITE", True)):
-            return clean_html_tags(_FIGURE_RE.sub(" ", original))
-        max_len = int(
-            getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000))
-        )
+            cleaned = clean_html_tags(_FIGURE_RE.sub(" ", original))
+            return ensure_text_fits_parse_mode(cleaned, max_len, parse_mode)
         region = getattr(
             cfg, "REGION_HINT", "Нижегородская область, Нижний Новгород"
         )
         rw = _instance(cfg)
-        return rw.rewrite("", original, max_len, region)
+        rewritten = rw.rewrite("", original, max_len, region)
+        return ensure_text_fits_parse_mode(rewritten, max_len, parse_mode)
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(
             "\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0435\u0440\u0430\u0439\u0442\u0430: %s",
             exc,
         )
-        return clean_html_tags(_FIGURE_RE.sub(" ", original))
+        cleaned = clean_html_tags(_FIGURE_RE.sub(" ", original))
+        return ensure_text_fits_parse_mode(cleaned, max_len, parse_mode)
 
 
 def maybe_rewrite_item(item: Dict[str, Any], cfg) -> Dict[str, Any]:
     """Rewrite fields of ``item`` in a backwards compatible manner."""
 
     out = dict(item)
+    max_len = int(getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000)))
+    parse_mode = getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     try:
         if not bool(getattr(cfg, "ENABLE_REWRITE", True)):
-            out["content"] = clean_html_tags(
+            cleaned = clean_html_tags(
                 _FIGURE_RE.sub(" ", out.get("content", "") or "")
+            )
+            out["content"] = ensure_text_fits_parse_mode(
+                cleaned, max_len, parse_mode
             )
             return out
 
-        max_len = int(
-            getattr(cfg, "REWRITE_MAX_CHARS", getattr(cfg, "MAX_POST_LEN", 4000))
-        )
         region = getattr(
             cfg, "REGION_HINT", "Нижегородская область, Нижний Новгород"
         )
         title = out.get("title", "")
         body = out.get("content", "")
         rw = _instance(cfg)
-        out["content"] = rw.rewrite(title, body, max_len, region)
+        rewritten = rw.rewrite(title, body, max_len, region)
+        out["content"] = ensure_text_fits_parse_mode(
+            rewritten, max_len, parse_mode
+        )
         return out
     except Exception as exc:  # pragma: no cover - defensive
         log.exception(
             "\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0435\u0440\u0430\u0439\u0442\u0430: %s",
             exc,
+        )
+        fallback = clean_html_tags(_FIGURE_RE.sub(" ", out.get("content", "") or ""))
+        out["content"] = ensure_text_fits_parse_mode(
+            fallback, max_len, parse_mode
         )
         return out
 

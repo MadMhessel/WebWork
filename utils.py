@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import html
 import re
 import hashlib
 from typing import Any, Dict
@@ -38,3 +39,56 @@ def compute_title_hash(title: str) -> str:
 def safe_get(d: Dict[str, Any], key: str, default: str = "") -> str:
     v = d.get(key, default)
     return v if isinstance(v, str) else default
+
+
+_MD_RESERVED = "_*[]()~`>#+-=|{}.!\\"
+
+
+def _escape_for_mode(text: str, parse_mode: str) -> str:
+    mode = (parse_mode or "HTML").strip().lower()
+    if mode == "markdownv2":
+        return "".join("\\" + ch if ch in _MD_RESERVED else ch for ch in text)
+    if mode == "html":
+        return html.escape(text)
+    return text
+
+
+def ensure_text_fits_parse_mode(
+    text: str, max_chars: int, parse_mode: str, *, append_ellipsis: bool = True
+) -> str:
+    """Trim ``text`` so that escaped representation fits ``max_chars``.
+
+    Telegram applies escaping depending on parse mode.  When we limit text by
+    characters before escaping (например при рерайте), итоговое сообщение может
+    оказаться длиннее лимита из‑за добавленных backslash/HTML сущностей.  Этот
+    хелпер проверяет длину уже экранированного текста и при необходимости
+    подрезает исходную строку, чтобы уложиться в лимит.
+    """
+
+    if not text:
+        return ""
+    if max_chars <= 0:
+        return ""
+
+    escaped = _escape_for_mode(text, parse_mode)
+    if len(escaped) <= max_chars:
+        return text
+
+    ellipsis = "…" if append_ellipsis and max_chars > 1 else ""
+    base_limit = max_chars - len(ellipsis)
+    candidate = text.strip()
+
+    while candidate:
+        escaped_candidate = _escape_for_mode(candidate + ellipsis, parse_mode)
+        if len(escaped_candidate) <= max_chars:
+            return candidate + ellipsis
+        # попробуем аккуратно убрать последнее слово
+        trimmed = candidate.rsplit(" ", 1)[0].rstrip()
+        if not trimmed or trimmed == candidate:
+            candidate = candidate[:-1].rstrip()
+        else:
+            candidate = trimmed
+
+    # если не удалось подобрать аккуратную обрезку, режем по символам
+    hard_cut = text[: base_limit]
+    return hard_cut + ellipsis if ellipsis else hard_cut

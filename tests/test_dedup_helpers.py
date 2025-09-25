@@ -1,5 +1,6 @@
 import sys
 import pathlib
+import time
 
 # ensure parent directory of package is on path
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
@@ -43,3 +44,48 @@ def test_migrate_existing_items():
     assert db.exists_url(conn, 'http://example.com')
     assert db.exists_guid(conn, 'guid1')
     assert db.exists_title_hash(conn, 'hash1')
+
+
+def test_prune_old_records():
+    conn = db.connect(':memory:')
+    db.init_schema(conn)
+    now = int(time.time())
+    old_ts = now - 90 * 86400
+    fresh_ts = now - 5 * 86400
+
+    conn.execute(
+        "INSERT INTO items (url, guid, title, title_hash, added_ts) VALUES (?,?,?,?,?)",
+        ('http://old.example', 'old-guid', 'Old title', 'hash-old', old_ts),
+    )
+    conn.execute(
+        "INSERT INTO dedup (url, guid, title_hash, added_ts) VALUES (?,?,?,?)",
+        ('http://old.example', 'old-guid', 'hash-old', old_ts),
+    )
+    conn.execute(
+        "INSERT INTO items (url, guid, title, title_hash, added_ts) VALUES (?,?,?,?,?)",
+        ('http://new.example', 'new-guid', 'New title', 'hash-new', fresh_ts),
+    )
+    conn.execute(
+        "INSERT INTO dedup (url, guid, title_hash, added_ts) VALUES (?,?,?,?)",
+        ('http://new.example', 'new-guid', 'hash-new', fresh_ts),
+    )
+    conn.commit()
+
+    removed = db.prune_old_records(
+        conn,
+        items_ttl_days=30,
+        dedup_ttl_days=30,
+        batch_limit=10,
+    )
+    assert removed == {"items": 1, "dedup": 1}
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM dedup").fetchone()[0] == 1
+
+    # TTL disabled should not remove anything
+    removed_disabled = db.prune_old_records(
+        conn,
+        items_ttl_days=0,
+        dedup_ttl_days=0,
+        batch_limit=10,
+    )
+    assert removed_disabled == {"items": 0, "dedup": 0}

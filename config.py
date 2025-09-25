@@ -126,6 +126,14 @@ LOOP_DELAY_SECS: int = int(os.getenv("LOOP_DELAY_SECS", "600"))
 
 # --- Database ---
 DB_PATH: str = os.getenv("DB_PATH", str(CONFIG_DIR / "newsbot.db")).strip()
+ITEM_RETENTION_DAYS: int = int(os.getenv("ITEM_RETENTION_DAYS", "90"))
+DEDUP_RETENTION_DAYS: int = int(os.getenv("DEDUP_RETENTION_DAYS", "45"))
+DB_PRUNE_BATCH: int = int(os.getenv("DB_PRUNE_BATCH", "500"))
+
+# --- Источники/мониторинг ---
+HOST_FAIL_ALERT_THRESHOLD: int = int(os.getenv("HOST_FAIL_ALERT_THRESHOLD", "5"))
+HOST_FAIL_ALERT_WINDOW_SEC: int = int(os.getenv("HOST_FAIL_ALERT_WINDOW_SEC", "1800"))
+HOST_FAIL_ALERT_COOLDOWN_SEC: int = int(os.getenv("HOST_FAIL_ALERT_COOLDOWN_SEC", "900"))
 
 
 def validate_config() -> None:

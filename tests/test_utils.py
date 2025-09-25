@@ -1,11 +1,13 @@
 import sqlite3
 import sys
 import pathlib
+import time
 
 # add repo parent to sys.path to import package modules
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
 
 from WebWork import utils, db, dedup, fetcher, publisher, moderator
+from formatting import html_escape
 import pytest
 
 
@@ -74,6 +76,52 @@ def test_publish_message_failure(monkeypatch):
     monkeypatch.setattr(publisher.config, "ON_SEND_ERROR", "ignore")
     ok = publisher.publish_message("123", "title", "body", "https://e", cfg=publisher.config)
     assert ok is False
+
+
+def test_ensure_text_fits_parse_mode_markdown():
+    text = "[link]" * 5
+    trimmed = utils.ensure_text_fits_parse_mode(text, 20, "MarkdownV2")
+    escaped = publisher._escape_markdown_v2(trimmed)  # pylint: disable=protected-access
+    assert len(escaped) <= 20
+    assert trimmed
+
+
+def test_ensure_text_fits_parse_mode_html():
+    text = "<b>" * 10
+    trimmed = utils.ensure_text_fits_parse_mode(text, 20, "HTML")
+    escaped = html_escape(trimmed)
+    assert len(escaped) <= 20
+
+
+def test_host_failure_stats(monkeypatch):
+    fetcher.reset_host_fail_stats()
+
+    def boom(*args, **kwargs):  # noqa: ANN001, ANN002 - signature mirrors net.get_text
+        raise fetcher.requests.exceptions.ConnectionError("boom")  # type: ignore[attr-defined]
+
+    url = "https://example.com/news"
+    monkeypatch.setattr(fetcher.net, "get_text", boom)
+    assert fetcher._fetch_text(url) == ""  # pylint: disable=protected-access
+
+    stats = fetcher.get_host_fail_stats()
+    host = "example.com"
+    assert host in stats
+    assert stats[host]["count"] == 1
+    assert stats[host]["total_failures"] == 1
+
+    # emulate cooldown expiration and a successful retry
+    fetcher._HOST_FAILS[host] = time.time() - fetcher._FAIL_TTL - 1  # pylint: disable=protected-access
+
+    def ok(*args, **kwargs):  # noqa: ANN001, ANN002
+        return "ok"
+
+    monkeypatch.setattr(fetcher.net, "get_text", ok)
+    assert fetcher._fetch_text(url) == "ok"  # pylint: disable=protected-access
+
+    stats_after = fetcher.get_host_fail_stats()
+    assert stats_after[host]["count"] == 0
+    assert stats_after[host]["recoveries"] >= 1
+    assert fetcher.get_host_fail_stats(active_only=True) == {}
 
 
 # 4. Simulate moderation state transitions
