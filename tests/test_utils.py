@@ -1,4 +1,3 @@
-import sqlite3
 import sys
 import pathlib
 import time
@@ -6,7 +5,7 @@ import time
 # add repo parent to sys.path to import package modules
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
 
-from WebWork import utils, db, dedup, fetcher, publisher, moderator
+from WebWork import utils, db, dedup, fetcher, publisher
 from formatting import html_escape
 import pytest
 
@@ -131,58 +130,3 @@ def test_host_failure_stats(monkeypatch):
     assert stats_after[host]["recoveries"] >= 1
     assert fetcher.get_host_fail_stats(active_only=True) == {}
 
-
-# 4. Simulate moderation state transitions
-
-def _setup_mod_db():
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    db.init_schema(conn)
-    conn.executescript(
-        """
-        CREATE TABLE bot_state (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-        """
-    )
-    return conn
-
-
-def test_moderation_transitions(monkeypatch):
-    if not hasattr(moderator, "_handle_callback_query"):
-        pytest.skip("moderator callbacks not available")
-    conn = _setup_mod_db()
-
-    # prepare item in pending
-    item = {"url": "https://e/1", "title": "t", "content": "c", "guid": "g", "source": "s"}
-    mod_id = moderator.insert_pending(conn, item)
-
-    # mock publisher and dedup
-    monkeypatch.setattr(moderator.publisher, "publish_message", lambda **kw: True)
-    monkeypatch.setattr(moderator.publisher, "answer_callback_query", lambda *a, **k: True)
-    monkeypatch.setattr(moderator.publisher, "edit_moderation_message", lambda *a, **k: True)
-    called = {}
-    def fake_mark_published(**kw):
-        called["yes"] = True
-    monkeypatch.setattr(moderator.dedup, "mark_published", fake_mark_published)
-    monkeypatch.setattr(moderator.config, "CHANNEL_ID", "123")
-
-    cb = {"id": "1", "data": f"approve:{mod_id}", "message": {"chat": {"id": "1"}, "message_id": "10"}}
-    moderator._handle_callback_query(cb, conn)
-    row = conn.execute("SELECT status FROM moderation_queue WHERE id=?", (mod_id,)).fetchone()
-    assert row["status"] == "approved"
-    assert called.get("yes")
-
-    # reject path
-    item2 = {"url": "https://e/2", "title": "t2", "content": "c2", "guid": "g2", "source": "s"}
-    mod_id2 = moderator.insert_pending(conn, item2)
-    cb2 = {"id": "2", "data": f"reject:{mod_id2}", "message": {"chat": {"id": "1"}, "message_id": "11"}}
-    moderator._handle_callback_query(cb2, conn)
-    row = conn.execute("SELECT status FROM moderation_queue WHERE id=?", (mod_id2,)).fetchone()
-    assert row["status"] == "rejected"
-
-    # snoozed manually
-    moderator.set_status(conn, mod_id2, "snoozed")
-    row = conn.execute("SELECT status FROM moderation_queue WHERE id=?", (mod_id2,)).fetchone()
-    assert row["status"] == "snoozed"

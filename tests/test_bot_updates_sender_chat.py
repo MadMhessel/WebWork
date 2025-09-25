@@ -74,35 +74,3 @@ def test_sender_chat_denied(monkeypatch):
 
     assert denied == [("-200", "Нет доступа")]
 
-
-def test_callback_sender_chat_allowed(monkeypatch):
-    monkeypatch.setattr(config, "MODERATOR_IDS", set())
-    monkeypatch.setattr(config, "REVIEW_CHAT_ID", "-100")
-
-    conn = db.connect(":memory:")
-    db.init_schema(conn)
-
-    approved: list[tuple[int, int]] = []
-
-    def fake_approve(conn_arg, mod_id, user_id, text_override=None):
-        approved.append((mod_id, user_id))
-        return True
-
-    monkeypatch.setattr(moderator, "approve", fake_approve)
-
-    update = {
-        "callback_query": {
-            "id": "cb:1",
-            "data": "mod:1:approve",
-            "from": {},
-            "message": {
-                "chat": {"id": -100},
-                "sender_chat": {"id": -100},
-            },
-        }
-    }
-
-    action = moderator.handle_callback(conn, update)
-
-    assert action == "approve"
-    assert approved == [(1, 0)]

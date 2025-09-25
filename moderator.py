@@ -328,59 +328,6 @@ def apply_edit_message(conn: sqlite3.Connection, user_id: int, text: str) -> boo
     return True
 
 
-def handle_callback(conn: sqlite3.Connection, update: dict) -> Optional[str]:
-    cb = update.get("callback_query") or {}
-    data = cb.get("data", "")
-    user_id = int(cb.get("from", {}).get("id", 0))
-    if not (data.startswith("mod:") or data.startswith("m:")):
-        return None
-    parts = data.split(":")
-    if len(parts) < 3:
-        return None
-    _, sid, action, *rest = parts
-    try:
-        mod_id = int(sid)
-    except Exception:
-        return None
-    extra = rest[0] if rest else None
-    allowed = is_moderator(user_id)
-    if not allowed:
-        sender_chat = cb.get("message", {}).get("sender_chat")
-        if sender_chat and is_sender_authorized(sender_chat):
-            allowed = True
-    if not allowed:
-        logger.warning("unauthorized callback", extra={"user_id": user_id, "action": action})
-        return "forbidden"
-    result: Optional[str] = None
-    if action in {"approve", "ok"}:
-        if approve(conn, mod_id, user_id):
-            result = "approve"
-    elif action in {"reject", "rej"}:
-        start_edit(conn, mod_id, user_id, "reject")
-        result = "reject"
-    elif action in {"snooze", "sz"}:
-        minutes = int(extra or 0) if extra else 0
-        if minutes <= 0:
-            minutes = int(getattr(config, "SNOOZE_MINUTES", 0) or 0)
-        if minutes <= 0:
-            minutes = 60
-        snooze(conn, mod_id, user_id, minutes)
-        result = "snooze"
-    elif action in {"edit", "edit_text", "et"}:
-        start_edit(conn, mod_id, user_id, "content")
-        result = "edit_text"
-    elif action in {"edit_title", "eh"}:
-        start_edit(conn, mod_id, user_id, "title")
-        result = "edit_title"
-    elif action in {"edit_tags", "tg"}:
-        start_edit(conn, mod_id, user_id, "tags")
-        result = "edit_tags"
-    logger.info(
-        "callback", extra={"post_id": mod_id, "action": action, "from_id": user_id}
-    )
-    return result
-
-
 def cmd_queue(conn: sqlite3.Connection, chat_id: str, page: int = 1) -> None:
     limit = 10
     offset = (page - 1) * limit

@@ -43,48 +43,6 @@ def run(stop_event) -> None:
 
 
 def _handle_update(conn, session, update: dict) -> None:
-    if update.get("callback_query"):
-        cb = update["callback_query"]
-        cb_id = cb.get("id", "")
-        action = moderator.handle_callback(conn, update)
-        msg = cb.get("message") or {}
-        chat_id = str(msg.get("chat", {}).get("id", ""))
-        message_id = msg.get("message_id")
-        user_id = int(cb.get("from", {}).get("id", 0))
-        if action == "forbidden":
-            publisher.answer_callback_query(cb_id, "Нет доступа", show_alert=True)
-            return
-        if action == "approve":
-            publisher.answer_callback_query(cb_id, "Опубликовано")
-            publisher.remove_moderation_buttons(chat_id, message_id)
-        elif action == "reject":
-            publisher.answer_callback_query(cb_id, "Отклонено")
-            publisher.remove_moderation_buttons(chat_id, message_id)
-        elif action == "snooze":
-            publisher.answer_callback_query(cb_id, "Отложено")
-            publisher.remove_moderation_buttons(chat_id, message_id)
-        elif action == "edit_title":
-            publisher.answer_callback_query(cb_id, "Редактирование")
-            publisher.remove_moderation_buttons(chat_id, message_id)
-            publisher.send_message(
-                str(user_id), "Отправьте новый заголовок или /cancel", cfg=config
-            )
-        elif action == "edit_text":
-            publisher.answer_callback_query(cb_id, "Редактирование")
-            publisher.remove_moderation_buttons(chat_id, message_id)
-            publisher.send_message(
-                str(user_id), "Пришлите текст одним сообщением или /cancel", cfg=config
-            )
-        elif action == "edit_tags":
-            publisher.answer_callback_query(cb_id, "Редактирование")
-            publisher.remove_moderation_buttons(chat_id, message_id)
-            publisher.send_message(
-                str(user_id), "Отправьте теги или /cancel", cfg=config
-            )
-        else:
-            # acknowledge generic callback to remove spinner
-            publisher.answer_callback_query(cb_id)
-        return
     msg = update.get("message")
     if not msg:
         return

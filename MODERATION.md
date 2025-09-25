@@ -18,9 +18,9 @@
 
 4. **Add moderators**
    - List of user ids in `ALLOWED_MODERATORS`.
-   - Users outside the list will see an alert "Нет прав" when pressing buttons.
+   - Messages from other users will be ignored by the bot.
 
 5. **Enable supergroup threads**
    - For best experience create a private supergroup and enable topics.
-   - Use the group for moderation to get ForceReply support.
+   - Use a dedicated topic for moderation; текст редактируется вручную и публикуется модератором.
 

@@ -324,9 +324,7 @@ def _build_moderation_header(mod_id: int, item: Dict[str, Any]) -> str:
     if credit:
         pieces.append("👤 " + _escape_html(str(credit)))
 
-    pieces.append(
-        "ℹ️ Используйте кнопки ниже, чтобы утвердить, отредактировать или отложить запись."
-    )
+    pieces.append("ℹ️ Отредактируйте текст вручную и при необходимости опубликуйте в канал.")
 
     return "\n".join(piece for piece in pieces if piece).strip()
 
@@ -817,29 +815,6 @@ def publish_message(
 
 # ---------------------------------------------------------------------------
 # Moderation helpers
-# ---------------------------------------------------------------------------
-
-
-def answer_callback_query(
-    callback_query_id: str, text: Optional[str] = None, show_alert: bool = False
-) -> None:
-    payload: Dict[str, Any] = {"callback_query_id": callback_query_id}
-    if text:
-        payload["text"] = text
-    if show_alert:
-        payload["show_alert"] = "true"
-    _api_post("answerCallbackQuery", payload)
-
-
-def remove_moderation_buttons(chat_id: str, message_id: int | str) -> None:
-    payload: Dict[str, Any] = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "reply_markup": json.dumps({"inline_keyboard": []}),
-    }
-    _api_post("editMessageReplyMarkup", payload)
-
-
 def send_moderation_preview(
     chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config
 ) -> Optional[str]:
@@ -848,23 +823,7 @@ def send_moderation_preview(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     )
     header = _build_moderation_header(mod_id, item)
-    keyboard = {
-        "inline_keyboard": [
-            [{"text": "✅ Утвердить", "callback_data": f"mod:{mod_id}:approve"}],
-            [
-                {"text": "✏️ Заголовок", "callback_data": f"mod:{mod_id}:edit_title"},
-                {"text": "📝 Текст", "callback_data": f"mod:{mod_id}:edit_text"},
-            ],
-            [{"text": "🏷️ Теги", "callback_data": f"mod:{mod_id}:edit_tags"}],
-            [
-                {"text": "💤 15м", "callback_data": f"mod:{mod_id}:snooze:15"},
-                {"text": "1ч", "callback_data": f"mod:{mod_id}:snooze:60"},
-                {"text": "3ч", "callback_data": f"mod:{mod_id}:snooze:180"},
-            ],
-            [{"text": "❌ Отклонить", "callback_data": f"mod:{mod_id}:reject"}],
-            [{"text": "🔗", "url": item.get("url", "") or ""}],
-        ]
-    }
+    keyboard = None
 
     messages: list[str] = []
     if caption:
@@ -885,7 +844,7 @@ def send_moderation_preview(
                 chat_id,
                 trimmed,
                 parse_mode,
-                reply_markup=keyboard if idx == 0 else None,
+                reply_markup=None,
                 reply_to_message_id=mid if idx > 0 else None,
             )
 
@@ -933,8 +892,6 @@ __all__ = [
     "split_html_message",
     "compose_preview",
     "format_preview",
-    "answer_callback_query",
-    "remove_moderation_buttons",
     "send_moderation_preview",
     "publish_from_queue",
 ]
