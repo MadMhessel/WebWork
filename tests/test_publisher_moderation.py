@@ -47,6 +47,6 @@ def test_send_moderation_preview_includes_header(monkeypatch):
     assert "Источник" in first
     assert "🏷️" in first
     assert "Фильтр" in first
-    assert calls[0]["reply_markup"] is not None
+    assert calls[0]["reply_markup"] is None
     assert calls[0]["reply_to"] is None
     assert calls[0]["parse_mode"] == "HTML"
