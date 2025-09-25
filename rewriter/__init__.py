@@ -5,23 +5,19 @@ from typing import Iterable, List
 
 from .base import NewsItem, RewriterResult
 from .noop import NoopRewriter
-from .llm import LLMRewriter, LLMConfig
 
 
 @dataclass
 class RewriterChainConfig:
-    order: List[str] = field(default_factory=lambda: ["llm", "noop"])
+    order: List[str] = field(default_factory=lambda: ["noop"])
     target_length: int = 600
-    llm: LLMConfig = field(default_factory=LLMConfig)
 
 
 def run_rewrite_with_fallbacks(item: NewsItem, cfg: RewriterChainConfig) -> RewriterResult:
     """Run rewriters in configured order until one succeeds."""
     last = RewriterResult(ok=True, title=item.title, text=item.text, provider="noop")
     for name in cfg.order:
-        if name == "llm":
-            rewriter = LLMRewriter(cfg.llm)
-        elif name == "noop":
+        if name == "noop":
             rewriter = NoopRewriter()
         else:
             continue

@@ -6,7 +6,7 @@ import time
 import threading
 from typing import Dict, List, Tuple
 
-import config, logging_setup, fetcher, filters, dedup, db, rewrite, images, tagging, classifieds
+import config, logging_setup, fetcher, filters, dedup, db, rewrite, tagging, classifieds
 import moderator as moderation
 import bot_updates
 from utils import normalize_whitespace, compute_title_hash
@@ -33,10 +33,6 @@ def _publisher_send_direct(item: Dict) -> bool:
         item.get("title", ""),
         item.get("content", ""),
         item.get("url", ""),
-        item.get("image_url"),
-        image_bytes=item.get("image_bytes"),
-        image_mime=item.get("image_mime"),
-        credit=item.get("credit"),
         cfg=config,
     )
 
@@ -57,11 +53,6 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     cnt_published = 0
     cnt_not_sent = 0
     cnt_errors = 0
-    images_enabled = bool(getattr(config, "ALLOW_IMAGES", False)) and bool(
-        getattr(config, "ATTACH_IMAGES", False)
-    )
-    image_start = images.image_stats["with_image"] if images_enabled else 0
-
     for it in items_iter:
         cnt_total += 1
         try:
@@ -70,8 +61,6 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             guid = (it.get("guid") or "").strip()
             title = normalize_whitespace(it.get("title") or "")
             content = normalize_whitespace(it.get("content") or "")
-            image_url = it.get("image_url")
-
             ok, region_ok, topic_ok, reason = filters.is_relevant_for_source(title, content, src, config)
             if not ok:
                 logger.info("[SKIP] %s | %s | причина: %s", src, title, reason)
@@ -119,25 +108,8 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "content": content,
                 "summary": it.get("summary") or "",
                 "published_at": it.get("published_at") or "",
-                "image_url": image_url,
                 "tags": list(tags),
             }
-
-            if images_enabled:
-                img_info = images.resolve_image(item_clean, conn)
-                item_clean["image_url"] = img_info.get("image_url", "")
-                if img_info.get("tg_file_id"):
-                    item_clean["tg_file_id"] = img_info["tg_file_id"]
-                if img_info.get("image_hash"):
-                    item_clean["image_hash"] = img_info["image_hash"]
-                if img_info.get("bytes"):
-                    item_clean["image_bytes"] = img_info["bytes"]
-                    if img_info.get("mime"):
-                        item_clean["image_mime"] = img_info.get("mime")
-                if img_info.get("credit"):
-                    item_clean["credit"] = img_info["credit"]
-            else:
-                item_clean.pop("image_url", None)
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
 
@@ -163,12 +135,9 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             cnt_errors += 1
             logger.exception("[ERROR] url=%s | %s", it.get("url", ""), ex)
 
-    with_image = (
-        images.image_stats["with_image"] - image_start if images_enabled else 0
-    )
     logger.info(
         "ИТОГО: получено=%d, релевантные=%d, дублей_в_пакете_URL=%d, почти_дублей_в_пакете=%d, "
-        "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d, с_картинкой=%d",
+        "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d",
         cnt_total,
         cnt_relevant,
         cnt_dup_inpack_url,
@@ -178,7 +147,6 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
         cnt_published,
         cnt_errors,
         cnt_not_sent,
-        with_image,
     )
     return (
         cnt_total,

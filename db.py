@@ -101,15 +101,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mq_url ON moderation_queue(url);
         CREATE INDEX IF NOT EXISTS idx_mq_status ON moderation_queue(status);
 
-        CREATE TABLE IF NOT EXISTS images_cache (
-            src_url TEXT PRIMARY KEY,
-            hash TEXT,
-            width INTEGER,
-            height INTEGER,
-            tg_file_id TEXT,
-            created_at TIMESTAMP DEFAULT (strftime('%s','now'))
-        );
-
         CREATE TABLE IF NOT EXISTS editor_state (
             user_id INTEGER PRIMARY KEY,
             item_id INTEGER,
@@ -172,11 +163,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-    try:
-        conn.execute("DELETE FROM images_cache WHERE tg_file_id LIKE 'file_%'")
-    except Exception:
-        pass
-
     logger.info(
         "Схема БД инициализирована в %s", getattr(config, "DB_PATH", "newsbot.db")
     )
@@ -198,39 +184,6 @@ def _normalize_url(u: str) -> str:
     query = urlencode(q, doseq=True)
     return urlunparse((scheme, netloc, path, "", query, ""))
 
-
-def get_cached_file_id(conn: sqlite3.Connection, src_url: str) -> Optional[str]:
-    """Return cached Telegram file_id for given image URL if available."""
-    norm = _normalize_url(src_url)
-    cur = conn.execute(
-        "SELECT tg_file_id FROM images_cache WHERE src_url = ?", (norm,)
-    )
-    row = cur.fetchone()
-    if row and row["tg_file_id"]:
-        return row["tg_file_id"]
-    return None
-
-
-def put_cached_file_id(
-    conn: sqlite3.Connection,
-    src_url: str,
-    tg_file_id: str,
-    *,
-    img_hash: Optional[str] = None,
-    width: Optional[int] = None,
-    height: Optional[int] = None,
-) -> None:
-    """Store Telegram file_id for image URL."""
-    norm = _normalize_url(src_url)
-    conn.execute(
-        (
-            "INSERT OR REPLACE INTO images_cache("  # noqa: E501
-            "src_url, hash, width, height, tg_file_id, created_at"  # columns
-            ") VALUES (?,?,?,?,?,COALESCE((SELECT created_at FROM images_cache WHERE src_url=?), strftime('%s','now')))"
-        ),
-        (norm, img_hash, width, height, tg_file_id, norm),
-    )
-    conn.commit()
 
 # ---------- Existence checks used by dedup ----------
 

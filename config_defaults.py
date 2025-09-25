@@ -14,4 +14,3 @@ CHANNEL_ID = "@your_main_channel"
 ENABLE_MODERATION = True
 REVIEW_CHAT_ID = "@your_review_channel"
 MODERATOR_IDS = {123456789}
-FALLBACK_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/No_image_available.svg/512px-No_image_available.svg.png"

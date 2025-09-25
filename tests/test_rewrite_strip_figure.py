@@ -1,6 +1,6 @@
 import types
 
-from WebWork import rewrite, images
+from WebWork import rewrite
 
 
 def test_rewrite_removes_figure_block():
@@ -10,9 +10,3 @@ def test_rewrite_removes_figure_block():
     assert cleaned == 'a c'
 
 
-def test_image_candidates_gone_after_rewrite():
-    html = '<figure><img src="http://example.com/a.jpg"/></figure>'
-    item = {'url': 'http://example.com', 'content': html}
-    assert images.extract_candidates(item)
-    rewritten = rewrite.rewrite_text(html, types.SimpleNamespace(ENABLE_REWRITE=False))
-    assert images.extract_candidates({'url': 'http://example.com', 'content': rewritten}) == []
