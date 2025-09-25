@@ -537,13 +537,17 @@ REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "600"))
 
 # === Кластеризация похожих заголовков (опц.) ===
 ENABLE_TITLE_CLUSTERING = os.getenv("ENABLE_TITLE_CLUSTERING", "false").lower() in {"1", "true", "yes"}
-CLUSTER_SIM_THRESHOLD = float(os.getenv("CLUSTER_SIM_THRESHOLD", "0.55"))
+CLUSTER_SIM_THRESHOLD = float(os.getenv("CLUSTER_SIM_THRESHOLD", "0.85"))
 CLUSTER_LOOKBACK_DAYS = int(os.getenv("CLUSTER_LOOKBACK_DAYS", "14"))
 CLUSTER_MAX_CANDIDATES = int(os.getenv("CLUSTER_MAX_CANDIDATES", "200"))
 
 # === Опрос источников ===
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "600"))
 FETCH_LIMIT_PER_SOURCE = int(os.getenv("FETCH_LIMIT_PER_SOURCE", "30"))
+FETCH_DAYS_BACK = int(os.getenv("FETCH_DAYS_BACK", "7"))
+BATCH_SIMILARITY_THRESHOLD = float(
+    os.getenv("BATCH_SIMILARITY_THRESHOLD", str(CLUSTER_SIM_THRESHOLD))
+)
 
 
 def init_config_file(path: Path = ENV_PATH) -> None:

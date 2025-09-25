@@ -45,6 +45,16 @@ DOMAIN_CONFIG: Dict[str, Dict[str, Any]] = {
             "date": {"selectors": ["time", ".article__date"], "attr": "datetime"},
             "content": [".article__body", ".article-body"],
         },
+        "list": {
+            "item": "[data-qa='Card'], .card",
+            "link": "a.card__title, a[data-qa='CardLink']",
+            "title": [".card__title", "[data-qa='CardTitle']", "a.card__title"],
+            "summary": [".card__text", "[data-qa='CardDescription']"],
+            "date": {
+                "selectors": ["time", ".card__date", "[data-qa='CardDate']"],
+                "attr": "datetime",
+            },
+        },
     },
     "nn.ru": {
         "article": {
@@ -100,6 +110,16 @@ DOMAIN_CONFIG: Dict[str, Dict[str, Any]] = {
             "lead": [".article__lead", ".article-intro"],
             "date": {"selectors": ["time", ".article__date"], "attr": "datetime"},
             "content": [".article__content", ".article-body"],
+        },
+        "list": {
+            "item": ".journal-card, .journal__card, .card",
+            "link": "a.card__link, a.journal-card__link, a",
+            "title": [".card__title", ".journal-card__title", "a.card__link"],
+            "summary": [".card__text", ".journal-card__lead"],
+            "date": {
+                "selectors": ["time", ".card__date", ".journal-card__date"],
+                "attr": "datetime",
+            },
         },
     },
     "admgor.nnov.ru": {

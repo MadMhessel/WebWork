@@ -20,7 +20,7 @@ sources:
     type: html
     trust_level: 3
     source_domain: "mingrad.nobl.ru"
-  - name: "ИА «Время Н» — лента"
+  - name: "ИА «Время Н» — лента (RSS)"
     url: "https://www.vremyan.ru/rss/news.rss"
     type: rss
     trust_level: 3
@@ -105,16 +105,26 @@ sources:
     source_domain: "52.mchs.gov.ru"
     rubrics_allowed: [kazusy]
     min_text_length: 80
-  - name: "Стратегия НО — инфраструктура и благоустройство"
+  - name: "Стратегия НО — новости"
     url: "https://strategy.nobl.ru/novosti"
     type: html
     trust_level: 3
     source_domain: "strategy.nobl.ru"
     rubrics_allowed: [objects, persons]
-  - name: "Росстат (Нижегородстат) — строительство"
+  - name: "Нижегородстат — строительство"
     url: "https://nizhstat.gks.ru/folder/28505"
     type: html
     trust_level: 3
     source_domain: "nizhstat.gks.ru"
     rubrics_allowed: [objects]
     min_text_length: 80
+  - name: "Гордума Н. Новгорода — RSS (актуальный)"
+    url: "https://www.gordumannov.ru/rss"
+    type: rss
+    trust_level: 3
+    source_domain: "gordumannov.ru"
+  - name: "Newsroom24 — новости (RSS)"
+    url: "https://newsroom24.ru/news/rss2/"
+    type: rss
+    trust_level: 2
+    source_domain: "newsroom24.ru"

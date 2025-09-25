@@ -104,11 +104,11 @@ def test_ensure_text_fits_parse_mode_html():
 def test_host_failure_stats(monkeypatch):
     fetcher.reset_host_fail_stats()
 
-    def boom(*args, **kwargs):  # noqa: ANN001, ANN002 - signature mirrors net.get_text
+    def boom(*args, **kwargs):  # noqa: ANN001, ANN002 - signature mirrors net.get_text_with_meta
         raise fetcher.requests.exceptions.ConnectionError("boom")  # type: ignore[attr-defined]
 
     url = "https://example.com/news"
-    monkeypatch.setattr(fetcher.net, "get_text", boom)
+    monkeypatch.setattr(fetcher.net, "get_text_with_meta", boom)
     assert fetcher._fetch_text(url) == ""  # pylint: disable=protected-access
 
     stats = fetcher.get_host_fail_stats()
@@ -121,9 +121,9 @@ def test_host_failure_stats(monkeypatch):
     fetcher._HOST_FAILS[host] = time.time() - fetcher._FAIL_TTL - 1  # pylint: disable=protected-access
 
     def ok(*args, **kwargs):  # noqa: ANN001, ANN002
-        return "ok"
+        return "ok", {}, 200
 
-    monkeypatch.setattr(fetcher.net, "get_text", ok)
+    monkeypatch.setattr(fetcher.net, "get_text_with_meta", ok)
     assert fetcher._fetch_text(url) == "ok"  # pylint: disable=protected-access
 
     stats_after = fetcher.get_host_fail_stats()

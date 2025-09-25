@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from difflib import SequenceMatcher
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 try:
     from . import db, utils, config
@@ -12,6 +12,90 @@ except ImportError:  # pragma: no cover
     import db, utils, config  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+_WORD_RE = re.compile(r"[0-9a-zа-яё]+", re.I)
+
+
+def _tokenize(title: str) -> Tuple[set[str], set[str]]:
+    text = utils.normalize_whitespace(title).lower()
+    words = {w for w in _WORD_RE.findall(text) if len(w) > 2}
+    letters = re.sub(r"[^0-9a-zа-яё]+", "", text)
+    if len(letters) < 3:
+        grams = {letters} if letters else set()
+    else:
+        grams = {letters[i : i + 3] for i in range(len(letters) - 2)}
+    return words, grams
+
+
+def _soft_overlap(words1: set[str], words2: set[str], *, min_ratio: float = 0.6) -> float:
+    if not words1 or not words2:
+        return 0.0
+    remaining = list(words2)
+    matches = 0
+    for w1 in words1:
+        best_idx = -1
+        best_score = 0.0
+        for idx, w2 in enumerate(remaining):
+            ratio = SequenceMatcher(None, w1, w2).ratio()
+            if ratio > best_score:
+                best_score = ratio
+                best_idx = idx
+        if best_idx != -1 and best_score >= min_ratio:
+            matches += 1
+            remaining.pop(best_idx)
+    if not matches:
+        return 0.0
+    return matches / min(len(words1), len(words2))
+
+
+def _jaccard(a: Sequence[str] | set[str], b: Sequence[str] | set[str]) -> float:
+    set_a = set(a)
+    set_b = set(b)
+    if not set_a or not set_b:
+        return 0.0
+    union = set_a | set_b
+    if not union:
+        return 0.0
+    return len(set_a & set_b) / len(union)
+
+
+def make_similarity_profile(title: str) -> Tuple[set[str], set[str]]:
+    return _tokenize(title)
+
+
+def profile_similarity(
+    base_profile: Tuple[set[str], set[str]], other_profile: Tuple[set[str], set[str]]
+) -> float:
+    words1, grams1 = base_profile
+    words2, grams2 = other_profile
+    word_score = _jaccard(words1, words2)
+    gram_score = _jaccard(grams1, grams2)
+    soft_score = _soft_overlap(words1, words2)
+    return max(word_score, gram_score, soft_score)
+
+
+def title_similarity(lhs: str, rhs: str) -> float:
+    """Compute similarity score between two titles using words and 3-grams."""
+
+    if not lhs or not rhs:
+        return 0.0
+
+    return profile_similarity(_tokenize(lhs), _tokenize(rhs))
+
+
+def similar_to_any(
+    title: str,
+    profiles: Sequence[Tuple[set[str], set[str]]],
+    *,
+    threshold: float,
+) -> Tuple[bool, Tuple[set[str], set[str]]]:
+    """Check similarity of ``title`` against cached profiles."""
+
+    profile = make_similarity_profile(title)
+    for other in profiles:
+        if profile_similarity(profile, other) >= threshold:
+            return True, profile
+    return False, profile
 
 # ---------- Title hash ----------
 
@@ -78,9 +162,6 @@ def _has_similar_title(title: str, db_conn) -> bool:
     if not normalized:
         return False
 
-    base_tokens = {t for t in normalized.split() if len(t) > 2}
-    base_sorted_tokens = " ".join(sorted(normalized.split()))
-
     min_len = int(getattr(config, "DEDUP_TITLE_MIN_LEN", 10))
     if len(normalized) < min_len:
         return False
@@ -105,25 +186,7 @@ def _has_similar_title(title: str, db_conn) -> bool:
             continue
         if len(cand_norm) < min_len:
             continue
-        cand_tokens = {t for t in cand_norm.split() if len(t) > 2}
-        cand_sorted_tokens = " ".join(sorted(cand_norm.split()))
-        token_union = base_tokens | cand_tokens
-        token_score = 0.0
-        if token_union:
-            token_score = len(base_tokens & cand_tokens) / len(token_union)
-
-        char_ratio = SequenceMatcher(None, normalized, cand_norm).ratio()
-        sorted_ratio = SequenceMatcher(None, base_sorted_tokens, cand_sorted_tokens).ratio()
-
-        coverage = 0.0
-        if base_tokens and cand_tokens:
-            shared = len(base_tokens & cand_tokens)
-            coverage = max(
-                shared / len(base_tokens),
-                shared / len(cand_tokens),
-            )
-
-        score = max(char_ratio, token_score, sorted_ratio, coverage)
+        score = title_similarity(normalized, cand_norm)
         if score >= threshold:
             logger.info(
                 "[DUP_SIMILAR] совпадение %.2f с '%s'", score, (cand_title or "")[:140]

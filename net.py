@@ -102,6 +102,34 @@ def get_text(
         resp.close()
 
 
+def get_text_with_meta(
+    url: str,
+    *,
+    timeout: Optional[float] = None,
+    allow_redirects: bool = True,
+    headers: Optional[Dict[str, str]] = None,
+    params: Optional[Dict[str, str]] = None,
+    verify: Optional[bool] = None,
+) -> tuple[str, Dict[str, str], int]:
+    resp = _request(
+        url,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        headers=headers,
+        params=params,
+        verify=verify,
+    )
+    try:
+        status = resp.status_code
+        headers_out = dict(resp.headers or {})
+        if status == 304:
+            return "", headers_out, status
+        resp.raise_for_status()
+        return resp.text, headers_out, status
+    finally:
+        resp.close()
+
+
 def get_bytes(
     url: str,
     *,

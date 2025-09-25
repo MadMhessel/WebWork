@@ -27,22 +27,42 @@ def _load_yaml() -> Dict[str, Any]:
 
 
 def _normalize_domain(value: str | None) -> str:
+    """Return normalized domain for URLs/domains from configuration."""
+
     if not value:
         return ""
-    domain = value.strip().lower()
-    if domain.startswith("http"):
+
+    domain = value.strip()
+    if not domain:
+        return ""
+
+    parsed = None
+    low = domain.lower()
+    if low.startswith("http://") or low.startswith("https://"):
         parsed = urlparse(domain)
-        domain = parsed.hostname or ""
-    elif domain.startswith("//"):
+    elif low.startswith("//"):
         parsed = urlparse("http:" + domain)
-        domain = parsed.hostname or ""
-    if domain.startswith("www."):
-        domain = domain[4:]
+    elif "/" in low or "?" in low or "#" in low:
+        parsed = urlparse("http://" + domain)
+
+    if parsed:
+        host = parsed.hostname or ""
+    else:
+        host = domain
+
+    host = host.strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+
+    if not host:
+        return ""
+
     try:
-        domain = domain.encode("idna").decode("ascii")
+        host = host.encode("idna").decode("ascii")
     except Exception:
         pass
-    return domain
+
+    return host
 
 
 _slug_re = re.compile(r"[^a-z0-9]+")
@@ -59,6 +79,8 @@ def _merge_defaults(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         url = (merged.get("url") or "").strip()
         if not url:
             raise ValueError("Источник без url")
+
+        merged["url"] = url
 
         stype = str(merged.get("type") or "").lower()
         if stype not in {"rss", "html"}:
@@ -84,7 +106,8 @@ def _merge_defaults(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             )
         merged["rubrics_allowed"] = sorted(rubrics)
 
-        domain = _normalize_domain(merged.get("source_domain") or merged.get("url"))
+        domain_hint = merged.get("source_domain") or merged.get("url")
+        domain = _normalize_domain(domain_hint)
         merged["source_domain"] = domain
         merged.setdefault("enabled", True)
         merged.setdefault("rate_limit_per_minute", 12)
@@ -95,9 +118,19 @@ def _merge_defaults(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         if "name" not in merged:
             merged["name"] = domain or merged.get("url", "")
 
-        parsed = urlparse(url if url.startswith(("http://", "https://")) else ("http://" + url))
+        if url.startswith(("http://", "https://")):
+            parsed = urlparse(url)
+        elif url.startswith("//"):
+            parsed = urlparse("http:" + url)
+        else:
+            parsed = urlparse("http://" + url)
+        if not domain:
+            domain = _normalize_domain(parsed.hostname or "")
+            if domain:
+                merged["source_domain"] = domain
+        base_domain = domain or "unknown"
         path_key = _slug_re.sub("-", (parsed.path or "/").strip("/").lower()).strip("-") or "root"
-        base_id = f"{domain}:{path_key}"
+        base_id = f"{base_domain}:{path_key}"
         short = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
         merged.setdefault("id", f"{base_id}:{short}")
         result.append(merged)
