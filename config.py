@@ -501,11 +501,9 @@ SOURCES = [
 SOURCES.extend(SOURCES_NN)
 
 # === Хранилище ===
-DB_PATH: str = os.getenv("DB_PATH", "newsbot.db")
+# (DB_PATH определяется выше и использует CONFIG_DIR по умолчанию)
 
 # === Telegram ===
-TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: bool = os.getenv("TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", "true").lower() in {"1", "true", "yes"}
-TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
 ON_SEND_ERROR: str = os.getenv("ON_SEND_ERROR", "retry").strip().lower()
 PUBLISH_MAX_RETRIES: int = int(os.getenv("PUBLISH_MAX_RETRIES", "2"))
 RETRY_BACKOFF_SECONDS: float = float(os.getenv("RETRY_BACKOFF_SECONDS", "2.5"))
@@ -516,9 +514,9 @@ REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "600"))
 
 # === Кластеризация похожих заголовков (опц.) ===
 ENABLE_TITLE_CLUSTERING = os.getenv("ENABLE_TITLE_CLUSTERING", "false").lower() in {"1", "true", "yes"}
-CLUSTER_SIM_THRESHOLD = float(os.getenv("CLUSTER_SIM_THRESHOLD", "0.8"))
+CLUSTER_SIM_THRESHOLD = float(os.getenv("CLUSTER_SIM_THRESHOLD", "0.55"))
 CLUSTER_LOOKBACK_DAYS = int(os.getenv("CLUSTER_LOOKBACK_DAYS", "14"))
-CLUSTER_CANDIDATES = int(os.getenv("CLUSTER_CANDIDATES", "200"))
+CLUSTER_MAX_CANDIDATES = int(os.getenv("CLUSTER_MAX_CANDIDATES", "200"))
 
 # === Опрос источников ===
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "600"))

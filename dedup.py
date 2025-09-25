@@ -2,6 +2,8 @@
 import hashlib
 import logging
 import re
+import time
+from difflib import SequenceMatcher
 from typing import Optional
 
 try:
@@ -44,6 +46,8 @@ def is_duplicate(url: Optional[str], guid: Optional[str], title: Optional[str], 
         thash = calc_title_hash(title or "")
         if thash and db.exists_title_hash(db_conn, thash):
             return True
+        if _has_similar_title(title or "", db_conn):
+            return True
         return False
     except Exception as ex:
         logger.warning("Ошибка при проверке дублей: %s", ex)
@@ -62,6 +66,70 @@ def remember(db_conn, item: dict) -> None:
         db.upsert_item(db_conn, record)
     except Exception as ex:
         logger.warning("Не удалось сохранить элемент в БД: %s", ex)
+
+
+def _has_similar_title(title: str, db_conn) -> bool:
+    """Check if ``title`` is sufficiently similar to recent records."""
+
+    if not getattr(config, "ENABLE_TITLE_CLUSTERING", False):
+        return False
+
+    normalized = utils.normalize_whitespace(title or "").lower()
+    if not normalized:
+        return False
+
+    base_tokens = {t for t in normalized.split() if len(t) > 2}
+    base_sorted_tokens = " ".join(sorted(normalized.split()))
+
+    min_len = int(getattr(config, "DEDUP_TITLE_MIN_LEN", 10))
+    if len(normalized) < min_len:
+        return False
+
+    lookback_days = int(getattr(config, "CLUSTER_LOOKBACK_DAYS", 0))
+    if lookback_days <= 0:
+        return False
+
+    since_ts = int(time.time() - lookback_days * 86400)
+    candidates_limit = max(1, int(getattr(config, "CLUSTER_MAX_CANDIDATES", 200)))
+    threshold = float(getattr(config, "CLUSTER_SIM_THRESHOLD", 0.55))
+
+    try:
+        candidates = db.fetch_recent_titles(db_conn, since_ts, candidates_limit)
+    except Exception as ex:  # pragma: no cover - DB errors are non-fatal
+        logger.warning("Ошибка при загрузке заголовков для кластеризации: %s", ex)
+        return False
+
+    for cand_title, _ in candidates:
+        cand_norm = utils.normalize_whitespace(cand_title or "").lower()
+        if not cand_norm or cand_norm == normalized:
+            continue
+        if len(cand_norm) < min_len:
+            continue
+        cand_tokens = {t for t in cand_norm.split() if len(t) > 2}
+        cand_sorted_tokens = " ".join(sorted(cand_norm.split()))
+        token_union = base_tokens | cand_tokens
+        token_score = 0.0
+        if token_union:
+            token_score = len(base_tokens & cand_tokens) / len(token_union)
+
+        char_ratio = SequenceMatcher(None, normalized, cand_norm).ratio()
+        sorted_ratio = SequenceMatcher(None, base_sorted_tokens, cand_sorted_tokens).ratio()
+
+        coverage = 0.0
+        if base_tokens and cand_tokens:
+            shared = len(base_tokens & cand_tokens)
+            coverage = max(
+                shared / len(base_tokens),
+                shared / len(cand_tokens),
+            )
+
+        score = max(char_ratio, token_score, sorted_ratio, coverage)
+        if score >= threshold:
+            logger.info(
+                "[DUP_SIMILAR] совпадение %.2f с '%s'", score, (cand_title or "")[:140]
+            )
+            return True
+    return False
 
 
 def mark_published(
