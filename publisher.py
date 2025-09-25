@@ -29,8 +29,11 @@ def init_telegram_client(token: Optional[str] = None) -> None:
     """Initialize base URL for Telegram Bot API."""
     global _client_base_url
     token = token or getattr(config, "BOT_TOKEN", "").strip()
+    if getattr(config, "DRY_RUN", False):
+        logger.info("[DRY-RUN: READY] Telegram отправка отключена (DRY_RUN=1).")
     if not token:
-        logger.warning("BOT_TOKEN пуст — отправка в Telegram отключена.")
+        if not getattr(config, "DRY_RUN", False):
+            logger.warning("BOT_TOKEN пуст — отправка в Telegram отключена.")
         _client_base_url = None
         return
     _client_base_url = f"{_API_BASE}/bot{token}"
@@ -136,6 +139,13 @@ def format_preview(post: Dict[str, Any], cfg=config) -> tuple[str, Optional[str]
 def _api_post(
     method: str, payload: Dict[str, Any], files: Optional[Dict[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
+    if getattr(config, "DRY_RUN", False):
+        safe_payload = {k: v for k, v in payload.items() if k != "reply_markup"}
+        logger.info(
+            "[DRY-RUN: READY] %s -> %s", method, json.dumps(safe_payload, ensure_ascii=False)
+        )
+        # emulate Telegram response structure so остальной код не падал
+        return {"ok": True, "result": {"message_id": "dry-run"}}
     if not _ensure_client():
         return None
     url = f"{_client_base_url}/{method}"

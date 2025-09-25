@@ -186,6 +186,11 @@ def main() -> int:
     logging_setup.setup_logging()
     config.validate_config()
 
+    if getattr(config, "DRY_RUN", False):
+        logger.warning(
+            "[DRY-RUN: READY] Сообщения НЕ будут отправлены в Telegram — режим тестирования включен."
+        )
+
     # Поднимаем БД
     conn = db.connect()
     db.init_schema(conn)
