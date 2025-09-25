@@ -95,7 +95,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             # дубликаты в БД
             if dedup.is_duplicate(url, guid, title, conn):
                 cnt_dup_db += 1
-                logger.error("[ERROR] url=%s | дубль в БД", url)
+                logger.info("[DUP_DB] url=%s | найден в истории", url)
                 continue
 
             # отправка
@@ -148,6 +148,29 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
         cnt_errors,
         cnt_not_sent,
     )
+
+    items_ttl = int(getattr(config, "ITEM_RETENTION_DAYS", 0))
+    dedup_ttl = int(getattr(config, "DEDUP_RETENTION_DAYS", 0))
+    if items_ttl > 0 or dedup_ttl > 0:
+        db.prune_old_records(
+            conn,
+            items_ttl_days=items_ttl,
+            dedup_ttl_days=dedup_ttl,
+            batch_limit=int(getattr(config, "DB_PRUNE_BATCH", 500)),
+        )
+
+    active_failures = fetcher.get_host_fail_stats(active_only=True)
+    if active_failures:
+        parts = []
+        now = time.time()
+        for host, data in active_failures.items():
+            first_ts = data.get("first_failure_ts") or now
+            duration_min = max(0, int((now - first_ts) / 60))
+            parts.append(
+                f"{host}: {data.get('count', 0)} попыток, {duration_min} мин"
+            )
+        logger.warning("Источники с повторными сбоями: %s", "; ".join(parts))
+
     return (
         cnt_total,
         cnt_relevant,

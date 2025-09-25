@@ -2,6 +2,7 @@
 import logging
 import os
 import sqlite3
+import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
@@ -300,3 +301,62 @@ def _update_existing(conn: sqlite3.Connection, item_id: int, item: Dict[str, Any
             item_id,
         ),
     )
+
+
+# ---------- Maintenance helpers ----------
+
+def _prune_table(
+    conn: sqlite3.Connection,
+    table: str,
+    ts_column: str,
+    cutoff_ts: int,
+    limit: int,
+) -> int:
+    """Delete up to ``limit`` rows older than ``cutoff_ts`` from ``table``."""
+
+    cur = conn.execute(
+        f"SELECT id FROM {table} "
+        f"WHERE {ts_column} IS NOT NULL AND {ts_column} < ? "
+        f"ORDER BY {ts_column} ASC LIMIT ?",
+        (cutoff_ts, limit),
+    )
+    ids = [row[0] for row in cur.fetchall()]
+    if not ids:
+        return 0
+    conn.executemany(
+        f"DELETE FROM {table} WHERE id = ?",
+        ((item_id,) for item_id in ids),
+    )
+    conn.commit()
+    return len(ids)
+
+
+def prune_old_records(
+    conn: sqlite3.Connection,
+    *,
+    items_ttl_days: int,
+    dedup_ttl_days: int,
+    batch_limit: int = 500,
+) -> Dict[str, int]:
+    """Purge aged rows from ``items`` and ``dedup`` tables."""
+
+    batch_limit = max(1, int(batch_limit or 0))
+    now = int(time.time())
+    removed = {"items": 0, "dedup": 0}
+
+    if items_ttl_days > 0:
+        cutoff = now - int(items_ttl_days * 86400)
+        removed["items"] = _prune_table(conn, "items", "added_ts", cutoff, batch_limit)
+
+    if dedup_ttl_days > 0:
+        cutoff = now - int(dedup_ttl_days * 86400)
+        removed["dedup"] = _prune_table(conn, "dedup", "added_ts", cutoff, batch_limit)
+
+    if removed["items"] or removed["dedup"]:
+        logger.info(
+            "Очистка БД: удалено items=%d, dedup=%d",
+            removed["items"],
+            removed["dedup"],
+        )
+
+    return removed
