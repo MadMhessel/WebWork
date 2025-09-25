@@ -2,7 +2,7 @@
 import logging
 import time
 import re
-from typing import Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 from urllib.parse import urljoin, urlparse
 
 import feedparser
@@ -11,9 +11,11 @@ import requests
 try:
     from . import config, net
     from .utils import normalize_whitespace, shorten_url
+    from .parsers import html as html_parsers
 except ImportError:  # pragma: no cover
     import config, net  # type: ignore
     from utils import normalize_whitespace, shorten_url  # type: ignore
+    html_parsers = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -261,18 +263,30 @@ def _parse_html_article(
     url: str,
     *,
     timeout: Optional[tuple] = None,
+    selectors: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, str]]:
     html_text = _fetch_text(url, timeout=timeout)
     if not html_text:
         return None
     title, content, published_at = "", "", ""
+    lead_text = ""
     soup = None
     if BeautifulSoup is not None:
         try:
             soup = BeautifulSoup(html_text, "html.parser")
-            title = _extract_html_title(soup)
-            published_at = _extract_html_published_at(soup)
-            content = _extract_html_content(soup)
+            if selectors:
+                title = title or _select_from_soup(soup, selectors.get("title"))
+                lead_text = _select_from_soup(soup, selectors.get("lead"))
+                date_sel = selectors.get("date") if isinstance(selectors, dict) else None
+                if date_sel:
+                    published_at = _select_date_from_soup(soup, date_sel)
+                content = _extract_content_from_selectors(soup, selectors.get("content"))
+            if not title:
+                title = _extract_html_title(soup)
+            if not published_at:
+                published_at = _extract_html_published_at(soup)
+            if not content:
+                content = _extract_html_content(soup)
         except Exception as ex:
             logger.warning("Ошибка парсинга HTML (bs4) для %s: %s", url, ex)
             soup = None
@@ -296,7 +310,7 @@ def _parse_html_article(
             pass
     if not title:
         return None
-    return {
+    item = {
         "source": source_name,
         "guid": url,
         "url": url,
@@ -304,6 +318,9 @@ def _parse_html_article(
         "content": content,
         "published_at": published_at,
     }
+    if lead_text:
+        item["lead"] = lead_text
+    return item
 
 # -------------------- RSS --------------------
 
@@ -378,7 +395,7 @@ def fetch_rss(
 # -------------------- HTML single --------------------
 
 def fetch_html(
-    source: Dict[str, str], *, timeout: Optional[tuple] = None
+    source: Dict[str, str], *, timeout: Optional[tuple] = None, domain_config: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, str]]:
     url = source.get("url", "")
     name = source.get("name", "")
@@ -386,7 +403,10 @@ def fetch_html(
         return []
     logger.info("Загрузка HTML: %s (%s)", name, url)
     try:
-        item = _parse_html_article(name, url, timeout=timeout)
+        selectors = None
+        if domain_config:
+            selectors = domain_config.get("article")
+        item = _parse_html_article(name, url, timeout=timeout, selectors=selectors)
         return [item] if item else []
     except Exception as ex:
         logger.exception("Ошибка HTML источника %s: %s", name, ex)
@@ -410,11 +430,77 @@ def _text_or_empty(node) -> str:
     except Exception:
         return ""
 
+
+def _ensure_iter(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(v) for v in value if v]
+    return [str(value)]
+
+
+def _select_from_soup(soup, selectors: Any) -> str:
+    for css in _ensure_iter(selectors):
+        try:
+            node = soup.select_one(css)
+        except Exception:
+            node = None
+        if node:
+            text = _text_or_empty(node)
+            if text:
+                return text
+    return ""
+
+
+def _extract_content_from_selectors(soup, selectors: Any) -> str:
+    for css in _ensure_iter(selectors):
+        try:
+            container = soup.select_one(css)
+        except Exception:
+            container = None
+        if not container:
+            continue
+        texts: List[str] = []
+        for node in container.find_all(["p", "li"]):
+            text = _text_or_empty(node)
+            if text:
+                texts.append(text)
+        if texts:
+            return "\n\n".join(texts)
+        text = _text_or_empty(container)
+        if text:
+            return text
+    return ""
+
+
+def _select_date_from_soup(soup, config: Any) -> str:
+    attr = "datetime"
+    selectors = config
+    if isinstance(config, dict):
+        selectors = config.get("selectors") or config.get("css")
+        attr = config.get("attr") or config.get("attribute") or attr
+    for css in _ensure_iter(selectors):
+        try:
+            node = soup.select_one(css)
+        except Exception:
+            node = None
+        if not node:
+            continue
+        if attr and getattr(node, "has_attr", None) and node.has_attr(attr):
+            value = node.get(attr)
+            if value:
+                return normalize_whitespace(str(value))
+        text = _text_or_empty(node)
+        if text:
+            return text
+    return ""
+
 def fetch_html_list(
     source: Dict[str, str],
     limit: int = 30,
     *,
     timeout: Optional[tuple] = None,
+    domain_config: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     """
     Универсальный парсер листинга.
@@ -422,7 +508,10 @@ def fetch_html_list(
     """
     base_url = source.get("url", "")
     name = source.get("name", "")
-    sels = source.get("selectors") or {}
+    if domain_config:
+        sels = dict(domain_config.get("list", {}))
+    else:
+        sels = source.get("selectors") or {}
     if not base_url:
         return []
     if BeautifulSoup is None:
@@ -503,27 +592,41 @@ def fetch_html_list(
         if date_el:
             date_text = date_el.get(date_attr) or _text_or_empty(date_el)
 
+        lead_text = ""
+        summary_css = sels.get("summary") or sels.get("lead")
+        if summary_css:
+            try:
+                summary_el = node.select_one(summary_css)
+            except Exception:
+                summary_el = None
+            if summary_el:
+                lead_text = _text_or_empty(summary_el)
+
         # 5) загрузим карточку материала
-        detail = _parse_html_article(name, link_abs, timeout=timeout)
+        selectors_article = domain_config.get("article") if domain_config else None
+        detail = _parse_html_article(
+            name, link_abs, timeout=timeout, selectors=selectors_article
+        )
         if not detail:
             out.append({
                 "source": name,
                 "guid": link_abs,
                 "url": link_abs,
                 "title": title_list or "(без заголовка)",
-                "content": "",
+                "content": lead_text or "",
                 "published_at": date_text or "",
             })
             continue
 
         # финальный заголовок/контент
         title_final = detail.get("title") or title_list or ""
+        content_final = detail.get("content") or lead_text or ""
         out.append({
             "source": name,
             "guid": detail.get("guid") or link_abs,
             "url": detail.get("url") or link_abs,
             "title": title_final,
-            "content": detail.get("content") or "",
+            "content": content_final,
             "published_at": detail.get("published_at") or date_text or "",
         })
 
@@ -555,11 +658,30 @@ def fetch_all(
             continue
         stype = (s.get("type") or "rss").strip().lower()
         timeout = s.get("timeout")
+        domain_config = None
+        if html_parsers:
+            domain_hint = s.get("source_domain")
+            if not domain_hint:
+                url = s.get("url", "")
+                domain_hint = (urlparse(url).hostname or "").lower()
+                if domain_hint.startswith("www."):
+                    domain_hint = domain_hint[4:]
+            if domain_hint:
+                domain_config = html_parsers.get_domain_config(domain_hint)
         try:
             if stype == "html":
-                items = fetch_html(s, timeout=timeout)
+                if domain_config and domain_config.get("list"):
+                    items = fetch_html_list(
+                        s, limit=limit, timeout=timeout, domain_config=domain_config
+                    )
+                else:
+                    items = fetch_html(
+                        s, timeout=timeout, domain_config=domain_config
+                    )
             elif stype == "html_list":
-                items = fetch_html_list(s, limit=limit, timeout=timeout)
+                items = fetch_html_list(
+                    s, limit=limit, timeout=timeout, domain_config=domain_config
+                )
             elif stype == "mock":
                 items = fetch_mock(s)
             else:

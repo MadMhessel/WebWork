@@ -4,6 +4,8 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
+import moderation
+
 try:
     from . import config, publisher, db
 except ImportError:  # pragma: no cover
@@ -111,6 +113,41 @@ def enqueue_item(item: Dict[str, Any], conn: sqlite3.Connection) -> Optional[int
         row = cur2.fetchone()
         return int(row["id"]) if row else None
     mod_id = int(cur.lastrowid)
+
+    flags_raw = item.get("moderation_flags")
+    if isinstance(flags_raw, str):
+        flags_json = flags_raw
+    elif flags_raw:
+        flags_json = json.dumps(flags_raw, ensure_ascii=False)
+    else:
+        flags_json = None
+    confirmation_reasons = item.get("confirmation_reasons")
+    if confirmation_reasons:
+        confirm_json = json.dumps(confirmation_reasons, ensure_ascii=False)
+    else:
+        confirm_json = None
+    trust_summary = item.get("trust_summary")
+    if trust_summary:
+        trust_json = json.dumps(trust_summary, ensure_ascii=False)
+    else:
+        trust_json = None
+
+    extra_updates = [
+        ("rubric", item.get("rubric")),
+        ("moderation_flags", flags_json),
+        ("needs_confirmation", 1 if item.get("needs_confirmation") else 0),
+        ("confirmation_reasons", confirm_json),
+        ("trust_summary", trust_json),
+        ("quality_note_required", 1 if item.get("quality_note_required") else 0),
+        ("source_domain", item.get("source_domain")),
+    ]
+
+    set_clause = ", ".join(f"{col} = ?" for col, _ in extra_updates)
+    values = [val for _, val in extra_updates]
+    conn.execute(
+        f"UPDATE moderation_queue SET {set_clause} WHERE id = ?",
+        (*values, mod_id),
+    )
     conn.commit()
     logger.info("[QUEUED] id=%d | %s", mod_id, (item.get("title") or "")[:140])
     return mod_id

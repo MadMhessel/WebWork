@@ -51,19 +51,27 @@ def test_first_http_url_ranking():
 
 
 def test_publish_message_truncates_and_sends(monkeypatch):
-    captured = {}
+    captured: list[str] = []
 
     def fake_api_post(method, payload, files=None):
-        captured["text"] = payload.get("text")
-        return {"ok": True, "result": {"message_id": "1"}}
+        captured.append(payload.get("text", ""))
+        return {"ok": True, "result": {"message_id": str(len(captured))}}
 
     monkeypatch.setattr(publisher, "_api_post", fake_api_post)
-    monkeypatch.setattr(publisher.config, "TELEGRAM_MESSAGE_LIMIT", 100)
+    monkeypatch.setattr(publisher.config, "TELEGRAM_MESSAGE_LIMIT", 120)
     monkeypatch.setattr(publisher.config, "TELEGRAM_PARSE_MODE", "HTML")
     monkeypatch.setattr(publisher.config, "ON_SEND_ERROR", "ignore")
-    ok = publisher.publish_message("123", "title", "body" * 50, "https://e", cfg=publisher.config)
+    content = "<p>" + ("Текст " * 40) + "</p>"
+    ok = publisher.publish_message(
+        "123", "title", content, "https://e", cfg=publisher.config, meta={"rubric": "objects", "source_domain": "example.com"}
+    )
     assert ok is True
-    assert len(captured["text"]) <= 100
+    assert captured, "ожидался хотя бы один вызов отправки"
+    for idx, text in enumerate(captured, 1):
+        assert len(text) <= 120
+        if idx == 1:
+            payload = text.split(" ", 1)[1] if text.startswith("(") else text
+            assert payload.startswith("Рубрика:")
 
 
 def test_publish_message_failure(monkeypatch):
