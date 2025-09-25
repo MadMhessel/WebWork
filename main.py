@@ -99,6 +99,11 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 continue
 
             # отправка
+            filter_meta = {
+                "region": bool(region_ok),
+                "topic": bool(topic_ok),
+            }
+
             item_clean = {
                 "source": src,
                 "source_id": src,
@@ -109,6 +114,7 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 "summary": it.get("summary") or "",
                 "published_at": it.get("published_at") or "",
                 "tags": list(tags),
+                "reasons": filter_meta,
             }
 
             item_clean = rewrite.maybe_rewrite_item(item_clean, config)
