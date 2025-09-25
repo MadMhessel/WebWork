@@ -306,7 +306,12 @@ def handle_callback(conn: sqlite3.Connection, update: dict) -> Optional[str]:
     except Exception:
         return None
     extra = rest[0] if rest else None
-    if not is_moderator(user_id):
+    allowed = is_moderator(user_id)
+    if not allowed:
+        sender_chat = cb.get("message", {}).get("sender_chat")
+        if sender_chat and is_sender_authorized(sender_chat):
+            allowed = True
+    if not allowed:
         logger.warning("unauthorized callback", extra={"user_id": user_id, "action": action})
         return "forbidden"
     result: Optional[str] = None
