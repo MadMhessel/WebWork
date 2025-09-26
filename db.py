@@ -1,5 +1,4 @@
 # newsbot/db.py
-import logging
 import os
 import sqlite3
 import time
@@ -11,7 +10,9 @@ try:
 except ImportError:  # pragma: no cover
     import config  # type: ignore
 
-logger = logging.getLogger(__name__)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 # ---------- Connection helpers ----------
 
@@ -32,6 +33,13 @@ def connect(db_path: Optional[str] = None) -> sqlite3.Connection:
         conn.execute("PRAGMA synchronous=NORMAL;")
     except Exception:
         pass
+    if getattr(config, "LOG_SQL_DEBUG", False):
+        sql_log = get_logger("webwork.sql")
+
+        def _trace(statement: str) -> None:
+            sql_log.debug(statement)
+
+        conn.set_trace_callback(_trace)
     return conn
 
 

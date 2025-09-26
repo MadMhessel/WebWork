@@ -1,6 +1,5 @@
 # newsbot/dedup.py
 import hashlib
-import logging
 import re
 import time
 from difflib import SequenceMatcher
@@ -11,7 +10,9 @@ try:
 except ImportError:  # pragma: no cover
     import db, utils, config  # type: ignore
 
-logger = logging.getLogger(__name__)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 _WORD_RE = re.compile(r"[0-9a-zа-яё]+", re.I)
 

@@ -8,14 +8,14 @@ news processing.
 
 from __future__ import annotations
 
-import logging
-
 from formatting import clean_html_tags, truncate_by_chars
 from rewriter.base import NewsItem
 from rewriter.rules import RuleBasedRewriter
 import config
 
-logger = logging.getLogger(__name__)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 class Rewriter:

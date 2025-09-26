@@ -1,4 +1,3 @@
-import logging
 import os
 import time
 from urllib.parse import urlparse
@@ -12,7 +11,9 @@ except Exception:  # pragma: no cover
     import config  # type: ignore
     import http_client  # type: ignore
 
-logger = logging.getLogger(__name__)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 _BROWSER_HEADERS = {
     "User-Agent": (
