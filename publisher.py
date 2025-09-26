@@ -631,8 +631,6 @@ def _send_chunks(
     chat_id: str,
     chunks: list[str],
     cfg,
-    *,
-    reply_markup: Optional[dict] = None,
 ) -> Optional[str]:
     if not chunks:
         return None
@@ -648,7 +646,6 @@ def _send_chunks(
                 chat_id,
                 trimmed,
                 parse_mode,
-                reply_markup=reply_markup if idx == 0 else None,
                 reply_to_message_id=last_mid if idx > 0 else None,
             )
 
@@ -722,7 +719,6 @@ def _send_text(
     chat_id: str,
     text: str,
     parse_mode: str,
-    reply_markup: Optional[dict] = None,
     reply_to_message_id: Optional[str] = None,
 ) -> Optional[str]:
     payload: Dict[str, Any] = {
@@ -735,8 +731,6 @@ def _send_text(
             else "false"
         ),
     }
-    if reply_markup is not None:
-        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
     if reply_to_message_id is not None:
         payload["reply_to_message_id"] = reply_to_message_id
     j = _api_post("sendMessage", payload)
@@ -823,8 +817,6 @@ def send_moderation_preview(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     )
     header = _build_moderation_header(mod_id, item)
-    keyboard = None
-
     messages: list[str] = []
     if caption:
         first = f"{header}\n\n{caption}" if header else caption
@@ -844,7 +836,6 @@ def send_moderation_preview(
                 chat_id,
                 trimmed,
                 parse_mode,
-                reply_markup=None,
                 reply_to_message_id=mid if idx > 0 else None,
             )
 

@@ -3,7 +3,9 @@ import time
 import sys
 import pathlib
 
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
+project_root = pathlib.Path(__file__).resolve().parents[1]
+sys.path.append(str(project_root))
+sys.path.append(str(project_root.parent))
 from WebWork import publisher, config
 
 
@@ -12,12 +14,11 @@ def test_send_moderation_preview_includes_header(monkeypatch):
 
     calls = []
 
-    def fake_send_text(chat_id, text, parse_mode, reply_markup=None, reply_to_message_id=None):
+    def fake_send_text(chat_id, text, parse_mode, reply_to_message_id=None):
         calls.append(
             {
                 "chat_id": chat_id,
                 "text": text,
-                "reply_markup": reply_markup,
                 "reply_to": reply_to_message_id,
                 "parse_mode": parse_mode,
             }
@@ -47,6 +48,5 @@ def test_send_moderation_preview_includes_header(monkeypatch):
     assert "Источник" in first
     assert "🏷️" in first
     assert "Фильтр" in first
-    assert calls[0]["reply_markup"] is None
     assert calls[0]["reply_to"] is None
     assert calls[0]["parse_mode"] == "HTML"
