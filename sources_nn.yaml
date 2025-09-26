@@ -82,9 +82,11 @@ sources:
   - name: "ГИПЕРНН — новости журнала"
     url: "https://www.gipernn.ru/zhurnal/novosti"
     type: html
-    trust_level: 2
+    enabled: false
+    trust_level: 1
     source_domain: "gipernn.ru"
-    min_text_length: 120
+    min_text_length: 350
+    rubrics_allowed: [objects]
   - name: "Администрация Нижнего Новгорода — новости"
     url: "https://admgor.nnov.ru/news"
     type: html

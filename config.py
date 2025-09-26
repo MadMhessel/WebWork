@@ -161,6 +161,13 @@ DB_PRUNE_BATCH: int = int(os.getenv("DB_PRUNE_BATCH", "500"))
 HOST_FAIL_ALERT_THRESHOLD: int = int(os.getenv("HOST_FAIL_ALERT_THRESHOLD", "5"))
 HOST_FAIL_ALERT_WINDOW_SEC: int = int(os.getenv("HOST_FAIL_ALERT_WINDOW_SEC", "1800"))
 HOST_FAIL_ALERT_COOLDOWN_SEC: int = int(os.getenv("HOST_FAIL_ALERT_COOLDOWN_SEC", "900"))
+SERVICE_CHAT_ID: str = os.getenv("SERVICE_CHAT_ID", os.getenv("ADMIN_CHAT_ID", "")).strip()
+HOST_FAIL_AUTO_QUARANTINE_THRESHOLD: int = int(
+    os.getenv("HOST_FAIL_AUTO_QUARANTINE_THRESHOLD", "3")
+)
+HOST_FAIL_AUTO_QUARANTINE_HOURS: float = float(
+    os.getenv("HOST_FAIL_AUTO_QUARANTINE_HOURS", "4")
+)
 
 
 def validate_config() -> None:
@@ -344,13 +351,13 @@ GLOBAL_KEYWORDS = [
 SOURCES = [
     # === ОФИЦИАЛЬНЫЕ (RSS) — остаются как есть ===
     {"name": "Минград НО — пресс-центр",      "type": "rss", "url": "https://mingrad.nobl.ru/presscenter/news/rss/", "enabled": True},
-    {"name": "Госстройнадзор НО — пресс-центр","type": "rss", "url": "https://nngosnadzor.nobl.ru/presscenter/news/rss/", "enabled": True},
+    {"name": "Госстройнадзор НО — пресс-центр","type": "rss", "url": "https://gsn.nobl.ru/presscenter/news/rss/", "enabled": True},
     {"name": "Минтранс НО — пресс-центр",     "type": "rss", "url": "https://mintrans.nobl.ru/presscenter/news/rss/", "enabled": True},
     {"name": "г.о. Бор — пресс-центр",        "type": "rss", "url": "https://bor.nobl.ru/presscenter/news/rss/", "enabled": True},
     {"name": "Арзамас — пресс-центр",         "type": "rss", "url": "https://arzamas.nobl.ru/presscenter/news/rss/", "enabled": True},
     {"name": "Кстовский округ — пресс-центр", "type": "rss", "url": "https://kstovo.nobl.ru/presscenter/news/rss/", "enabled": True},
     {"name": "Павлово — пресс-центр",         "type": "rss", "url": "https://pavlovo.nobl.ru/presscenter/news/rss/", "enabled": True},
-    {"name": "Гордума Нижнего Новгорода",     "type": "rss", "url": "https://www.duma.nnov.ru/rss", "enabled": True},
+    {"name": "Гордума Нижнего Новгорода",     "type": "rss", "url": "https://www.gordumannov.ru/rss", "enabled": True},
     {"name": "ИА «Время Н»",                  "type": "rss", "url": "https://www.vremyan.ru/rss/news.rss", "enabled": True},
 
     # === HTML-ЛИСТИНГИ (новые) ===
@@ -429,7 +436,10 @@ SOURCES = [
     # GIPERNN — Журнал/Жилье/Новости
     {"name": "GIPERNN — Жилье/Новости", "type": "html_list",
      "url": "https://www.gipernn.ru/zhurnal/zhile/novosti",
-     "enabled": True,
+     "enabled": False,
+     "trust_level": 1,
+     "min_text_length": 350,
+     "rubrics_allowed": ["objects"],
      "selectors": {
         "item": "article, .article, .news-item, .card, li",
         "link": "a",
@@ -441,7 +451,7 @@ SOURCES = [
     # Столица Нижний — медиа-портал
     {"name": "Столица Нижний (STN Media)", "type": "html_list",
      "url": "https://stnmedia.ru/",
-     "enabled": True,
+     "enabled": False,
      "timeout": (5, 30),
      "selectors": {
         "item": "article, .news-item, .card, li",
@@ -454,7 +464,10 @@ SOURCES = [
     # STN REALTY — LIVE
     {"name": "STN REALTY — LIVE", "type": "html_list",
      "url": "https://stn-realty.ru/live/",
-     "enabled": True,
+     "enabled": False,
+     "trust_level": 1,
+     "min_text_length": 350,
+     "rubrics_allowed": ["objects"],
      "selectors": {
         "item": "article, .news-item, .card, li",
         "link": "a",
