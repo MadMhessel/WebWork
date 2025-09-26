@@ -31,6 +31,7 @@ except Exception:
 
 _HOST_FAILS: Dict[str, float] = {}
 _HOST_FAIL_STATS: Dict[str, Dict[str, float]] = {}
+_HOST_QUARANTINE: Dict[str, float] = {}
 _FAIL_TTL = 30 * 60  # 30 minutes
 _HTTP_CACHE: Dict[str, Dict[str, str]] = {}
 
@@ -62,6 +63,9 @@ def _ensure_host_stats(host: str, now: Optional[float] = None) -> Dict[str, floa
             "last_recovery_ts": 0.0,
             "recoveries": 0,
             "alerted_at": 0.0,
+            "tls_dns_count": 0,
+            "quarantined_until": 0.0,
+            "last_quarantine_log": 0.0,
         }
         _HOST_FAIL_STATS[host] = stats
     if now is not None:
@@ -69,7 +73,7 @@ def _ensure_host_stats(host: str, now: Optional[float] = None) -> Dict[str, floa
     return stats
 
 
-def _record_host_failure(host: str, *, now: Optional[float] = None) -> None:
+def _record_host_failure(host: str, reason: str, *, now: Optional[float] = None) -> None:
     now = now or time.time()
     stats = _ensure_host_stats(host, now)
     stats["count"] = int(stats.get("count", 0)) + 1
@@ -77,6 +81,11 @@ def _record_host_failure(host: str, *, now: Optional[float] = None) -> None:
     if not stats.get("first_failure_ts"):
         stats["first_failure_ts"] = now
     stats["last_failure_ts"] = now
+
+    if reason in {"dns", "tls"}:
+        stats["tls_dns_count"] = int(stats.get("tls_dns_count", 0)) + 1
+    else:
+        stats["tls_dns_count"] = 0
 
     threshold = max(1, int(getattr(config, "HOST_FAIL_ALERT_THRESHOLD", 5)))
     window = max(0, int(getattr(config, "HOST_FAIL_ALERT_WINDOW_SEC", 1800)))
@@ -90,6 +99,8 @@ def _record_host_failure(host: str, *, now: Optional[float] = None) -> None:
                 "Источник %s недоступен %d раз подряд", host, stats["count"]
             )
             stats["alerted_at"] = now
+
+    _maybe_auto_quarantine(host, stats, reason=reason, now=now)
 
 
 def _record_host_success(host: str, *, now: Optional[float] = None) -> None:
@@ -109,6 +120,10 @@ def _record_host_success(host: str, *, now: Optional[float] = None) -> None:
     stats["first_failure_ts"] = 0.0
     stats["alerted_at"] = 0.0
     stats["last_recovery_ts"] = now
+    stats["tls_dns_count"] = 0
+    stats["quarantined_until"] = 0.0
+    stats["last_quarantine_log"] = 0.0
+    _HOST_QUARANTINE.pop(host, None)
 
 
 def get_host_fail_stats(active_only: bool = False) -> Dict[str, Dict[str, float]]:
@@ -127,6 +142,96 @@ def reset_host_fail_stats() -> None:
 
     _HOST_FAILS.clear()
     _HOST_FAIL_STATS.clear()
+    _HOST_QUARANTINE.clear()
+
+
+def _quarantine_duration_seconds() -> float:
+    default_hours = 4.0
+    raw_hours = getattr(config, "HOST_FAIL_AUTO_QUARANTINE_HOURS", default_hours)
+    try:
+        hours = float(raw_hours)
+    except (TypeError, ValueError):
+        hours = default_hours
+    hours = max(2.0, min(6.0, hours))
+    return hours * 3600.0
+
+
+def _notify_service_chat(message: str) -> None:
+    chat_id = str(getattr(config, "SERVICE_CHAT_ID", "") or getattr(config, "ADMIN_CHAT_ID", "")).strip()
+    if not chat_id:
+        return
+    token = getattr(config, "BOT_TOKEN", "").strip()
+    if not token or getattr(config, "DRY_RUN", False):
+        logger.debug("Пропущено уведомление в служебный чат: нет токена или DRY_RUN")
+        return
+    try:  # pragma: no cover - heavy dependency, not critical for tests
+        from . import publisher  # type: ignore
+    except ImportError:  # pragma: no cover - direct execution
+        import publisher  # type: ignore
+    try:
+        publisher.send_message(str(chat_id), message, cfg=config)
+    except Exception as exc:  # pragma: no cover - logging side effect
+        logger.exception("Не удалось отправить уведомление в служебный чат: %s", exc)
+
+
+def _list_source_names(host: str) -> List[str]:
+    host = host.lower()
+    names: List[str] = []
+    sources = getattr(config, "SOURCES", []) or []
+    for source in sources:
+        url = str(source.get("url") or "").strip()
+        domain = str(source.get("source_domain") or "").strip().lower()
+        parsed_host = (urlparse(url).hostname or "").lower()
+        if parsed_host.startswith("www."):
+            parsed_host = parsed_host[4:]
+        candidates = {host_part for host_part in (domain, parsed_host) if host_part}
+        if host in candidates:
+            name = str(source.get("name") or "").strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def _maybe_auto_quarantine(host: str, stats: Dict[str, float], *, reason: str, now: float) -> None:
+    if reason not in {"dns", "tls"}:
+        return
+    threshold = max(1, int(getattr(config, "HOST_FAIL_AUTO_QUARANTINE_THRESHOLD", 3)))
+    if int(stats.get("tls_dns_count", 0)) < threshold:
+        return
+
+    until_existing = float(stats.get("quarantined_until", 0.0))
+    if until_existing and until_existing > now:
+        return
+
+    duration = _quarantine_duration_seconds()
+    until = now + duration
+    _HOST_QUARANTINE[host] = until
+    stats["quarantined_until"] = until
+    stats["quarantined_at"] = now
+
+    names = _list_source_names(host)
+    hours = duration / 3600.0
+    readable = ", ".join(names) if names else host
+    message = (
+        f"Источник {readable} автоматически отключён на {hours:.1f} ч из-за повторных "
+        f"{reason.upper()}"
+    )
+    logger.warning("[AUTO-QUARANTINE] %s", message)
+    _notify_service_chat(message)
+
+
+def _active_quarantine_until(host: str, now: Optional[float] = None) -> float:
+    now = now or time.time()
+    until = float(_HOST_QUARANTINE.get(host, 0.0) or 0.0)
+    if not until:
+        return 0.0
+    if until <= now:
+        _HOST_QUARANTINE.pop(host, None)
+        stats = _HOST_FAIL_STATS.get(host)
+        if stats is not None:
+            stats["quarantined_until"] = 0.0
+        return 0.0
+    return until
 
 
 def _cache_key(url: str) -> str:
@@ -324,12 +429,21 @@ def _fetch_text(
 ) -> str:
     host = (urlparse(url).hostname or "").lower()
     now = time.time()
+    quarantine_until = _active_quarantine_until(host, now)
+    if quarantine_until:
+        stats = _ensure_host_stats(host, now)
+        stats["last_failure_ts"] = now
+        logger.debug(
+            "[SKIP_QUARANTINE] %s до %s", host, datetime.fromtimestamp(quarantine_until, tz=timezone.utc)
+        )
+        return ""
     if host in _HOST_FAILS and now - _HOST_FAILS[host] < _FAIL_TTL:
         stats = _HOST_FAIL_STATS.get(host)
         if stats is not None:
             stats["last_failure_ts"] = now
         return ""
     try:
+        failure_reason = "other"
         read_to = timeout[1] if timeout else None
         verify = _verify_for(url)
         headers = _conditional_headers(url)
@@ -348,12 +462,15 @@ def _fetch_text(
         return text
     except requests.exceptions.SSLError as ex:
         logger.warning("TLS_FAIL %s: %s", host, ex)
+        failure_reason = "tls"
     except requests.exceptions.ConnectionError as ex:
         logger.warning("DNS_FAIL %s: %s", host, ex)
+        failure_reason = "dns"
     except Exception as ex:
         logger.debug("fetch error %s: %s", host, ex)
+        failure_reason = "other"
     _HOST_FAILS[host] = now
-    _record_host_failure(host, now=now)
+    _record_host_failure(host, failure_reason, now=now)
     return ""
 
 # -------------------- HTML article --------------------
@@ -838,6 +955,27 @@ def fetch_all(
         stype = (s.get("type") or "rss").strip().lower()
         timeout = s.get("timeout")
         domain_config = None
+        source_url = s.get("url", "")
+        parsed = urlparse(source_url)
+        host = (parsed.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if not host:
+            host = (s.get("source_domain") or "").strip().lower()
+        quarantine_until = _active_quarantine_until(host) if host else 0.0
+        if quarantine_until:
+            stats = _ensure_host_stats(host)
+            last_log = float(stats.get("last_quarantine_log", 0.0))
+            now = time.time()
+            if now - last_log > 60:
+                until_dt = datetime.fromtimestamp(quarantine_until, tz=timezone.utc)
+                logger.warning(
+                    "Источник '%s' пропущен: автокарантин до %s",
+                    s.get("name"),
+                    until_dt.isoformat(),
+                )
+                stats["last_quarantine_log"] = now
+            continue
         if html_parsers:
             domain_hint = s.get("source_domain")
             if not domain_hint:
