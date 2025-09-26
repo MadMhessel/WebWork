@@ -170,6 +170,16 @@ HOST_FAIL_AUTO_QUARANTINE_HOURS: float = float(
 )
 
 
+# -----------------------------------------------------------------------------
+# Источники Telegram из текстового списка
+# -----------------------------------------------------------------------------
+# Путь к файлу (по одной ссылке на строку), например:
+#   https://t.me/s/newsnn
+#   https://t.me/today_nn
+# Поддерживаются форматы t.me/<имя> и t.me/s/<имя>.
+TELEGRAM_LINKS_FILE = "telegram_links.txt"
+
+
 def validate_config() -> None:
     """Validate critical configuration values with clear errors."""
 

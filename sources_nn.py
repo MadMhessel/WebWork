@@ -7,10 +7,16 @@ from urllib.parse import urlparse
 
 import hashlib
 import re
+
 import yaml
 
 _DEFAULTS_CACHE: Dict[str, Any] | None = None
 _SOURCES_CACHE: List[Dict[str, Any]] | None = None
+try:  # pragma: no cover
+    from . import config  # пакетный импорт
+except Exception:  # pragma: no cover
+    import config  # прямой запуск
+
 VERSION_REQUIRED = 2
 _RUBRICS = {"kazusy", "objects", "persons"}
 
@@ -137,11 +143,77 @@ def _merge_defaults(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return result
 
 
+# --- Telegram links support ---------------------------------------------------
+_TG_RE = re.compile(r"(?i)^(?:https?://)?t\.me/(?:s/)?([A-Za-z0-9_+\-]+)$")
+
+
+def _parse_telegram_slug(line: str) -> str | None:
+    """Вернёт имя канала из строки-ссылки t.me, либо None. Пустые/комментарии игнорируются."""
+
+    s = (line or "").strip()
+    if not s or s.startswith("#"):
+        return None
+    match = _TG_RE.match(s)
+    return match.group(1) if match else None
+
+
+def _load_telegram_links(path: Path | None) -> list[str]:
+    """Загрузить список имён каналов из текстового файла (по строке на ссылку)."""
+
+    if not path or not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    slugs: list[str] = []
+    seen: set[str] = set()
+    for raw in lines:
+        slug = _parse_telegram_slug(raw)
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        slugs.append(slug)
+    return slugs
+
+
+def _entries_from_telegram(slugs: list[str], defaults: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Сконструировать записи-источники для Telegram-просмотровых страниц."""
+
+    out: list[Dict[str, Any]] = []
+    for slug in slugs:
+        url = f"https://t.me/s/{slug}"
+        entry = deepcopy(defaults)
+        entry.update(
+            {
+                "id": f"tg:{slug}",
+                "name": f"TG · {slug}",
+                "url": url,
+                "type": "html",
+                "source_domain": "t.me",
+            }
+        )
+        out.append(entry)
+    return out
+
+
 def _build_sources() -> List[Dict[str, Any]]:
     global _DEFAULTS_CACHE
     data = _load_yaml()
     _DEFAULTS_CACHE = deepcopy(data.get("defaults") or {})
-    return _merge_defaults(data)
+    base = _merge_defaults(data)
+
+    links_file = getattr(config, "TELEGRAM_LINKS_FILE", "") or ""
+    tg_path = Path(links_file).resolve() if links_file else None
+    tg_slugs = _load_telegram_links(tg_path)
+    dyn = _entries_from_telegram(tg_slugs, _DEFAULTS_CACHE or {})
+
+    merged: dict[str, Dict[str, Any]] = {}
+    for src in base + dyn:
+        sid = str(src.get("id") or src.get("name") or src.get("url"))
+        merged[sid] = src
+    return list(merged.values())
 
 
 SOURCES_NN = _build_sources()
