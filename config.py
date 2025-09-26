@@ -48,6 +48,22 @@ BOT_TOKEN: str = (
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", DEFAULT_CHANNEL_ID).strip()  # пример: "@my_news_channel" или числовой ID
 RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
+# === Бот-приёмная для предложений новостей ===
+SUGGEST_BOT_TOKEN: str = os.getenv("SUGGEST_BOT_TOKEN", "").strip()
+_RAW_SUGGEST_CHAT = os.getenv("SUGGEST_MOD_CHAT_ID", "").strip()
+SUGGEST_MOD_CHAT_ID: str | int = int(_RAW_SUGGEST_CHAT) if _RAW_SUGGEST_CHAT.lstrip("-+").isdigit() else _RAW_SUGGEST_CHAT
+SUGGEST_USE_COPY: bool = os.getenv("SUGGEST_USE_COPY", "false").lower() in {"1", "true", "yes"}
+SUGGEST_HELLO: str = (
+    os.getenv(
+        "SUGGEST_HELLO",
+        (
+            "👋 Здравствуйте! Пришлите текст, фото/видео, ссылку или документ. "
+            "Добавьте объект/адрес и контакт для уточнений — по желанию."
+        ),
+    )
+    .strip()
+)
+
 # === HTTP-клиент ===
 HTTP_TIMEOUT_CONNECT: float = float(os.getenv("HTTP_TIMEOUT_CONNECT", "5"))
 # ТЗ: connect=5s, read=65s (long-poll up to 30s)
