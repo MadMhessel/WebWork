@@ -1,5 +1,4 @@
 import json
-import logging
 import sqlite3
 import time
 from typing import Any, Dict, Optional
@@ -11,7 +10,9 @@ try:
 except ImportError:  # pragma: no cover
     import config, publisher, db  # type: ignore
 
-logger = logging.getLogger(__name__)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 PENDING_REVIEW = "PENDING_REVIEW"
 REJECTED = "REJECTED"

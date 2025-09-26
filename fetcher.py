@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import logging
 import time
 import re
 from datetime import datetime, timedelta, timezone
@@ -20,7 +19,9 @@ except ImportError:  # pragma: no cover
     from utils import canonicalize_url, normalize_whitespace, shorten_url  # type: ignore
     html_parsers = None  # type: ignore
 
-logger = logging.getLogger(__name__)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 try:

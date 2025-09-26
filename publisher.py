@@ -1,5 +1,4 @@
 import json
-import logging
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
@@ -12,6 +11,7 @@ import requests
 from formatting import clean_html_tags, html_escape, truncate_by_chars
 
 import moderation
+from logging_setup import audit, get_logger, mask_secrets
 
 try:  # pragma: no cover - package import in production
     from . import config, rewrite
@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - direct script execution
     import config  # type: ignore
     import rewrite  # type: ignore
 
-logger = logging.getLogger(__name__)
+log = get_logger("webwork.bot")
 
 _API_BASE = "https://api.telegram.org"
 _client_base_url: Optional[str] = None
@@ -35,10 +35,10 @@ def init_telegram_client(token: Optional[str] = None) -> None:
     global _client_base_url
     token = token or getattr(config, "BOT_TOKEN", "").strip()
     if getattr(config, "DRY_RUN", False):
-        logger.info("[DRY-RUN: READY] Telegram отправка отключена (DRY_RUN=1).")
+        log.info("[DRY-RUN: READY] Telegram отправка отключена (DRY_RUN=1).")
     if not token:
         if not getattr(config, "DRY_RUN", False):
-            logger.warning("BOT_TOKEN пуст — отправка в Telegram отключена.")
+            log.warning("BOT_TOKEN пуст — отправка в Telegram отключена.")
         _client_base_url = None
         return
     _client_base_url = f"{_API_BASE}/bot{token}"
@@ -670,47 +670,99 @@ def _api_post(
 ) -> Optional[Dict[str, Any]]:
     if getattr(config, "DRY_RUN", False):
         safe_payload = {k: v for k, v in payload.items() if k != "reply_markup"}
-        logger.info(
-            "[DRY-RUN: READY] %s -> %s", method, json.dumps(safe_payload, ensure_ascii=False)
+        log.info(
+            "[DRY-RUN: READY] %s -> %s",
+            method,
+            mask_secrets(json.dumps(safe_payload, ensure_ascii=False)),
         )
         # emulate Telegram response structure so остальной код не падал
         return {"ok": True, "result": {"message_id": "dry-run"}}
     if not _ensure_client():
         return None
     url = f"{_client_base_url}/{method}"
+    safe_url = mask_secrets(url)
     max_attempts = 2
-    for attempt in range(max_attempts):
+    for attempt in range(1, max_attempts + 1):
         try:
-            r = requests.post(url, data=payload, files=files, timeout=30)
+            response = requests.post(url, data=payload, files=files, timeout=30)
         except Exception as ex:  # pragma: no cover - network failure guard
-            logger.exception("Исключение при вызове Telegram %s: %s", method, ex)
+            log.exception("Исключение при вызове Telegram %s (%s)", method, safe_url)
+            return None
+        status = response.status_code
+        text = response.text
+        try:
+            data = response.json()
+        except ValueError:
+            log.error(
+                "Некорректный ответ Telegram %s (%s): %s",
+                method,
+                safe_url,
+                mask_secrets(text),
+            )
             return None
 
-        text = r.text
-        if r.status_code == 429 and attempt == 0:
-            retry_after = 0
+        ok = bool(data.get("ok"))
+        description = mask_secrets(data.get("description") or text)
+        retry_after = None
+        if status == 429:
+            params = data.get("parameters") or {}
             try:
-                j = r.json()
-                retry_after = int((j.get("parameters") or {}).get("retry_after", 0))
-            except Exception:
+                retry_after = float(params.get("retry_after", 0) or 0)
+            except (TypeError, ValueError):
                 retry_after = 0
-            if retry_after > 0:
-                logger.warning("FloodWait: retry_after=%s", retry_after)
+            if retry_after and attempt < max_attempts:
+                log.warning(
+                    "Telegram %s (%s) статус=%s ok=%s retry_after=%s",
+                    method,
+                    safe_url,
+                    status,
+                    ok,
+                    retry_after,
+                )
                 time.sleep(retry_after)
                 continue
+            if retry_after:
+                log.error(
+                    "Telegram %s (%s) статус=%s ok=%s retry_after=%s — попытки исчерпаны",
+                    method,
+                    safe_url,
+                    status,
+                    ok,
+                    retry_after,
+                )
 
-        try:
-            data = r.json()
-        except ValueError:
-            logger.error("Некорректный ответ Telegram %s: %s", method, text)
+        if not ok:
+            level = log.warning if status < 500 else log.error
+            level(
+                "Telegram %s (%s) статус=%s ok=%s ошибка=%s",
+                method,
+                safe_url,
+                status,
+                ok,
+                description,
+            )
             return None
 
-        if not data.get("ok"):
-            logger.error("Telegram %s ok=false: %s", method, text)
+        if status != 200:
+            log.error(
+                "Ошибка HTTP %s (%s): статус=%s тело=%s",
+                method,
+                safe_url,
+                status,
+                description,
+            )
             return None
-        if r.status_code != 200:
-            logger.error("Ошибка HTTP %s: %s %s", method, r.status_code, text)
-            return None
+
+        result = data.get("result") or {}
+        message_id = result.get("message_id")
+        log.info(
+            "Telegram %s (%s) статус=%s ok=%s%s",
+            method,
+            safe_url,
+            status,
+            ok,
+            f" message_id={message_id}" if message_id else "",
+        )
         return data
     return None
 
@@ -721,6 +773,12 @@ def _send_text(
     parse_mode: str,
     reply_to_message_id: Optional[str] = None,
 ) -> Optional[str]:
+    log.info(
+        "Отправка sendMessage: chat_id=%s reply_to=%s длина=%s",
+        chat_id,
+        reply_to_message_id,
+        len(text or ""),
+    )
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
@@ -735,8 +793,15 @@ def _send_text(
         payload["reply_to_message_id"] = reply_to_message_id
     j = _api_post("sendMessage", payload)
     if not j:
+        log.warning("sendMessage не вернул ответ: chat_id=%s", chat_id)
         return None
-    return str(j.get("result", {}).get("message_id"))
+    result = j.get("result", {}) or {}
+    message_id = result.get("message_id")
+    if message_id is None:
+        log.warning("sendMessage не вернул message_id: chat_id=%s", chat_id)
+        return None
+    log.info("Отправлено сообщение: chat_id=%s message_id=%s", chat_id, message_id)
+    return str(message_id)
 
 
 def _send_with_retry(action: Callable[[], Optional[str]], cfg=config) -> Optional[str]:
@@ -745,8 +810,14 @@ def _send_with_retry(action: Callable[[], Optional[str]], cfg=config) -> Optiona
     backoff = max(0.0, float(getattr(cfg, "RETRY_BACKOFF_SECONDS", 0.0)))
 
     for attempt in range(retries + 1):
-        mid = action()
+        try:
+            mid = action()
+        except Exception:
+            log.exception("Ошибка отправки (попытка %s)", attempt + 1)
+            mid = None
         if mid:
+            if attempt:
+                log.info("Успех после %s попытки: message_id=%s", attempt + 1, mid)
             return mid
         if mode == "ignore":
             return None
@@ -754,9 +825,16 @@ def _send_with_retry(action: Callable[[], Optional[str]], cfg=config) -> Optiona
             raise RuntimeError("Не удалось отправить сообщение в Telegram")
         if mode != "retry" or attempt == retries:
             break
+        log.warning(
+            "Неудачная попытка отправки %s/%s — ожидание %.2f с",
+            attempt + 1,
+            retries + 1,
+            backoff * (attempt + 1),
+        )
         sleep_for = backoff * (attempt + 1)
         if sleep_for > 0:
             time.sleep(sleep_for)
+    log.error("Отправка не удалась после %s попыток", retries + 1)
     return None
 
 
@@ -769,7 +847,13 @@ def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
     parse_mode = _normalize_parse_mode(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     )
-    return _send_text(chat_id, text, parse_mode)
+    log.info("Запрос на отправку простого сообщения: chat_id=%s", chat_id)
+    mid = _send_text(chat_id, text, parse_mode)
+    if mid:
+        log.info("Простое сообщение отправлено: chat_id=%s message_id=%s", chat_id, mid)
+    else:
+        log.warning("Не удалось отправить простое сообщение: chat_id=%s", chat_id)
+    return mid
 
 
 def publish_structured_item(
@@ -787,7 +871,43 @@ def publish_structured_item(
     msg_limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
     chunk_limit = min(4000, msg_limit)
     chunks = _prepare_publication_chunks(data, chunk_limit)
-    return _send_chunks(chat_id, chunks, cfg)
+    log.info(
+        "Публикация карточки: chat_id=%s source=%s title=%s",
+        chat_id,
+        data.get("source"),
+        data.get("title"),
+    )
+    mid = _send_chunks(chat_id, chunks, cfg)
+    if mid:
+        log.info(
+            "Публикация успешна: chat_id=%s message_id=%s url=%s",
+            chat_id,
+            mid,
+            data.get("url"),
+        )
+        audit(
+            "publish.success",
+            chat_id=chat_id,
+            message_id=mid,
+            source=data.get("source"),
+            url=data.get("url"),
+            title=data.get("title"),
+        )
+    else:
+        log.error(
+            "Публикация не удалась: chat_id=%s url=%s title=%s",
+            chat_id,
+            data.get("url"),
+            data.get("title"),
+        )
+        audit(
+            "publish.failure",
+            chat_id=chat_id,
+            source=data.get("source"),
+            url=data.get("url"),
+            title=data.get("title"),
+        )
+    return mid
 
 
 def publish_message(
@@ -801,9 +921,14 @@ def publish_message(
 ) -> bool:
     if not chat_id:
         return False
+    log.info("Публикация сообщения: chat_id=%s title=%s", chat_id, title)
     base = dict(meta or {})
     base.update({"title": title, "content": body, "url": url})
     mid = publish_structured_item(chat_id, base, cfg=cfg, rewrite_item=True)
+    if mid:
+        log.info("Сообщение опубликовано: chat_id=%s message_id=%s", chat_id, mid)
+    else:
+        log.error("Не удалось опубликовать сообщение: chat_id=%s title=%s", chat_id, title)
     return bool(mid)
 
 
@@ -812,6 +937,7 @@ def publish_message(
 def send_moderation_preview(
     chat_id: str, item: Dict[str, Any], mod_id: int, cfg=config
 ) -> Optional[str]:
+    log.info("Отправка предпросмотра модерации: chat_id=%s mod_id=%s", chat_id, mod_id)
     caption, long_text = format_preview(item, cfg)
     parse_mode = _normalize_parse_mode(
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
@@ -841,9 +967,32 @@ def send_moderation_preview(
 
         new_mid = _send_with_retry(_send, cfg)
         if not new_mid:
+            log.error(
+                "Не удалось отправить предпросмотр модерации: chat_id=%s mod_id=%s", chat_id, mod_id
+            )
+            audit(
+                "moderation.preview_failure",
+                chat_id=chat_id,
+                mod_id=mod_id,
+                item_id=item.get("id") or item.get("queue_id"),
+            )
             return mid if mid else None
         if idx == 0:
             mid = new_mid
+    if mid:
+        log.info(
+            "Предпросмотр модерации отправлен: chat_id=%s mod_id=%s message_id=%s",
+            chat_id,
+            mod_id,
+            mid,
+        )
+        audit(
+            "moderation.preview_success",
+            chat_id=chat_id,
+            mod_id=mod_id,
+            message_id=mid,
+            item_id=item.get("id") or item.get("queue_id"),
+        )
     return mid
 
 

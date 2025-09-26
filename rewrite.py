@@ -9,15 +9,15 @@ functions.
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any, Dict
 
 from formatting import clean_html_tags
 from rewriter_module import Rewriter
 from utils import ensure_text_fits_parse_mode
+from logging_setup import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 _FIGURE_RE = re.compile(r"<figure[^>]*>.*?</figure>", re.I | re.S)
 

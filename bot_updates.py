@@ -1,4 +1,3 @@
-import logging
 import time
 from typing import Optional
 
@@ -7,7 +6,9 @@ try:
 except ImportError:  # pragma: no cover
     import config, http_client, moderator, publisher, db  # type: ignore
 
-logger = logging.getLogger(__name__)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 API_BASE = "https://api.telegram.org"
 

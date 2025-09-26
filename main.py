@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 import argparse
-import logging
 import sys
 import time
 import threading
 from typing import Dict, List, Tuple
 from urllib.parse import urlparse
 
-import config, logging_setup, fetcher, filters, dedup, db, rewrite, tagging, classifieds
+import config, fetcher, filters, dedup, db, rewrite, tagging, classifieds
 import moderator
 import bot_updates
 from utils import normalize_whitespace, compute_title_hash
@@ -16,8 +15,9 @@ try:  # pragma: no cover - publisher may be optional in tests
     import publisher  # type: ignore
 except Exception:  # pragma: no cover
     publisher = None  # type: ignore
+from logging_setup import get_logger, init_logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _normalize_domain_value(domain: str) -> str:
@@ -285,7 +285,8 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
     )
 
 def main() -> int:
-    logging_setup.setup_logging()
+    init_logging(config)
+    get_logger("webwork.app").info("Логирование инициализировано")
     config.validate_config()
 
     if getattr(config, "DRY_RUN", False):

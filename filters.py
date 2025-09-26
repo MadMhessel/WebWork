@@ -1,8 +1,9 @@
-import logging
 import re
 from typing import Iterable, List, Union, Any, Tuple
 
-logger = logging.getLogger(__name__)
+from logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 # -------------------- Вспомогательное --------------------
 

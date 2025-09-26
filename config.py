@@ -86,6 +86,13 @@ ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "").strip()
 REGION_HINT: str = os.getenv("REGION_HINT", "Нижегородская область")
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_DIR_NAME: str = os.getenv("LOG_DIR_NAME", "logs").strip() or "logs"
+LOG_ROTATE_BYTES: int = int(os.getenv("LOG_ROTATE_BYTES", str(10 * 1024 * 1024)))
+LOG_BACKUP_COUNT: int = int(os.getenv("LOG_BACKUP_COUNT", "7"))
+LOG_SQL_DEBUG: bool = os.getenv("LOG_SQL_DEBUG", "false").lower() in {"1", "true", "yes"}
+LOG_TIME_ROTATE: bool = os.getenv("LOG_TIME_ROTATE", "false").lower() in {"1", "true", "yes"}
+LOG_TIME_WHEN: str = os.getenv("LOG_TIME_WHEN", "midnight")
+LOG_TIME_BACKUP_COUNT: int = int(os.getenv("LOG_TIME_BACKUP_COUNT", "7"))
 
 # === Параметры модерации и медиа ===
 # Allow new variable names defined in technical specification
