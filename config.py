@@ -191,6 +191,10 @@ RAW_BYPASS_DEDUP: bool = os.getenv("RAW_BYPASS_DEDUP", "false").lower() in {
     "true",
     "yes",
 }
+RAW_MAX_PER_CHANNEL: int = int(os.getenv("RAW_MAX_PER_CHANNEL", "10"))
+RAW_MAX_CHANNELS_PER_TICK: int = int(os.getenv("RAW_MAX_CHANNELS_PER_TICK", "3"))
+RAW_CHANNEL_TIMEOUT_SEC: float = float(os.getenv("RAW_CHANNEL_TIMEOUT_SEC", "30"))
+RAW_PRUNE_INTERVAL_SEC: int = int(os.getenv("RAW_PRUNE_INTERVAL_SEC", str(3600)))
 
 # автоматический сбор Telegram-постов (может быть отключен для ручной загрузки)
 TELEGRAM_AUTO_FETCH: bool = os.getenv("TELEGRAM_AUTO_FETCH", "true").lower() in {
