@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import html
 import logging
 import re
 import time
@@ -279,18 +278,18 @@ def _publish_link(post: RawPost) -> bool:
     max_len = min(getattr(config, "TELEGRAM_MESSAGE_LIMIT", 4096) - 200, 1000)
     if len(snippet) > max_len:
         snippet = snippet[: max_len - 1].rstrip() + "…"
-    parts = []
+    text = link
     if snippet:
-        parts.append(html.escape(snippet))
-    parts.append(f'<a href="{html.escape(link)}">Открыть в Telegram</a>')
-    text = "\n\n".join(parts)
+        text = f"{snippet}\n\n{link}".strip()
     try:
         publisher.tg_api(
             "sendMessage",
             chat_id=getattr(config, "RAW_REVIEW_CHAT_ID", ""),
             text=text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+            link_preview_options={
+                "is_disabled": False,
+                "url": link,
+            },
         )
         logger.info("[RAW] publish: link -> OK")
         return True
