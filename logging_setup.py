@@ -14,6 +14,8 @@ try:  # pragma: no cover - package import for production/runtime
 except ImportError:  # pragma: no cover - direct script execution
     import config  # type: ignore
 
+from webwork.logging_setup import SecretsFilter
+
 __all__ = ["init_logging", "get_logger", "mask_secrets", "audit"]
 
 
@@ -174,6 +176,7 @@ def init_logging(cfg: Any = config) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
     logging.getLogger("feedparser").setLevel(logging.INFO)
+    logging.getLogger().addFilter(SecretsFilter())
 
     _LOGGING_INITIALIZED = True
     _LOG_DIR = log_dir

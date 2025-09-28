@@ -6,13 +6,20 @@ import threading
 from typing import Any, Dict, Iterable, List, Tuple
 from urllib.parse import urlparse
 
-import config, fetcher, filters, dedup, db, rewrite, tagging, classifieds
-import http_client
-import raw_pipeline
-import moderator
 import bot_updates
-from utils import normalize_whitespace, compute_title_hash
+import classifieds
+import config
+import dedup
+import db
+import fetcher
+import filters
+import http_client
 import moderation
+import moderator
+import raw_pipeline
+import rewrite
+import tagging
+from utils import compute_title_hash, normalize_whitespace
 try:  # pragma: no cover - publisher may be optional in tests
     import publisher  # type: ignore
 except Exception:  # pragma: no cover

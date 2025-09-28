@@ -1,12 +1,6 @@
 import time
 
-import sys
-import pathlib
-
-project_root = pathlib.Path(__file__).resolve().parents[1]
-sys.path.append(str(project_root))
-sys.path.append(str(project_root.parent))
-from WebWork import publisher, config
+from WebWork import config, publisher
 
 
 def test_send_moderation_preview_includes_header(monkeypatch):

@@ -3,12 +3,11 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-import moderation
-
 try:
-    from . import config, publisher, db
+    from . import config, publisher
 except ImportError:  # pragma: no cover
-    import config, publisher, db  # type: ignore
+    import config  # type: ignore
+    import publisher  # type: ignore
 
 from logging_setup import get_logger
 

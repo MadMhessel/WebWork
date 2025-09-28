@@ -1,13 +1,7 @@
-import sys
-import pathlib
 import time
 
-# add repo parent to sys.path to import package modules
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
-
-from WebWork import utils, db, dedup, fetcher, publisher
+from WebWork import db, dedup, fetcher, publisher, utils
 from formatting import html_escape
-import pytest
 
 
 # 1. Test title normalization and hash generation

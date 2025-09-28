@@ -3,20 +3,21 @@ import time
 import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import feedparser
 import requests
 
 try:
-    from . import config, net, dedup
-    from .utils import canonicalize_url, normalize_whitespace, shorten_url
+    from . import config, dedup, net
+    from .utils import canonicalize_url, normalize_whitespace
     from .parsers import html as html_parsers
 except ImportError:  # pragma: no cover
-    import config, net  # type: ignore
+    import config  # type: ignore
     import dedup  # type: ignore
-    from utils import canonicalize_url, normalize_whitespace, shorten_url  # type: ignore
+    import net  # type: ignore
+    from utils import canonicalize_url, normalize_whitespace  # type: ignore
     html_parsers = None  # type: ignore
 
 from logging_setup import get_logger
@@ -533,17 +534,20 @@ def _extract_html_content(soup) -> str:
         for art in articles:
             for p in art.find_all("p"):
                 txt = p.get_text(" ", strip=True)
-                if txt: text_chunks.append(txt)
+                if txt:
+                    text_chunks.append(txt)
     else:
         # попытка вытянуть <div class="content|article|text|news">
         content_div = None
         for cls in ["content", "article", "news", "post", "entry", "text"]:
             content_div = soup.find("div", class_=lambda x: x and cls in x)
-            if content_div: break
+            if content_div:
+                break
         nodes = (content_div.find_all("p") if content_div else soup.find_all("p"))
         for p in nodes[:80]:
             txt = p.get_text(" ", strip=True)
-            if txt: text_chunks.append(txt)
+            if txt:
+                text_chunks.append(txt)
     content = normalize_whitespace("\n\n".join(text_chunks))
     if len(content) > 8000:
         content = content[:8000].rsplit(" ", 1)[0].strip()

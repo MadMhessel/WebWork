@@ -1,7 +1,4 @@
-import sys, pathlib
-
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
-from WebWork import publisher, config
+from WebWork import config, publisher
 
 
 def test_compose_preview_limits_markdown(monkeypatch):

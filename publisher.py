@@ -18,6 +18,7 @@ try:  # pragma: no cover - package import in production
 except ImportError:  # pragma: no cover - direct script execution
     import config  # type: ignore
     import rewrite  # type: ignore
+from webwork.utils.formatting import chunk_text, safe_format, TG_TEXT_LIMIT
 
 log = get_logger("webwork.bot")
 
@@ -25,6 +26,7 @@ _API_BASE = "https://api.telegram.org"
 _client_base_url: Optional[str] = None
 
 _RAW_ALIAS_CACHE: dict[str, int] = {}
+
 
 
 # ---------------------------------------------------------------------------
@@ -193,13 +195,14 @@ def publish_raw(items: Sequence[Dict[str, Any]]) -> None:
             log.warning("RAW: пропуск пустого элемента %s", item)
             continue
         try:
-            tg_api(
-                "sendMessage",
-                chat_id=chat_id,
-                text=text,
-                disable_web_page_preview=False,
+            parse_mode = _normalize_parse_mode(
+                getattr(config, "TELEGRAM_PARSE_MODE", getattr(config, "PARSE_MODE", "HTML"))
             )
-            log.info("RAW: fallback sendMessage успешно (%s)", url or item.get("guid"))
+            mid = _send_text_chunks(chat_id, text, parse_mode, cfg=config)
+            if mid:
+                log.info("RAW: fallback sendMessage успешно (%s)", url or item.get("guid"))
+            else:
+                log.warning("RAW: fallback sendMessage не вернул message_id (%s)", url)
         except Exception as exc:  # pragma: no cover - сетевые ошибки
             log.warning("RAW sendMessage failed: %s", exc)
 # ---------------------------------------------------------------------------
@@ -837,7 +840,7 @@ def _api_post(
     for attempt in range(1, max_attempts + 1):
         try:
             response = requests.post(url, data=payload, files=files, timeout=30)
-        except Exception as ex:  # pragma: no cover - network failure guard
+        except Exception:  # pragma: no cover - network failure guard
             log.exception("Исключение при вызове Telegram %s (%s)", method, safe_url)
             return None
         status = response.status_code
@@ -956,6 +959,40 @@ def _send_text(
     return str(message_id)
 
 
+def _send_text_chunks(
+    chat_id: str,
+    text: str,
+    parse_mode: str,
+    *,
+    reply_to_message_id: Optional[str] = None,
+    cfg=config,
+) -> Optional[str]:
+    limit = min(int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", TG_TEXT_LIMIT)), TG_TEXT_LIMIT)
+    formatted = safe_format(text or "", parse_mode)
+    chunks = chunk_text(formatted, limit)
+    if not chunks:
+        chunks = [""]
+    last_mid = reply_to_message_id
+    first_mid: Optional[str] = None
+
+    for idx, chunk in enumerate(chunks):
+        def _send() -> Optional[str]:
+            return _send_text(
+                chat_id,
+                chunk,
+                parse_mode,
+                reply_to_message_id=last_mid,
+            )
+
+        mid = _send_with_retry(_send, cfg)
+        if not mid:
+            return first_mid
+        if first_mid is None:
+            first_mid = mid
+        last_mid = mid
+    return first_mid
+
+
 def _send_with_retry(action: Callable[[], Optional[str]], cfg=config) -> Optional[str]:
     mode = getattr(cfg, "ON_SEND_ERROR", "retry").lower()
     retries = max(0, int(getattr(cfg, "PUBLISH_MAX_RETRIES", 0)))
@@ -1000,7 +1037,7 @@ def send_message(chat_id: str, text: str, cfg=config) -> Optional[str]:
         getattr(cfg, "TELEGRAM_PARSE_MODE", getattr(cfg, "PARSE_MODE", "HTML"))
     )
     log.info("Запрос на отправку простого сообщения: chat_id=%s", chat_id)
-    mid = _send_text(chat_id, text, parse_mode)
+    mid = _send_text_chunks(chat_id, text, parse_mode, cfg=cfg)
     if mid:
         log.info("Простое сообщение отправлено: chat_id=%s message_id=%s", chat_id, mid)
     else:

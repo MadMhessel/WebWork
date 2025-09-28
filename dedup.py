@@ -6,11 +6,14 @@ from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
-    from . import db, utils, config
+    from . import config, db, utils
 except ImportError:  # pragma: no cover
-    import db, utils, config  # type: ignore
+    import config  # type: ignore
+    import db  # type: ignore
+    import utils  # type: ignore
 
 from logging_setup import get_logger
+from webwork.dedup import canonical_url, dedup_key as build_dedup_key, near_duplicate, title_norm
 
 logger = get_logger(__name__)
 
@@ -26,13 +29,19 @@ def deduplicate(items: Sequence[Dict[str, object]], *, scope: str = "default") -
     for item in items:
         guid = str(item.get("guid") or "").strip()
         url = str(item.get("url") or "").strip()
+        canon_url = canonical_url(url)
         alias = str(item.get("tg_alias") or "").strip().lower()
         tg_mid_raw = item.get("tg_msg_id")
         tg_mid = str(tg_mid_raw) if tg_mid_raw not in {None, ""} else ""
-        key_candidates = [guid, url]
+        key_candidates = [guid, canon_url or url]
         if alias and tg_mid:
             key_candidates.append(f"tg:{alias}:{tg_mid}")
-        key_candidates.append(str(item.get("title") or "").strip())
+        normalized_title = title_norm(item.get("title") or "")
+        if normalized_title:
+            key_candidates.append(normalized_title)
+        hashed_key = build_dedup_key(url or None, item.get("title"))
+        if hashed_key:
+            key_candidates.append(f"hash:{hashed_key}")
         dedup_key = next((k for k in key_candidates if k), None)
         if not dedup_key:
             dedup_key = repr(item)
@@ -137,10 +146,7 @@ def calc_title_hash(title: str) -> str:
     """
     if not title:
         return ""
-    text = utils.normalize_whitespace(title).lower()
-    # strip quotes, punctuation and extra spaces
-    text = re.sub(r"[^0-9a-zа-яё ]+", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+", " ", text, flags=re.IGNORECASE).strip()
+    text = title_norm(title)
     min_len = int(getattr(config, "DEDUP_TITLE_MIN_LEN", 10))
     if len(text) < min_len:
         return ""
@@ -155,7 +161,10 @@ def is_duplicate(url: Optional[str], guid: Optional[str], title: Optional[str], 
     Returns True if the item was already seen (by URL, GUID or normalized title hash).
     """
     try:
+        canonical = canonical_url(url)
         if url and db.exists_url(db_conn, url):
+            return True
+        if canonical and canonical != url and db.exists_url(db_conn, canonical):
             return True
         if guid and db.exists_guid(db_conn, guid):
             return True
@@ -178,6 +187,9 @@ def remember(db_conn, item: dict) -> None:
     thash = calc_title_hash(item.get("title") or "")
     record = dict(item)
     record["title_hash"] = thash
+    canonical = canonical_url(record.get("url"))
+    if canonical:
+        record["url"] = canonical
     try:
         db.upsert_item(db_conn, record)
     except Exception as ex:
@@ -212,6 +224,15 @@ def _has_similar_title(title: str, db_conn) -> bool:
         logger.warning("Ошибка при загрузке заголовков для кластеризации: %s", ex)
         return False
 
+    approx = near_duplicate(
+        title,
+        (cand_title for cand_title, _ in candidates),
+        threshold=float(getattr(config, "NEAR_DUPLICATE_THRESHOLD", getattr(config, "CLUSTER_SIM_THRESHOLD", 0.9))),
+    )
+    if approx:
+        logger.info("[DUP_SIMILAR] near duplicate %.2f with '%s'", approx[1], approx[0][:140])
+        return True
+
     for cand_title, _ in candidates:
         cand_norm = utils.normalize_whitespace(cand_title or "").lower()
         if not cand_norm or cand_norm == normalized:
@@ -245,7 +266,7 @@ def mark_published(
     """
 
     record = {
-        "url": (url or "").strip(),
+        "url": canonical_url((url or "").strip()) or (url or "").strip(),
         "guid": (guid or "").strip(),
         "title": title or "",
         "title_hash": calc_title_hash(title or ""),
