@@ -66,8 +66,14 @@ def _coerce_chat(value: str | None) -> str | int:
 _RAW_TELEGRAM_TOKEN = (_TELEGRAM_CFG.token or DEFAULT_BOT_TOKEN or "").strip()
 BOT_TOKEN: str = _RAW_TELEGRAM_TOKEN
 TELEGRAM_BOT_TOKEN: str = BOT_TOKEN
-_CHANNEL_VALUE = (_TELEGRAM_CFG.channel_id or DEFAULT_CHANNEL_ID or "").strip()
-CHANNEL_ID: str = _CHANNEL_VALUE
+_CHANNEL_TEXT_VALUE = (_TELEGRAM_CFG.channel_text_id or DEFAULT_CHANNEL_ID or "").strip()
+_CHANNEL_MEDIA_VALUE = (_TELEGRAM_CFG.channel_media_id or _CHANNEL_TEXT_VALUE).strip()
+_CHANNEL_LEGACY_VALUE = (_TELEGRAM_CFG.legacy_channel_id or _CHANNEL_TEXT_VALUE).strip()
+CHANNEL_TEXT_CHAT_ID: str | int = _coerce_chat(_CHANNEL_TEXT_VALUE)
+CHANNEL_MEDIA_CHAT_ID: str | int = _coerce_chat(_CHANNEL_MEDIA_VALUE)
+CHANNEL_ID: str = str(CHANNEL_TEXT_CHAT_ID) if CHANNEL_TEXT_CHAT_ID else _CHANNEL_TEXT_VALUE
+ENABLE_TEXT_CHANNEL: bool = _TELEGRAM_CFG.enable_text
+ENABLE_MEDIA_CHANNEL: bool = _TELEGRAM_CFG.enable_media
 RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === Бот-приёмная для предложений новостей ===
@@ -130,7 +136,7 @@ _REVIEW_VALUE = (
 )
 REVIEW_CHAT_ID: str | int = _coerce_chat(_REVIEW_VALUE)
 CHANNEL_CHAT_ID: str | int = _coerce_chat(
-    os.getenv("TARGET_CHAT_ID") or _CHANNEL_VALUE
+    os.getenv("TARGET_CHAT_ID") or _CHANNEL_LEGACY_VALUE
 )
 CHANNEL_ID = str(CHANNEL_CHAT_ID) if CHANNEL_CHAT_ID else CHANNEL_ID
 RAW_REVIEW_CHAT_ID: str | int = _coerce_chat(_RAW_CFG.review_chat_id or _REVIEW_VALUE)
