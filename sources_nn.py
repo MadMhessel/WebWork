@@ -231,6 +231,8 @@ def _build_sources() -> List[Dict[str, Any]]:
     merged: dict[str, Dict[str, Any]] = {}
     for src in base + dyn:
         sid = str(src.get("id") or src.get("name") or src.get("url"))
+        if sid in merged:
+            raise ValueError(f"Дубликат id источника: {sid}")
         merged[sid] = src
     return list(merged.values())
 
