@@ -130,7 +130,7 @@ def load_all() -> AppConfig:
 
     raw_cfg = RawStreamCfg(
         enabled=_as_bool(_getenv("RAW_STREAM_ENABLED", default="false")),
-        review_chat_id=_getenv("REVIEW_CHAT_ID", "RAW_REVIEW_CHAT_ID"),
+        review_chat_id=_getenv("RAW_REVIEW_CHAT_ID", "REVIEW_CHAT_ID"),
         bypass_filters=_as_bool(_getenv("RAW_BYPASS_FILTERS", default="false")),
         bypass_dedup=_as_bool(_getenv("RAW_BYPASS_DEDUP", default="false")),
     )
