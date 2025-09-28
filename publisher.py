@@ -52,6 +52,24 @@ def _ensure_client() -> bool:
     return _client_base_url is not None
 
 
+def _log_api_error(response: requests.Response, method: str, params: Dict[str, Any]) -> None:
+    try:
+        err = response.json()
+    except ValueError:
+        err = {"raw_text": response.text}
+    try:
+        payload_dump = json.dumps(params, ensure_ascii=False)[:800]
+    except (TypeError, ValueError):
+        payload_dump = str(params)
+    log.warning(
+        "[RAW] publish FAIL %s %s | method=%s payload=%s",
+        response.status_code,
+        err,
+        method,
+        payload_dump,
+    )
+
+
 def tg_api(method: str, **params):
     token = getattr(config, "TELEGRAM_BOT_TOKEN", getattr(config, "BOT_TOKEN", ""))
     if not token:
@@ -80,6 +98,7 @@ def tg_api(method: str, **params):
 
         if response.status_code in {429} or response.status_code >= 500:
             if attempt >= max_attempts:
+                _log_api_error(response, method, params)
                 log.warning(
                     "RAW: метод %s — код %s после %s попыток", method, response.status_code, attempt
                 )
@@ -93,6 +112,10 @@ def tg_api(method: str, **params):
             )
             time.sleep(wait)
             continue
+
+        if response.status_code >= 400:
+            _log_api_error(response, method, params)
+            response.raise_for_status()
 
         response.raise_for_status()
         try:
