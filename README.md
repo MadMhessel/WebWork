@@ -57,11 +57,34 @@ Telegram.
 2. Укажите в файле обязательные параметры:
    - `TELEGRAM_BOT_TOKEN` – токен бота;
    - `CHANNEL_CHAT_ID` (или `CHANNEL_ID`) – целевой канал;
-   - при модерации (`ENABLE_MODERATION=1`) задайте `REVIEW_CHAT_ID` и `MODERATOR_IDS`.
+   - при модерации (`ENABLE_MODERATION=1`) задайте `REVIEW_CHAT_ID` и `MODERATOR_IDS`;
+   - для режима «только Telegram» установите `ONLY_TELEGRAM=1`, выберите `TELEGRAM_MODE` (`web` или `mtproto`), укажите файл со списком каналов `TELEGRAM_LINKS_FILE`; в режиме `mtproto` дополнительно задайте `TELETHON_API_ID` и `TELETHON_API_HASH`.
 3. При необходимости скорректируйте лимиты Telegram (`CAPTION_LIMIT`,
    `TELEGRAM_MESSAGE_LIMIT`).
 4. При необходимости включите безопасный режим `DRY_RUN=1`, чтобы проверить фильтры без публикаций.
 5. Запустите `python main.py`.
+
+### Режим «только Telegram»
+
+- Формат файла `telegram_links.txt` — по одной ссылке вида `https://t.me/<alias>` или `https://t.me/s/<alias>` на строку. Комментарии, начинающиеся с `#`, игнорируются.
+- Пример минимальной конфигурации для веб-парсинга публичных страниц:
+  ```ini
+  ONLY_TELEGRAM=1
+  TELEGRAM_MODE=web
+  TELEGRAM_LINKS_FILE=telegram_links.txt
+  TELEGRAM_AUTO_FETCH=1
+  ```
+- Пример конфигурации для работы через MTProto (Telethon):
+  ```ini
+  ONLY_TELEGRAM=1
+  TELEGRAM_MODE=mtproto
+  TELEGRAM_LINKS_FILE=telegram_links.txt
+  TELEGRAM_FETCH_LIMIT=30
+  TELETHON_API_ID=1234567
+  TELETHON_API_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  TELETHON_SESSION_NAME=webwork_telethon
+  ```
+- При `ONLY_TELEGRAM=1` список `SOURCES` полностью игнорируется, даже если отдельные источники указаны с `enabled: true`. В этом режиме бот не выполняет запросы к сайтам или RSS-лентам.
 
 ## Режим DRY-RUN
 

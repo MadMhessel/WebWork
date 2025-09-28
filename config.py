@@ -154,8 +154,30 @@ LOOP_DELAY_SECS: int = int(os.getenv("LOOP_DELAY_SECS", "600"))
 # режим «только Telegram» (ENV: ONLY_TELEGRAM=true/1/yes)
 ONLY_TELEGRAM: bool = os.getenv("ONLY_TELEGRAM", "false").lower() in {"1", "true", "yes"}
 
+# режим получения новостей из Telegram
+_TELEGRAM_MODE_RAW = os.getenv("TELEGRAM_MODE", "web").strip().lower()
+TELEGRAM_MODE: str = _TELEGRAM_MODE_RAW or "web"
+
 # путь к списку телеграм-каналов (по одной ссылке на строку)
 TELEGRAM_LINKS_FILE = os.getenv("TELEGRAM_LINKS_FILE", "telegram_links.txt").strip()
+
+# автоматический сбор Telegram-постов (может быть отключен для ручной загрузки)
+TELEGRAM_AUTO_FETCH: bool = os.getenv("TELEGRAM_AUTO_FETCH", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+# лимит сообщений на канал в Telegram
+TELEGRAM_FETCH_LIMIT: int = int(os.getenv("TELEGRAM_FETCH_LIMIT", "30"))
+
+# креды Telethon (используются только в режиме mtproto)
+_TELETHON_API_ID_RAW = os.getenv("TELETHON_API_ID", "").strip()
+try:
+    TELETHON_API_ID: int = int(_TELETHON_API_ID_RAW) if _TELETHON_API_ID_RAW else 0
+except ValueError:
+    TELETHON_API_ID = 0
+TELETHON_API_HASH: str = os.getenv("TELETHON_API_HASH", "").strip()
 
 # --- Database ---
 DB_PATH: str = os.getenv("DB_PATH", str(CONFIG_DIR / "newsbot.db")).strip()
@@ -179,6 +201,12 @@ HOST_FAIL_AUTO_QUARANTINE_HOURS: float = float(
 def validate_config() -> None:
     """Validate critical configuration values with clear errors."""
 
+    allowed_modes = {"web", "mtproto"}
+    if TELEGRAM_MODE not in allowed_modes:
+        raise ValueError(
+            f"Invalid TELEGRAM_MODE='{TELEGRAM_MODE}'. Ожидалось одно из: {sorted(allowed_modes)}"
+        )
+
     missing: list[str] = []
     if not DRY_RUN and BOT_TOKEN in {"", "YOUR_TELEGRAM_BOT_TOKEN"}:
         missing.append("TELEGRAM_BOT_TOKEN")
@@ -189,10 +217,10 @@ def validate_config() -> None:
             missing.append("REVIEW_CHAT_ID")
         if not MODERATOR_IDS:
             missing.append("MODERATOR_IDS")
-    if ONLY_TELEGRAM:
-        if not os.getenv("TELETHON_API_ID"):
+    if ONLY_TELEGRAM and TELEGRAM_MODE == "mtproto":
+        if TELETHON_API_ID <= 0:
             missing.append("TELETHON_API_ID")
-        if not os.getenv("TELETHON_API_HASH"):
+        if not TELETHON_API_HASH:
             missing.append("TELETHON_API_HASH")
     if missing:
         raise ValueError("Missing config: " + ", ".join(missing))
