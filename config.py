@@ -151,6 +151,12 @@ WHITELIST_RELAX: bool = os.getenv("WHITELIST_RELAX", "true").lower() in {"1", "t
 FETCH_LIMIT_PER_SOURCE: int = int(os.getenv("FETCH_LIMIT_PER_SOURCE", "30"))
 LOOP_DELAY_SECS: int = int(os.getenv("LOOP_DELAY_SECS", "600"))
 
+# режим «только источники Telegram»
+ONLY_TELEGRAM: bool = os.getenv("ONLY_TELEGRAM", "false").lower() in {"1", "true", "yes"}
+
+# путь к списку каналов (если не указан, по умолчанию telegram_links.txt)
+TELEGRAM_LINKS_FILE = os.getenv("TELEGRAM_LINKS_FILE", "telegram_links.txt").strip()
+
 # --- Database ---
 DB_PATH: str = os.getenv("DB_PATH", str(CONFIG_DIR / "newsbot.db")).strip()
 ITEM_RETENTION_DAYS: int = int(os.getenv("ITEM_RETENTION_DAYS", "90"))
@@ -170,16 +176,6 @@ HOST_FAIL_AUTO_QUARANTINE_HOURS: float = float(
 )
 
 
-# -----------------------------------------------------------------------------
-# Источники Telegram из текстового списка
-# -----------------------------------------------------------------------------
-# Путь к файлу (по одной ссылке на строку), например:
-#   https://t.me/s/newsnn
-#   https://t.me/today_nn
-# Поддерживаются форматы t.me/<имя> и t.me/s/<имя>.
-TELEGRAM_LINKS_FILE = "telegram_links.txt"
-
-
 def validate_config() -> None:
     """Validate critical configuration values with clear errors."""
 
@@ -193,6 +189,11 @@ def validate_config() -> None:
             missing.append("REVIEW_CHAT_ID")
         if not MODERATOR_IDS:
             missing.append("MODERATOR_IDS")
+    if ONLY_TELEGRAM:
+        if not os.getenv("TELETHON_API_ID"):
+            missing.append("TELETHON_API_ID")
+        if not os.getenv("TELETHON_API_HASH"):
+            missing.append("TELETHON_API_HASH")
     if missing:
         raise ValueError("Missing config: " + ", ".join(missing))
     if not isinstance(MODERATOR_IDS, set) or not all(isinstance(x, int) for x in MODERATOR_IDS):
@@ -546,8 +547,18 @@ SOURCES = [
      "enabled": True},
 ]
 
+if ONLY_TELEGRAM:
+    # Полностью выключаем все не-телеграмные источники
+    for s in SOURCES:
+        s["enabled"] = False
+
 # Дополняем основными источниками региона
 SOURCES.extend(SOURCES_NN)
+
+if ONLY_TELEGRAM:
+    # Повторно отключаем источники после расширения списком региона
+    for s in SOURCES:
+        s["enabled"] = False
 
 # Быстрые индексы по источникам: по имени и домену
 SOURCES_BY_NAME: dict[str, dict] = {}

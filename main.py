@@ -11,6 +11,7 @@ import moderator
 import bot_updates
 from utils import normalize_whitespace, compute_title_hash
 import moderation
+import telegram_fetcher
 try:  # pragma: no cover - publisher may be optional in tests
     import publisher  # type: ignore
 except Exception:  # pragma: no cover
@@ -50,9 +51,24 @@ def _publisher_send_direct(item: Dict) -> bool:
     return bool(mid)
 
 def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
-    items_iter = fetcher.fetch_all(
-        config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE
-    )
+    if getattr(config, "ONLY_TELEGRAM", False):
+        aliases = telegram_fetcher.load_aliases_from_file(
+            getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt")
+        )
+        # Если список пуст — логируем и выходим без ошибок
+        if not aliases:
+            logger.warning("TG: список источников пуст — проверьте TELEGRAM_LINKS_FILE")
+            items_iter = iter(())  # пустой итератор
+        else:
+            # per_channel_limit reuse: используем FETCH_LIMIT_PER_SOURCE как лимит на канал
+            items_iter = telegram_fetcher.fetch_telegram_items(
+                aliases,
+                per_channel_limit=int(getattr(config, "FETCH_LIMIT_PER_SOURCE", 30)),
+            )
+    else:
+        items_iter = fetcher.fetch_all(
+            config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE
+        )
 
     seen_urls: set = set()
     seen_title_hashes: set = set()
