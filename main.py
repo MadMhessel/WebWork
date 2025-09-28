@@ -3,6 +3,7 @@ import argparse
 import sys
 import time
 import threading
+from itertools import chain
 from typing import Dict, List, Tuple
 from urllib.parse import urlparse
 
@@ -51,23 +52,30 @@ def _publisher_send_direct(item: Dict) -> bool:
     return bool(mid)
 
 def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
+    telegram_items_iter = iter(())
     if getattr(config, "ONLY_TELEGRAM", False):
         aliases = telegram_fetcher.load_aliases_from_file(
             getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt")
         )
         if not aliases:
             logger.warning("TG: список источников пуст — проверьте TELEGRAM_LINKS_FILE")
-            items_iter = iter(())  # ничего не делаем
         else:
             # используем существующий лимит как «сообщений на канал»
             per_channel = int(getattr(config, "FETCH_LIMIT_PER_SOURCE", 30))
-            items_iter = telegram_fetcher.fetch_telegram_items(
+            telegram_items_iter = telegram_fetcher.fetch_telegram_items(
                 aliases, per_channel_limit=per_channel
             )
+
+    if getattr(config, "ONLY_TELEGRAM", False):
+        # Режим «только Telegram»: сайты не трогаем вообще
+        logger.info("SOURCE_MODE=TELEGRAM_ONLY: fetcher отключён, items_iter пуст.")
+        site_items_iter = iter(())  # пустой итератор, никаких HTTP к сайтам
     else:
-        items_iter = fetcher.fetch_all(
+        site_items_iter = fetcher.fetch_all(
             config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE
         )
+
+    items_iter = chain(telegram_items_iter, site_items_iter)
 
     seen_urls: set = set()
     seen_title_hashes: set = set()

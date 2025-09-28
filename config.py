@@ -546,11 +546,13 @@ SOURCES = [
      "url": "https://progorodnn.ru/rss.xml",
      "enabled": True},
 ]
-
+# Полностью отключаем сайты при TELEGRAM-only
 if ONLY_TELEGRAM:
-    # Полностью выключаем все не-телеграмные источники
     for s in SOURCES:
-        s["enabled"] = False
+        try:
+            s["enabled"] = False
+        except Exception:
+            pass
 
 # Дополняем основными источниками региона
 SOURCES.extend(SOURCES_NN)
