@@ -55,15 +55,14 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
         aliases = telegram_fetcher.load_aliases_from_file(
             getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt")
         )
-        # Если список пуст — логируем и выходим без ошибок
         if not aliases:
             logger.warning("TG: список источников пуст — проверьте TELEGRAM_LINKS_FILE")
-            items_iter = iter(())  # пустой итератор
+            items_iter = iter(())  # ничего не делаем
         else:
-            # per_channel_limit reuse: используем FETCH_LIMIT_PER_SOURCE как лимит на канал
+            # используем существующий лимит как «сообщений на канал»
+            per_channel = int(getattr(config, "FETCH_LIMIT_PER_SOURCE", 30))
             items_iter = telegram_fetcher.fetch_telegram_items(
-                aliases,
-                per_channel_limit=int(getattr(config, "FETCH_LIMIT_PER_SOURCE", 30)),
+                aliases, per_channel_limit=per_channel
             )
     else:
         items_iter = fetcher.fetch_all(
