@@ -151,10 +151,10 @@ WHITELIST_RELAX: bool = os.getenv("WHITELIST_RELAX", "true").lower() in {"1", "t
 FETCH_LIMIT_PER_SOURCE: int = int(os.getenv("FETCH_LIMIT_PER_SOURCE", "30"))
 LOOP_DELAY_SECS: int = int(os.getenv("LOOP_DELAY_SECS", "600"))
 
-# режим «только источники Telegram»
+# режим «только Telegram» (ENV: ONLY_TELEGRAM=true/1/yes)
 ONLY_TELEGRAM: bool = os.getenv("ONLY_TELEGRAM", "false").lower() in {"1", "true", "yes"}
 
-# путь к списку каналов (если не указан, по умолчанию telegram_links.txt)
+# путь к списку телеграм-каналов (по одной ссылке на строку)
 TELEGRAM_LINKS_FILE = os.getenv("TELEGRAM_LINKS_FILE", "telegram_links.txt").strip()
 
 # --- Database ---
