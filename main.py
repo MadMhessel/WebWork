@@ -50,6 +50,51 @@ def _publisher_send_direct(item: Dict) -> bool:
     return bool(mid)
 
 def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
+    raw_items: List[Dict[str, Any]] = []
+    if getattr(config, "RAW_STREAM_ENABLED", False):
+        try:
+            from telegram_web import fetch_from_file as raw_fetch  # type: ignore
+        except Exception as exc:
+            logger.exception("RAW: не удалось загрузить модуль: %s", exc)
+        else:
+            try:
+                raw_items = list(raw_fetch(getattr(config, "RAW_TELEGRAM_SOURCES_FILE", "")))
+                logger.info("RAW: собрано %d элементов", len(raw_items))
+                if raw_items and not getattr(config, "RAW_BYPASS_FILTERS", True):
+                    filtered_raw: List[Dict[str, Any]] = []
+                    skipped = 0
+                    for raw in raw_items:
+                        title = normalize_whitespace(raw.get("title") or "")
+                        content = normalize_whitespace(raw.get("content") or "")
+                        src = raw.get("source") or ""
+                        ok, region_ok, topic_ok, reason = filters.is_relevant_for_source(
+                            title, content, src, config
+                        )
+                        if not ok:
+                            skipped += 1
+                            logger.debug("RAW: фильтр отклонил %s (%s)", src, reason)
+                            continue
+                        if classifieds.is_classified(title, content, raw.get("url") or ""):
+                            skipped += 1
+                            logger.debug("RAW: классифицировано как реклама %s", raw.get("url"))
+                            continue
+                        filtered_raw.append(raw)
+                    if skipped:
+                        logger.info("RAW: фильтры исключили %d элементов", skipped)
+                    raw_items = filtered_raw
+                if raw_items and not getattr(config, "RAW_BYPASS_DEDUP", False):
+                    raw_items = dedup.deduplicate(raw_items, scope="raw")
+                if raw_items:
+                    if publisher and hasattr(publisher, "publish_raw"):
+                        try:
+                            publisher.publish_raw(raw_items)
+                        except Exception as exc:
+                            logger.exception("RAW: ошибка публикации: %s", exc)
+                    else:
+                        logger.warning("RAW: модуль publisher не поддерживает publish_raw")
+            except Exception as exc:
+                logger.exception("RAW: ошибка обработки источников: %s", exc)
+
     items_iter: Iterable[Dict[str, Any]]
     if getattr(config, "ONLY_TELEGRAM", False):
         if not getattr(config, "TELEGRAM_AUTO_FETCH", True):

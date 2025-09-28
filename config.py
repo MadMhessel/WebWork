@@ -41,10 +41,12 @@ except Exception:  # pragma: no cover - executed only when defaults missing
 
 # === Базовые настройки бота ===
 # Support both legacy names and new explicit TELEGRAM_* variables
-BOT_TOKEN: str = (
+_RAW_TELEGRAM_TOKEN = (
     os.getenv("TELEGRAM_BOT_TOKEN")
     or os.getenv("BOT_TOKEN", DEFAULT_BOT_TOKEN)
-).strip()
+)
+BOT_TOKEN: str = (_RAW_TELEGRAM_TOKEN or "").strip()
+TELEGRAM_BOT_TOKEN: str = BOT_TOKEN
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", DEFAULT_CHANNEL_ID).strip()  # пример: "@my_news_channel" или числовой ID
 RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
@@ -161,6 +163,35 @@ TELEGRAM_MODE: str = _TELEGRAM_MODE_RAW or "web"
 # путь к списку телеграм-каналов (по одной ссылке на строку)
 TELEGRAM_LINKS_FILE = os.getenv("TELEGRAM_LINKS_FILE", "telegram_links.txt").strip()
 
+# --- Параллельный «сырой» поток ---
+RAW_STREAM_ENABLED: bool = os.getenv("RAW_STREAM_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+_RAW_REVIEW_CHAT = os.getenv("RAW_REVIEW_CHAT_ID", "").strip()
+RAW_REVIEW_CHAT_ID: str | int = (
+    int(_RAW_REVIEW_CHAT) if _RAW_REVIEW_CHAT.lstrip("-+").isdigit() else _RAW_REVIEW_CHAT
+)
+RAW_TELEGRAM_SOURCES_FILE: str = (
+    os.getenv("RAW_TELEGRAM_SOURCES_FILE", "telegram_links_raw.txt").strip()
+    or "telegram_links_raw.txt"
+)
+_RAW_FORWARD_STRATEGY = os.getenv("RAW_FORWARD_STRATEGY", "copy").strip().lower()
+if _RAW_FORWARD_STRATEGY not in {"copy", "forward", "link"}:
+    _RAW_FORWARD_STRATEGY = "copy"
+RAW_FORWARD_STRATEGY: str = _RAW_FORWARD_STRATEGY
+RAW_BYPASS_FILTERS: bool = os.getenv("RAW_BYPASS_FILTERS", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+RAW_BYPASS_DEDUP: bool = os.getenv("RAW_BYPASS_DEDUP", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 # автоматический сбор Telegram-постов (может быть отключен для ручной загрузки)
 TELEGRAM_AUTO_FETCH: bool = os.getenv("TELEGRAM_AUTO_FETCH", "true").lower() in {
     "1",
@@ -217,6 +248,11 @@ def validate_config() -> None:
             missing.append("REVIEW_CHAT_ID")
         if not MODERATOR_IDS:
             missing.append("MODERATOR_IDS")
+    if RAW_STREAM_ENABLED:
+        if not BOT_TOKEN:
+            missing.append("TELEGRAM_BOT_TOKEN")
+        if not str(RAW_REVIEW_CHAT_ID).strip():
+            missing.append("RAW_REVIEW_CHAT_ID")
     if ONLY_TELEGRAM and TELEGRAM_MODE == "mtproto":
         if TELETHON_API_ID <= 0:
             missing.append("TELETHON_API_ID")
