@@ -2,6 +2,40 @@
 
 Собирает новости из источников (RSS/HTML), фильтрует по региональным ключевым словам. Тематика строительства учитывается как дополнительный критерий, помогает выделять профильные материалы, но не является обязательной. Удаляет дубликаты и публикует сообщения в Telegram-канал.
 
+## Configuration
+
+| Name | Aliases | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | `BOT_TOKEN` | Yes | — | Токен Telegram Bot API. При использовании алиаса выводится предупреждение в логах. |
+| `CHANNEL_CHAT_ID` | `CHANNEL_ID` | Yes | — | Целевой канал для публикации ленты (`@alias` либо числовой ID). |
+| `REVIEW_CHAT_ID` | `MOD_CHAT_ID` | If moderation or raw stream | — | Модераторский чат. Используется для очереди ревью и «сырого» потока. |
+| `PARSE_MODE` | `TELEGRAM_PARSE_MODE` | No | `HTML` | Формат сообщений. Поддерживаются `HTML` и `MarkdownV2`; спецсимволы для Markdown экранируются автоматически. |
+| `HTTP_TIMEOUT` | `HTTP_TIMEOUT_READ` | No | `10` | Таймаут HTTP-запросов (сек). |
+| `HTTP_TIMEOUT_CONNECT` | — | No | `5` | Таймаут установления соединения (сек). |
+| `HTTP_RETRY_TOTAL` | — | No | `3` | Общее количество повторов HTTP-запроса при ошибках 429/5xx. |
+| `HTTP_BACKOFF` | — | No | `0.5` | Фактор экспоненциальной задержки между повторами HTTP. |
+| `ENABLE_MODERATION` | — | No | `false` | Включает ручную модерацию. Требует заполненного `REVIEW_CHAT_ID` и списка `MODERATOR_IDS`. |
+| `NEAR_DUPLICATES_ENABLED` | — | No | `false` | Активирует поиск «почти дублей» по нормализованным заголовкам. |
+| `NEAR_DUPLICATE_THRESHOLD` | — | No | `0.9` | Порог схожести (ratio) для «почти дублей». |
+| `RAW_STREAM_ENABLED` | — | No | `false` | Включает RAW-пайплайн. Все материалы отправляются в `REVIEW_CHAT_ID`. |
+| `RAW_REVIEW_CHAT_ID` | — | No | наследует `REVIEW_CHAT_ID` | Позволяет задать отдельный чат для RAW-публикаций. |
+| `RAW_BYPASS_FILTERS` | — | No | `false` | При значении `true` отключает содержательные фильтры в RAW-потоке. |
+| `RAW_BYPASS_DEDUP` | — | No | `false` | При значении `true` отключает дедупликацию в RAW-потоке. |
+| `RAW_FORWARD_STRATEGY` | — | No | `copy` | Стратегия обработки входящих сообщений (`copy`, `forward` или `link`). |
+| `DRY_RUN` | — | No | `false` | При включении бот не отправляет сообщения, а только логирует действия. |
+| `CAPTION_LIMIT` | — | No | `1024` | Пользовательский лимит подписи к медиа; фактическая отправка ограничена 1024 символами. |
+
+Переменные можно хранить в пользовательском конфигурационном файле `~/.config/NewsBot/.env` (Linux/macOS) или `%APPDATA%/NewsBot/.env` (Windows). Файл `.env` рядом с исходниками предназначен только для разработки и **не** должен попадать в репозиторий. Команды для локального очищения:
+
+```bash
+git rm --cached .env || true
+echo ".env" >> .gitignore
+git add .gitignore .env.example
+git commit -m "Remove .env from VCS; add .env.example"
+```
+
+Создать новый конфигурационный файл можно командой `python -m config init` или копированием шаблона `.env.example` в каталог профиля. При запуске RAW-пайплайна (`RAW_STREAM_ENABLED=1`) публикации всегда попадают в ревью-чат (`REVIEW_CHAT_ID`), а фильтры и дедупликация остаются включёнными, если явно не задано обратное.
+
 ## Установка и зависимости
 Python 3.10+
 ```bash
@@ -11,30 +45,8 @@ pip install beautifulsoup4
 ```
 
 ## Настройка
-Настройка выполняется один раз через `.env` в директории профиля пользователя
-(`%APPDATA%/NewsBot/.env` на Windows, `~/.config/NewsBot/.env` на Linux/macOS).
-Файл рядом с кодом `WebWork/.env` при наличии **переопределяет** значения из
-профильного. Создать основной файл можно командой:
 
-```bash
-python -m config init
-```
-
-Можно также скопировать шаблон `.env.example` и заполнить его — список переменных
-ограничен только реально поддерживаемыми опциями, чтобы избежать путаницы с
-неиспользуемыми параметрами изображений или внешних LLM.
-
-Поддерживаются следующие переменные:
-- `BOT_TOKEN`, `CHANNEL_ID`, `REVIEW_CHAT_ID`, `CHANNEL_CHAT_ID`
-- `MODERATOR_IDS`, `SNOOZE_MINUTES`, `REVIEW_TTL_HOURS`, `RETRY_LIMIT`
-- `ENABLE_REWRITE`, `STRICT_FILTER`, `LOG_LEVEL`, `DRY_RUN`
-- `ON_SEND_ERROR`, `PUBLISH_MAX_RETRIES`, `RETRY_BACKOFF_SECONDS`
-- `POLL_INTERVAL_SECONDS`, `FETCH_LIMIT_PER_SOURCE`
-- `HTTP_TIMEOUT_CONNECT`, `HTTP_TIMEOUT_READ`, `HTTP_RETRY_TOTAL`, `HTTP_BACKOFF`
-- `MAX_POST_LEN`, `CAPTION_LIMIT`, `REGION_HINT`, `PARSE_MODE`
-- `RAW_STREAM_ENABLED`, `RAW_REVIEW_CHAT_ID`, `RAW_TELEGRAM_SOURCES_FILE`, `RAW_FORWARD_STRATEGY`,
-  `RAW_BYPASS_FILTERS`, `RAW_BYPASS_DEDUP`
-- ключевые слова и источники в `newsbot/config.py`
+В разделе [Configuration](#configuration) собраны основные переменные окружения, поддерживаемые ботом. После копирования `.env.example` укажите обязательные параметры (`TELEGRAM_BOT_TOKEN`, `CHANNEL_CHAT_ID`, при модерации — `REVIEW_CHAT_ID` и `MODERATOR_IDS`), затем дополняйте конфигурацию по задачам проекта (например, `ENABLE_MODERATION`, `NEAR_DUPLICATES_ENABLED`, параметры сетевого слоя). Для автоматического создания файла используйте `python -m config init` или скопируйте шаблон в каталог профиля.
 
 ### Рерайт
 
@@ -197,8 +209,21 @@ python main.py
 python main.py --loop
 ```
 
-Для локального теста без отправки в Telegram установите `DRY_RUN=1` в `.env`
-или передайте переменную окружения при запуске: `DRY_RUN=1 python main.py`.
+Для локального теста без отправки в Telegram установите `DRY_RUN=1` в `.env` или передайте переменную окружения при запуске: `DRY_RUN=1 python main.py`.
+
+## Telegram limits
+
+- Текстовые сообщения: от 1 до 4096 символов после обработки сущностей (`message_text` в Bot API). Автоматическое разбиение по лимиту выполняется перед отправкой, чтобы избежать ошибок `Bad Request: message is too long`.
+- Подписи к медиа: от 0 до 1024 символов после парсинга сущностей (методы `sendPhoto`/`sendVideo` и др.). Если подпись длиннее, бот отправит хвост отдельными сообщениями.
+
+При использовании `MarkdownV2` бот экранирует спецсимволы (`_*[]()~\`>#+-=|{}.!`) согласно [разделу Formatting options / MarkdownV2 style](https://core.telegram.org/bots/api#formatting-options). Источник ограничений: [Telegram Bot API](https://core.telegram.org/bots/api).
+
+## Security
+
+- Убедитесь, что рабочие копии не содержат `.env` с секретами (см. команды в разделе [Configuration](#configuration)).
+- Для удаления уже закоммиченных секретов выполните `git filter-repo --path .env --invert-paths`, затем пересоздайте историю на удалённом репозитории: `git push --force --all` и `git push --force --tags`.
+- Следуйте официальному руководству GitHub [Removing sensitive data from a repository](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository) — после переписывания истории запросите удаление кешей и обращайтесь в поддержку при необходимости.
+- После очистки обязательно ротируйте все токены, ключи API и пересоздайте бот-токены, чтобы исключить злоупотребления.
 
 ## Бот-приёмная
 

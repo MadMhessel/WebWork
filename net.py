@@ -1,4 +1,3 @@
-import os
 import time
 from urllib.parse import urlparse
 from typing import Optional, Dict

@@ -5,6 +5,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 from platformdirs import user_config_dir
 
+from webwork import dedup_config as _dedup_cfg_loader
+from webwork import http_cfg as _http_cfg_loader
+from webwork import raw_config as _raw_cfg_loader
+from webwork import telegram_cfg as _telegram_cfg_loader
+
 try:  # pragma: no cover - список источников региона
     from sources_nn import SOURCES_NN, SOURCES_BY_DOMAIN, SOURCES_BY_ID
 except Exception:  # pragma: no cover - файл может отсутствовать
@@ -39,15 +44,30 @@ except Exception:  # pragma: no cover - executed only when defaults missing
     DEFAULT_REVIEW_CHAT_ID = ""
     DEFAULT_MODERATOR_IDS: set[int] = set()
 
+
+_TELEGRAM_CFG = _telegram_cfg_loader()
+_HTTP_CFG = _http_cfg_loader()
+_DEDUP_CFG = _dedup_cfg_loader()
+_RAW_CFG = _raw_cfg_loader()
+
+
+def _coerce_chat(value: str | None) -> str | int:
+    if not value:
+        return ""
+    raw = value.strip()
+    if raw and raw.lstrip("-+").isdigit():
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+    return raw
+
 # === Базовые настройки бота ===
-# Support both legacy names and new explicit TELEGRAM_* variables
-_RAW_TELEGRAM_TOKEN = (
-    os.getenv("TELEGRAM_BOT_TOKEN")
-    or os.getenv("BOT_TOKEN", DEFAULT_BOT_TOKEN)
-)
-BOT_TOKEN: str = (_RAW_TELEGRAM_TOKEN or "").strip()
+_RAW_TELEGRAM_TOKEN = (_TELEGRAM_CFG.token or DEFAULT_BOT_TOKEN or "").strip()
+BOT_TOKEN: str = _RAW_TELEGRAM_TOKEN
 TELEGRAM_BOT_TOKEN: str = BOT_TOKEN
-CHANNEL_ID: str = os.getenv("CHANNEL_ID", DEFAULT_CHANNEL_ID).strip()  # пример: "@my_news_channel" или числовой ID
+_CHANNEL_VALUE = (_TELEGRAM_CFG.channel_id or DEFAULT_CHANNEL_ID or "").strip()
+CHANNEL_ID: str = _CHANNEL_VALUE
 RETRY_LIMIT: int = int(os.getenv("RETRY_LIMIT", "3"))
 
 # === Бот-приёмная для предложений новостей ===
@@ -67,11 +87,15 @@ SUGGEST_HELLO: str = (
 )
 
 # === HTTP-клиент ===
-HTTP_TIMEOUT_CONNECT: float = float(os.getenv("HTTP_TIMEOUT_CONNECT", "5"))
+HTTP_TIMEOUT_CONNECT: float = float(
+    os.getenv("HTTP_TIMEOUT_CONNECT", str(_HTTP_CFG.timeout))
+)
 # ТЗ: connect=5s, read=65s (long-poll up to 30s)
-HTTP_TIMEOUT_READ: float = float(os.getenv("HTTP_TIMEOUT_READ", "65"))
-HTTP_RETRY_TOTAL: int = int(os.getenv("HTTP_RETRY_TOTAL", "3"))
-HTTP_BACKOFF: float = float(os.getenv("HTTP_BACKOFF", "0.5"))
+HTTP_TIMEOUT_READ: float = float(
+    os.getenv("HTTP_TIMEOUT_READ", str(_HTTP_CFG.timeout))
+)
+HTTP_RETRY_TOTAL: int = _HTTP_CFG.retry_total
+HTTP_BACKOFF: float = _HTTP_CFG.backoff_factor
 SSL_NO_VERIFY_HOSTS: set[str] = {
     h.strip().lower()
     for h in os.getenv("SSL_NO_VERIFY_HOSTS", "").split(",")
@@ -98,14 +122,18 @@ LOG_TIME_BACKUP_COUNT: int = int(os.getenv("LOG_TIME_BACKUP_COUNT", "7"))
 
 # === Параметры модерации и медиа ===
 # Allow new variable names defined in technical specification
-REVIEW_CHAT_ID: str | int = (
+_REVIEW_VALUE = (
     os.getenv("MOD_CHAT_ID")
-    or os.getenv("REVIEW_CHAT_ID", DEFAULT_REVIEW_CHAT_ID)
-).strip()
-CHANNEL_CHAT_ID: str | int = (
-    os.getenv("TARGET_CHAT_ID")
-    or os.getenv("CHANNEL_CHAT_ID", CHANNEL_ID)
-).strip()
+    or _TELEGRAM_CFG.review_chat_id
+    or DEFAULT_REVIEW_CHAT_ID
+    or ""
+)
+REVIEW_CHAT_ID: str | int = _coerce_chat(_REVIEW_VALUE)
+CHANNEL_CHAT_ID: str | int = _coerce_chat(
+    os.getenv("TARGET_CHAT_ID") or _CHANNEL_VALUE
+)
+CHANNEL_ID = str(CHANNEL_CHAT_ID) if CHANNEL_CHAT_ID else CHANNEL_ID
+RAW_REVIEW_CHAT_ID: str | int = _coerce_chat(_RAW_CFG.review_chat_id or _REVIEW_VALUE)
 MODERATOR_IDS: set[int] = {
     int(x)
     for x in (
@@ -122,11 +150,7 @@ SNOOZE_MINUTES: int = int(os.getenv("SNOOZE_MINUTES", "0"))
 REVIEW_TTL_HOURS: int = int(os.getenv("REVIEW_TTL_HOURS", "24"))
 CAPTION_LIMIT: int = int(os.getenv("CAPTION_LIMIT", "1024"))
 TELEGRAM_MESSAGE_LIMIT: int = int(os.getenv("TELEGRAM_MESSAGE_LIMIT", "4096"))
-_RAW_PARSE_MODE = (
-    os.getenv("TELEGRAM_PARSE_MODE")
-    or os.getenv("PARSE_MODE")
-    or "HTML"
-)
+_RAW_PARSE_MODE = _TELEGRAM_CFG.parse_mode or "HTML"
 if _RAW_PARSE_MODE.strip().lower() == "markdownv2":
     TELEGRAM_PARSE_MODE = PARSE_MODE = "MarkdownV2"
 elif _RAW_PARSE_MODE.strip().lower() == "html":
@@ -164,15 +188,7 @@ TELEGRAM_MODE: str = _TELEGRAM_MODE_RAW or "web"
 TELEGRAM_LINKS_FILE = os.getenv("TELEGRAM_LINKS_FILE", "telegram_links.txt").strip()
 
 # --- Параллельный «сырой» поток ---
-RAW_STREAM_ENABLED: bool = os.getenv("RAW_STREAM_ENABLED", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-_RAW_REVIEW_CHAT = os.getenv("RAW_REVIEW_CHAT_ID", "").strip()
-RAW_REVIEW_CHAT_ID: str | int = (
-    int(_RAW_REVIEW_CHAT) if _RAW_REVIEW_CHAT.lstrip("-+").isdigit() else _RAW_REVIEW_CHAT
-)
+RAW_STREAM_ENABLED: bool = _RAW_CFG.enabled
 RAW_TELEGRAM_SOURCES_FILE: str = (
     os.getenv("RAW_TELEGRAM_SOURCES_FILE", "telegram_links_raw.txt").strip()
     or "telegram_links_raw.txt"
@@ -181,16 +197,8 @@ _RAW_FORWARD_STRATEGY = os.getenv("RAW_FORWARD_STRATEGY", "copy").strip().lower(
 if _RAW_FORWARD_STRATEGY not in {"copy", "forward", "link"}:
     _RAW_FORWARD_STRATEGY = "copy"
 RAW_FORWARD_STRATEGY: str = _RAW_FORWARD_STRATEGY
-RAW_BYPASS_FILTERS: bool = os.getenv("RAW_BYPASS_FILTERS", "true").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-RAW_BYPASS_DEDUP: bool = os.getenv("RAW_BYPASS_DEDUP", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-}
+RAW_BYPASS_FILTERS: bool = _RAW_CFG.bypass_filters
+RAW_BYPASS_DEDUP: bool = _RAW_CFG.bypass_dedup
 RAW_MAX_PER_CHANNEL: int = int(os.getenv("RAW_MAX_PER_CHANNEL", "10"))
 RAW_MAX_CHANNELS_PER_TICK: int = int(os.getenv("RAW_MAX_CHANNELS_PER_TICK", "3"))
 RAW_CHANNEL_TIMEOUT_SEC: float = float(os.getenv("RAW_CHANNEL_TIMEOUT_SEC", "30"))
@@ -663,8 +671,15 @@ PUBLISH_SLEEP_BETWEEN_SEC: float = float(os.getenv("PUBLISH_SLEEP_BETWEEN_SEC", 
 REWRITE_MAX_CHARS = int(os.getenv("REWRITE_MAX_CHARS", "600"))
 
 # === Кластеризация похожих заголовков (опц.) ===
-ENABLE_TITLE_CLUSTERING = os.getenv("ENABLE_TITLE_CLUSTERING", "false").lower() in {"1", "true", "yes"}
-CLUSTER_SIM_THRESHOLD = float(os.getenv("CLUSTER_SIM_THRESHOLD", "0.85"))
+ENABLE_TITLE_CLUSTERING = os.getenv(
+    "ENABLE_TITLE_CLUSTERING",
+    "true" if _DEDUP_CFG.near_duplicates_enabled else "false",
+).lower() in {"1", "true", "yes"}
+CLUSTER_SIM_THRESHOLD = float(
+    os.getenv("CLUSTER_SIM_THRESHOLD", str(_DEDUP_CFG.near_duplicate_threshold))
+)
+NEAR_DUPLICATES_ENABLED: bool = _DEDUP_CFG.near_duplicates_enabled
+NEAR_DUPLICATE_THRESHOLD: float = _DEDUP_CFG.near_duplicate_threshold
 CLUSTER_LOOKBACK_DAYS = int(os.getenv("CLUSTER_LOOKBACK_DAYS", "14"))
 CLUSTER_MAX_CANDIDATES = int(os.getenv("CLUSTER_MAX_CANDIDATES", "200"))
 

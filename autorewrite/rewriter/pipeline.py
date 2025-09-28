@@ -62,7 +62,7 @@ def _add_linkers(sents: List[str]) -> List[str]:
     out = [sents[0]]
     idx = 0
     for s in sents[1:]:
-        if any(s.lower().startswith(l.lower()) for l in SOFT_LINKERS):
+        if any(s.lower().startswith(linker.lower()) for linker in SOFT_LINKERS):
             out.append(s)
             idx += 1
             continue

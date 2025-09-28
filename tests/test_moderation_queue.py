@@ -1,7 +1,6 @@
 import json
-import sys
 import pathlib
-import sqlite3
+import sys
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
 from WebWork import db, moderator, publisher, config

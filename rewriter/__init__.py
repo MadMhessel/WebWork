@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, List
+from typing import List
 
 from .base import NewsItem, RewriterResult
 from .noop import NoopRewriter

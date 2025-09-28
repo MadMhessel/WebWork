@@ -1,10 +1,13 @@
 import time
-from typing import Optional
 
 try:
-    from . import config, http_client, moderator, publisher, db
+    from . import config, db, http_client, moderator, publisher
 except ImportError:  # pragma: no cover
-    import config, http_client, moderator, publisher, db  # type: ignore
+    import config  # type: ignore
+    import db  # type: ignore
+    import http_client  # type: ignore
+    import moderator  # type: ignore
+    import publisher  # type: ignore
 
 from logging_setup import get_logger
 

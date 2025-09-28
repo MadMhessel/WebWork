@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import Iterable, Set, Tuple
+from typing import Set, Tuple
 
 import yaml
 

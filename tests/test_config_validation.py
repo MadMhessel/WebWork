@@ -1,4 +1,7 @@
-import sys, pathlib, pytest
+import pathlib
+import sys
+
+import pytest
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
 from WebWork import config
