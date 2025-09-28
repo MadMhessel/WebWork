@@ -35,6 +35,16 @@ _HOST_QUARANTINE: Dict[str, float] = {}
 _FAIL_TTL = 30 * 60  # 30 minutes
 _HTTP_CACHE: Dict[str, Dict[str, str]] = {}
 
+_DOMAIN_REQUEST_HEADERS: Dict[str, Dict[str, str]] = {
+    "t.me": {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36"
+        ),
+        "Accept-Language": "ru-RU,ru;q=0.9",
+    }
+}
+
 _MONTHS_RU = {
     "январ": 1,
     "феврал": 2,
@@ -447,13 +457,20 @@ def _fetch_text(
         read_to = timeout[1] if timeout else None
         verify = _verify_for(url)
         headers = _conditional_headers(url)
+        domain_headers = _DOMAIN_REQUEST_HEADERS.get(host)
+        request_headers: Dict[str, str] = {}
+        if domain_headers:
+            request_headers.update(domain_headers)
+        if headers:
+            request_headers.update(headers)
         text, resp_headers, status = net.get_text_with_meta(
             url,
             timeout=read_to,
-            allow_redirects=allow_redirects,
-            headers=headers or None,
+            allow_redirects=True,
+            headers=request_headers or None,
             verify=verify,
         )
+        logger.info("HTTP GET %s -> %s (%s)", host or "?", status, url)
         _HOST_FAILS.pop(host, None)
         _record_host_success(host, now=now)
         if status == 304:

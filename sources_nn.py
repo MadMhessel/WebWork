@@ -6,12 +6,14 @@ from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 import hashlib
+import logging
 import re
 
 import yaml
 
 _DEFAULTS_CACHE: Dict[str, Any] | None = None
 _SOURCES_CACHE: List[Dict[str, Any]] | None = None
+_log = logging.getLogger("webwork.app.sources")
 try:  # pragma: no cover
     from . import config  # пакетный импорт
 except Exception:  # pragma: no cover
@@ -192,6 +194,9 @@ def _entries_from_telegram(slugs: list[str], defaults: Dict[str, Any]) -> list[D
                 "url": url,
                 "type": "html",
                 "source_domain": "t.me",
+                "min_text_length": 80,
+                "trust_level": 1,
+                "rate_limit_per_minute": 4,
             }
         )
         out.append(entry)
@@ -205,9 +210,23 @@ def _build_sources() -> List[Dict[str, Any]]:
     base = _merge_defaults(data)
 
     links_file = getattr(config, "TELEGRAM_LINKS_FILE", "") or ""
-    tg_path = Path(links_file).resolve() if links_file else None
+    base_dir = Path(__file__).resolve().parent
+    if links_file:
+        lf = Path(links_file)
+        tg_path = lf if lf.is_absolute() else (base_dir / lf)
+    else:
+        tg_path = None
     tg_slugs = _load_telegram_links(tg_path)
     dyn = _entries_from_telegram(tg_slugs, _DEFAULTS_CACHE or {})
+
+    try:
+        _log.info(
+            "TG: загружено %d каналов из %s",
+            len(tg_slugs),
+            str(tg_path.resolve()) if tg_path else "<не задано>",
+        )
+    except Exception:
+        pass
 
     merged: dict[str, Dict[str, Any]] = {}
     for src in base + dyn:
