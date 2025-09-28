@@ -45,6 +45,10 @@ _DOMAIN_REQUEST_HEADERS: Dict[str, Dict[str, str]] = {
     }
 }
 
+
+def _telegram_only_active() -> bool:
+    return bool(getattr(config, "ONLY_TELEGRAM", False))
+
 _MONTHS_RU = {
     "январ": 1,
     "феврал": 2,
@@ -665,6 +669,11 @@ def fetch_rss(
     *,
     timeout: Optional[tuple] = None,
 ) -> List[Dict[str, str]]:
+    if _telegram_only_active():
+        logger.debug(
+            "TG-ONLY: пропускаем RSS-источник %s", source.get("name") or source.get("url")
+        )
+        return []
     url = source.get("url", "")
     name = source.get("name", "")
     if not url:
@@ -694,6 +703,11 @@ def fetch_rss(
 def fetch_html(
     source: Dict[str, str], *, timeout: Optional[tuple] = None, domain_config: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, str]]:
+    if _telegram_only_active():
+        logger.debug(
+            "TG-ONLY: пропускаем HTML-источник %s", source.get("name") or source.get("url")
+        )
+        return []
     url = source.get("url", "")
     name = source.get("name", "")
     if not url:
@@ -799,6 +813,11 @@ def fetch_html_list(
     timeout: Optional[tuple] = None,
     domain_config: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
+    if _telegram_only_active():
+        logger.debug(
+            "TG-ONLY: пропускаем HTML-листинг %s", source.get("name") or source.get("url")
+        )
+        return []
     """
     Универсальный парсер листинга.
     Поддерживает произвольные селекторы из source['selectors'], но все поля опциональны.
@@ -956,6 +975,9 @@ def fetch_all(
     обработки всех источников. Теперь элементы выдаются по мере получения,
     чтобы подходящие новости сразу отправлялись на модерацию.
     """
+    if _telegram_only_active():
+        logger.info("TG-ONLY: fetch_all пропускает обход источников RSS/HTML")
+        return
     limit = int(limit_per_source or getattr(config, "FETCH_LIMIT_PER_SOURCE", 30))
     sim_threshold = float(
         getattr(

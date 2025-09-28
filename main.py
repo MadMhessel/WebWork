@@ -3,8 +3,7 @@ import argparse
 import sys
 import time
 import threading
-from itertools import chain
-from typing import Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 from urllib.parse import urlparse
 
 import config, fetcher, filters, dedup, db, rewrite, tagging, classifieds
@@ -12,7 +11,6 @@ import moderator
 import bot_updates
 from utils import normalize_whitespace, compute_title_hash
 import moderation
-import telegram_fetcher
 try:  # pragma: no cover - publisher may be optional in tests
     import publisher  # type: ignore
 except Exception:  # pragma: no cover
@@ -52,30 +50,30 @@ def _publisher_send_direct(item: Dict) -> bool:
     return bool(mid)
 
 def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
-    telegram_items_iter = iter(())
+    items_iter: Iterable[Dict[str, Any]]
     if getattr(config, "ONLY_TELEGRAM", False):
-        aliases = telegram_fetcher.load_aliases_from_file(
-            getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt")
-        )
-        if not aliases:
-            logger.warning("TG: список источников пуст — проверьте TELEGRAM_LINKS_FILE")
-        else:
-            # используем существующий лимит как «сообщений на канал»
-            per_channel = int(getattr(config, "FETCH_LIMIT_PER_SOURCE", 30))
-            telegram_items_iter = telegram_fetcher.fetch_telegram_items(
-                aliases, per_channel_limit=per_channel
+        if not getattr(config, "TELEGRAM_AUTO_FETCH", True):
+            logger.info(
+                "SOURCE_MODE=TELEGRAM_ONLY: TELEGRAM_AUTO_FETCH=0, загрузка Telegram пропущена."
             )
+            items_iter = []
+        else:
+            if getattr(config, "TELEGRAM_MODE", "web") == "mtproto":
+                from telegram_mtproto import fetch_from_file as telegram_fetch  # type: ignore
+            else:
+                from telegram_web import fetch_from_file as telegram_fetch  # type: ignore
 
-    if getattr(config, "ONLY_TELEGRAM", False):
-        # Режим «только Telegram»: сайты не трогаем вообще
-        logger.info("SOURCE_MODE=TELEGRAM_ONLY: fetcher отключён, items_iter пуст.")
-        site_items_iter = iter(())  # пустой итератор, никаких HTTP к сайтам
+            items_iter = list(telegram_fetch(config.TELEGRAM_LINKS_FILE))
+            logger.info(
+                "SOURCE_MODE=TELEGRAM_ONLY: получено %d элементов из Telegram",
+                len(items_iter),
+            )
     else:
-        site_items_iter = fetcher.fetch_all(
-            config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE
+        items_iter = list(
+            fetcher.fetch_all(
+                config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE
+            )
         )
-
-    items_iter = chain(telegram_items_iter, site_items_iter)
 
     seen_urls: set = set()
     seen_title_hashes: set = set()
