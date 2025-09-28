@@ -32,6 +32,8 @@ python -m config init
 - `POLL_INTERVAL_SECONDS`, `FETCH_LIMIT_PER_SOURCE`
 - `HTTP_TIMEOUT_CONNECT`, `HTTP_TIMEOUT_READ`, `HTTP_RETRY_TOTAL`, `HTTP_BACKOFF`
 - `MAX_POST_LEN`, `CAPTION_LIMIT`, `REGION_HINT`, `PARSE_MODE`
+- `RAW_STREAM_ENABLED`, `RAW_REVIEW_CHAT_ID`, `RAW_TELEGRAM_SOURCES_FILE`, `RAW_FORWARD_STRATEGY`,
+  `RAW_BYPASS_FILTERS`, `RAW_BYPASS_DEDUP`
 - ключевые слова и источники в `newsbot/config.py`
 
 ### Рерайт
@@ -67,6 +69,7 @@ Telegram.
 ### Режим «только Telegram»
 
 - Формат файла `telegram_links.txt` — по одной ссылке вида `https://t.me/<alias>` или `https://t.me/s/<alias>` на строку. Комментарии, начинающиеся с `#`, игнорируются.
+- Для «сырого» потока используйте файл `telegram_links_raw.txt` (по умолчанию создаётся в корне).
 - Пример минимальной конфигурации для веб-парсинга публичных страниц:
   ```ini
   ONLY_TELEGRAM=1

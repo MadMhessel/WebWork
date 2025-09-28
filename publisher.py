@@ -1,7 +1,7 @@
 import json
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 import re
 import sqlite3
 from urllib.parse import urlparse
@@ -23,6 +23,8 @@ log = get_logger("webwork.bot")
 
 _API_BASE = "https://api.telegram.org"
 _client_base_url: Optional[str] = None
+
+_RAW_ALIAS_CACHE: dict[str, int] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +52,133 @@ def _ensure_client() -> bool:
     return _client_base_url is not None
 
 
+def tg_api(method: str, **params):
+    token = getattr(config, "TELEGRAM_BOT_TOKEN", getattr(config, "BOT_TOKEN", ""))
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
+    url = f"{_API_BASE}/bot{token}/{method}"
+    max_attempts = 5
+    base_sleep = 1.5
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            response = requests.post(url, json=params, timeout=(5, 30))
+        except requests.RequestException as exc:
+            if attempt >= max_attempts:
+                log.warning("RAW: метод %s — ошибка сети: %s", method, exc)
+                raise
+            wait = base_sleep * (2 ** (attempt - 1))
+            log.warning(
+                "RAW: метод %s — сеть не ответила, повтор через %.1f с (%s)",
+                method,
+                wait,
+                exc,
+            )
+            time.sleep(wait)
+            continue
+
+        if response.status_code in {429} or response.status_code >= 500:
+            if attempt >= max_attempts:
+                log.warning(
+                    "RAW: метод %s — код %s после %s попыток", method, response.status_code, attempt
+                )
+                response.raise_for_status()
+            wait = base_sleep * (2 ** (attempt - 1))
+            log.warning(
+                "RAW: метод %s — код %s, повтор через %.1f с",
+                method,
+                response.status_code,
+                wait,
+            )
+            time.sleep(wait)
+            continue
+
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            log.warning("RAW: метод %s — не удалось распарсить ответ: %s", method, exc)
+            raise
+        if not payload.get("ok"):
+            raise RuntimeError(payload)
+        return payload.get("result")
+
+
+def get_from_chat_id(alias: str) -> int:
+    normalized = alias.strip().lstrip("@")
+    if not normalized:
+        raise ValueError("Пустой alias")
+    if normalized in _RAW_ALIAS_CACHE:
+        return _RAW_ALIAS_CACHE[normalized]
+    result = tg_api("getChat", chat_id=f"@{normalized}")
+    chat_id = int(result["id"])
+    _RAW_ALIAS_CACHE[normalized] = chat_id
+    return chat_id
+
+
+def try_copy_or_forward(item: Dict[str, Any]) -> bool:
+    alias = (item.get("tg_alias") or "").strip()
+    mid = item.get("tg_msg_id")
+    if not alias or mid in {None, ""}:
+        return False
+    strategy = getattr(config, "RAW_FORWARD_STRATEGY", "copy")
+    method = "copyMessage" if strategy == "copy" else "forwardMessage"
+    try:
+        from_chat_id = get_from_chat_id(alias)
+        tg_api(
+            method,
+            chat_id=getattr(config, "RAW_REVIEW_CHAT_ID", ""),
+            from_chat_id=from_chat_id,
+            message_id=int(mid),
+        )
+        log.info("RAW: %s %s/%s успешно", method, alias, mid)
+        return True
+    except Exception as exc:  # pragma: no cover - сетевые ошибки зависят от среды
+        log.warning("RAW %s failed for %s/%s: %s", method, alias, mid, exc)
+        return False
+
+
+def publish_raw(items: Sequence[Dict[str, Any]]) -> None:
+    if not items:
+        log.info("RAW: элементов нет, отправка пропущена")
+        return
+    chat_id = getattr(config, "RAW_REVIEW_CHAT_ID", "")
+    if not chat_id:
+        log.warning("RAW: RAW_REVIEW_CHAT_ID не задан, публикация невозможна")
+        return
+    strategy = getattr(config, "RAW_FORWARD_STRATEGY", "copy")
+    log.info("RAW: отправка %d элементов (стратегия=%s)", len(items), strategy)
+    for item in items:
+        sent = False
+        if strategy in {"copy", "forward"}:
+            sent = try_copy_or_forward(item)
+        if sent:
+            continue
+        title = (item.get("title") or "").strip()
+        body = (item.get("content") or "").strip()
+        url = (item.get("url") or "").strip()
+        parts = []
+        if title:
+            parts.append(title)
+        if url:
+            parts.append(url)
+        elif body:
+            parts.append(body)
+        text = "\n".join(parts).strip()
+        if not text:
+            log.warning("RAW: пропуск пустого элемента %s", item)
+            continue
+        try:
+            tg_api(
+                "sendMessage",
+                chat_id=chat_id,
+                text=text,
+                disable_web_page_preview=False,
+            )
+            log.info("RAW: fallback sendMessage успешно (%s)", url or item.get("guid"))
+        except Exception as exc:  # pragma: no cover - сетевые ошибки
+            log.warning("RAW sendMessage failed: %s", exc)
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
@@ -1029,6 +1158,8 @@ __all__ = [
     "send_message",
     "publish_structured_item",
     "publish_message",
+    "publish_raw",
+    "tg_api",
     "split_html_message",
     "compose_preview",
     "format_preview",

@@ -3,7 +3,7 @@ import hashlib
 import re
 import time
 from difflib import SequenceMatcher
-from typing import Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
     from . import db, utils, config
@@ -15,6 +15,37 @@ from logging_setup import get_logger
 logger = get_logger(__name__)
 
 _WORD_RE = re.compile(r"[0-9a-zа-яё]+", re.I)
+
+
+def deduplicate(items: Sequence[Dict[str, object]], *, scope: str = "default") -> List[Dict[str, object]]:
+    """Удалить дубли в памяти на основании URL/GUID/TG-ID."""
+
+    seen: set[str] = set()
+    result: List[Dict[str, object]] = []
+    removed = 0
+    for item in items:
+        guid = str(item.get("guid") or "").strip()
+        url = str(item.get("url") or "").strip()
+        alias = str(item.get("tg_alias") or "").strip().lower()
+        tg_mid_raw = item.get("tg_msg_id")
+        tg_mid = str(tg_mid_raw) if tg_mid_raw not in {None, ""} else ""
+        key_candidates = [guid, url]
+        if alias and tg_mid:
+            key_candidates.append(f"tg:{alias}:{tg_mid}")
+        key_candidates.append(str(item.get("title") or "").strip())
+        dedup_key = next((k for k in key_candidates if k), None)
+        if not dedup_key:
+            dedup_key = repr(item)
+        if dedup_key in seen:
+            removed += 1
+            continue
+        seen.add(dedup_key)
+        result.append(dict(item))
+    if removed and scope == "raw":
+        logger.info("RAW: удалено %d дублей перед публикацией", removed)
+    elif removed:
+        logger.info("DEDUP: удалено %d дублей (scope=%s)", removed, scope)
+    return result
 
 
 def _tokenize(title: str) -> Tuple[set[str], set[str]]:
