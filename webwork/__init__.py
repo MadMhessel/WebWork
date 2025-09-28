@@ -8,6 +8,7 @@ from typing import Tuple
 from .config import (
     AppConfig,
     HttpCfg,
+    LogCfg,
     TelegramCfg,
     dedup_cfg,
     load_all,
@@ -28,6 +29,10 @@ def http_cfg() -> HttpCfg:
     return _cached_config().http
 
 
+def log_cfg() -> LogCfg:
+    return _cached_config().log
+
+
 def dedup_config():
     return dedup_cfg()
 
@@ -36,6 +41,6 @@ def raw_config():
     return raw_stream_cfg()
 
 
-def load() -> Tuple[TelegramCfg, HttpCfg]:
+def load() -> Tuple[TelegramCfg, LogCfg]:
     cfg = _cached_config()
-    return cfg.telegram, cfg.http
+    return cfg.telegram, cfg.log
