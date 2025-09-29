@@ -341,10 +341,39 @@ def _maybe_prune(conn) -> None:
     _LAST_PRUNE_TS = now
 
 
-def run_raw_pipeline_once(session: Optional[requests.Session], conn, log: logging.Logger) -> None:
-    if not getattr(config, "RAW_STREAM_ENABLED", False):
+def run_raw_pipeline_once(
+    session: Optional[requests.Session],
+    conn,
+    log: logging.Logger,
+    *,
+    force: bool = False,
+    sources: Optional[Sequence[str]] = None,
+) -> None:
+    """Execute a single iteration of the RAW pipeline.
+
+    Parameters
+    ----------
+    session:
+        Optional :class:`requests.Session` to reuse network connections.
+    conn:
+        SQLite connection used for deduplication bookkeeping.
+    log:
+        Logger instance for structured diagnostics.
+    force:
+        When ``True`` the pipeline runs even if ``RAW_STREAM_ENABLED`` is not
+        enabled in the configuration.  This is used by the main loop to
+        automatically process ``telegram_links_raw.txt`` when it exists.
+    sources:
+        Optional pre-loaded list of source URLs.  When ``None`` the function
+        loads sources from ``RAW_TELEGRAM_SOURCES_FILE``.
+    """
+
+    if not force and not getattr(config, "RAW_STREAM_ENABLED", False):
         return
-    sources = load_sources_file(getattr(config, "RAW_TELEGRAM_SOURCES_FILE", ""))
+
+    if sources is None:
+        sources = load_sources_file(getattr(config, "RAW_TELEGRAM_SOURCES_FILE", ""))
+
     if not sources:
         _maybe_prune(conn)
         return
