@@ -1,6 +1,7 @@
 import json
 import time
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional, Sequence
 import re
 import sqlite3
@@ -19,6 +20,7 @@ except ImportError:  # pragma: no cover - direct script execution
     import config  # type: ignore
     import rewrite  # type: ignore
 from webwork.utils.formatting import chunk_text, safe_format, TG_TEXT_LIMIT
+from webwork.router import route_and_publish
 
 log = get_logger("webwork.bot")
 
@@ -1213,6 +1215,88 @@ def publish_from_queue(
     return mid
 
 
+class _BotApiAdapter:
+    """Expose minimal Bot API surface for the new router publisher."""
+
+    def __init__(self) -> None:
+        self._dry_counter = 0
+
+    def _call(self, method: str, payload: Dict[str, Any]) -> SimpleNamespace:
+        if getattr(config, "DRY_RUN", False):
+            self._dry_counter += 1
+            message_id = f"dry-{self._dry_counter}"
+            log.info(
+                "[DRY-RUN] %s -> chat_id=%s length=%s",
+                method,
+                mask_secrets(str(payload.get("chat_id"))),
+                len(str(payload.get("text") or payload.get("caption") or "")),
+            )
+            return SimpleNamespace(message_id=message_id)
+        result = tg_api(method, **payload)
+        if isinstance(result, dict):
+            return SimpleNamespace(**result)
+        return SimpleNamespace(message_id=result)
+
+    def sendMessage(
+        self,
+        chat_id: str,
+        text: str,
+        parse_mode: Optional[str] = None,
+        **kwargs: Any,
+    ) -> SimpleNamespace:  # noqa: N802 - Telegram casing
+        payload: Dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        payload.setdefault(
+            "disable_web_page_preview",
+            getattr(config, "TELEGRAM_DISABLE_WEB_PAGE_PREVIEW", False),
+        )
+        payload.update(kwargs)
+        return self._call("sendMessage", payload)
+
+    def sendPhoto(
+        self,
+        chat_id: str,
+        photo: Any,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        **kwargs: Any,
+    ) -> SimpleNamespace:  # noqa: N802 - Telegram casing
+        payload: Dict[str, Any] = {"chat_id": chat_id, "photo": photo}
+        if caption is not None:
+            payload["caption"] = caption
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        payload.update(kwargs)
+        return self._call("sendPhoto", payload)
+
+    def sendVideo(
+        self,
+        chat_id: str,
+        video: Any,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        **kwargs: Any,
+    ) -> SimpleNamespace:  # noqa: N802 - Telegram casing
+        payload: Dict[str, Any] = {"chat_id": chat_id, "video": video}
+        if caption is not None:
+            payload["caption"] = caption
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        payload.update(kwargs)
+        return self._call("sendVideo", payload)
+
+
+def publish_post(post: Dict[str, Any], *, is_raw: bool = False) -> None:
+    """Publish a unified post into text and media channels."""
+
+    if not post:
+        log.warning("publish_post: пустой payload")
+        return
+    adapter = _BotApiAdapter()
+    route_and_publish(adapter, post, is_raw=is_raw)
+
+
 __all__ = [
     "init_telegram_client",
     "send_message",
@@ -1225,4 +1309,5 @@ __all__ = [
     "format_preview",
     "send_moderation_preview",
     "publish_from_queue",
+    "publish_post",
 ]

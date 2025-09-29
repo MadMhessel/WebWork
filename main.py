@@ -92,12 +92,15 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             )
             items_iter = []
         else:
-            if getattr(config, "TELEGRAM_MODE", "web") == "mtproto":
-                from telegram_mtproto import fetch_from_file as telegram_fetch  # type: ignore
-            else:
-                from telegram_web import fetch_from_file as telegram_fetch  # type: ignore
+            from telegram_fetcher import fetch_from_telegram
 
-            items_iter = list(telegram_fetch(config.TELEGRAM_LINKS_FILE))
+            items_iter = list(
+                fetch_from_telegram(
+                    getattr(config, "TELEGRAM_MODE", "mtproto"),
+                    getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"),
+                    getattr(config, "TELEGRAM_FETCH_LIMIT", 30),
+                )
+            )
             logger.info(
                 "SOURCE_MODE=TELEGRAM_ONLY: получено %d элементов из Telegram",
                 len(items_iter),
