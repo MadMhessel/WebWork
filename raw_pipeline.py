@@ -4,16 +4,18 @@ import hashlib
 import logging
 import re
 import time
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 import http_client
+from webwork.dedup import canonical_url
 
 try:  # pragma: no cover - production style imports
     from . import config, utils, publisher
@@ -26,7 +28,9 @@ except ImportError:  # pragma: no cover - direct script execution
 logger = logging.getLogger(__name__)
 
 
-_SOURCE_SLICE_CURSOR = 0
+_BRANCH_ORDER: List[str] = []
+_BRANCH_CURSOR = 0
+_BRANCH_OFFSETS: Dict[str, int] = {}
 _LAST_PRUNE_TS = 0.0
 
 
@@ -43,36 +47,108 @@ class RawPost:
     fetched_at: float
 
 
-def load_sources_file(path: str) -> List[str]:
+def _parse_sources_file(path: str) -> "OrderedDict[str, List[str]]":
     file_path = Path(path)
     if not file_path.exists():
         logger.warning("[RAW] sources file missing: %s", path)
-        return []
-    sources: List[str] = []
-    for line in file_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        return OrderedDict()
+
+    branch_sources: "OrderedDict[str, List[str]]" = OrderedDict()
+    current_branch = "default"
+    branch_sources.setdefault(current_branch, [])
+    global_seen: set[str] = set()
+
+    for raw_line in file_path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
             continue
-        sources.append(stripped)
-    unique = list(dict.fromkeys(sources))
-    return unique
+        if stripped.startswith("#"):
+            comment = stripped.lstrip("# ")
+            if comment.lower().startswith("branch:"):
+                current_branch = comment.split(":", 1)[1].strip().lower() or "default"
+                branch_sources.setdefault(current_branch, [])
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current_branch = stripped.strip("[] ").strip().lower() or "default"
+            branch_sources.setdefault(current_branch, [])
+            continue
+        entry = stripped.split("#", 1)[0].strip()
+        if not entry:
+            continue
+        if entry in global_seen:
+            continue
+        branch_sources.setdefault(current_branch, []).append(entry)
+        global_seen.add(entry)
+
+    # Drop empty branches keeping at least default entry if no data present
+    cleaned = OrderedDict(
+        (name, urls) for name, urls in branch_sources.items() if urls
+    )
+    if not cleaned and branch_sources.get("default") is not None:
+        cleaned["default"] = []
+    return cleaned
 
 
-def _round_robin_slice(sources: Sequence[str], limit: int) -> List[str]:
-    global _SOURCE_SLICE_CURSOR
-    if not sources:
+def load_sources_by_branch(path: str) -> "OrderedDict[str, List[str]]":
+    return _parse_sources_file(path)
+
+
+def load_sources_file(path: str) -> List[str]:
+    parsed = _parse_sources_file(path)
+    sources: List[str] = []
+    for urls in parsed.values():
+        sources.extend(urls)
+    return sources
+
+
+def _round_robin_by_branch(
+    branch_sources: "OrderedDict[str, List[str]]", limit: int
+) -> List[Tuple[str, str]]:
+    global _BRANCH_ORDER, _BRANCH_CURSOR, _BRANCH_OFFSETS
+
+    active_branches = [name for name, urls in branch_sources.items() if urls]
+    if not active_branches:
         return []
-    if limit <= 0:
-        limit = len(sources)
-    limit = min(limit, len(sources))
-    start = _SOURCE_SLICE_CURSOR % len(sources)
-    result: List[str] = []
-    idx = start
-    for _ in range(limit):
-        result.append(sources[idx])
-        idx = (idx + 1) % len(sources)
-    _SOURCE_SLICE_CURSOR = idx
-    return result
+
+    if _BRANCH_ORDER != active_branches:
+        _BRANCH_ORDER = active_branches
+        _BRANCH_CURSOR = _BRANCH_CURSOR % max(1, len(_BRANCH_ORDER))
+        _BRANCH_OFFSETS = {
+            name: _BRANCH_OFFSETS.get(name, 0) % max(1, len(branch_sources[name]))
+            for name in _BRANCH_ORDER
+        }
+
+    total_sources = sum(len(urls) for urls in branch_sources.values())
+    if limit <= 0 or limit > total_sources:
+        limit = total_sources
+
+    if not limit:
+        return []
+
+    local_offsets = dict(_BRANCH_OFFSETS)
+    consumed: Dict[str, int] = {name: 0 for name in _BRANCH_ORDER}
+    order = deque(_BRANCH_ORDER)
+    order.rotate(-_BRANCH_CURSOR)
+
+    picked: List[Tuple[str, str]] = []
+    while order and len(picked) < limit:
+        branch_name = order.popleft()
+        urls = branch_sources.get(branch_name, [])
+        if not urls or consumed[branch_name] >= len(urls):
+            continue
+        offset = local_offsets.get(branch_name, 0) % len(urls)
+        picked.append((branch_name, urls[offset]))
+        local_offsets[branch_name] = (offset + 1) % len(urls)
+        consumed[branch_name] += 1
+        if consumed[branch_name] < len(urls):
+            order.append(branch_name)
+
+    if picked:
+        last_branch = picked[-1][0]
+        last_index = _BRANCH_ORDER.index(last_branch)
+        _BRANCH_CURSOR = (last_index + 1) % len(_BRANCH_ORDER)
+    _BRANCH_OFFSETS = local_offsets
+    return picked
 
 
 _INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\uFEFF\u2060\u00ad]")
@@ -126,19 +202,45 @@ def raw_mark_seen(conn, channel: str, msg_key: str, origin_url: str) -> None:
         """,
         (channel, msg_key, origin_url),
     )
-    conn.commit()
 
 
-def raw_prune(conn, retention_days: int) -> int:
+def raw_link_is_dup(conn, link_key: str) -> bool:
+    cur = conn.execute(
+        "SELECT 1 FROM raw_link_dedup WHERE link_key = ? LIMIT 1",
+        (link_key,),
+    )
+    return cur.fetchone() is not None
+
+
+def raw_mark_links(conn, link_keys: Iterable[str], origin_url: str) -> None:
+    payload = [(key, origin_url) for key in link_keys if key]
+    if not payload:
+        return
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO raw_link_dedup(link_key, first_seen_ts, origin_url)
+        VALUES(?, strftime('%s','now'), ?)
+        """,
+        payload,
+    )
+
+
+def raw_prune(conn, retention_days: int) -> Tuple[int, int]:
     if retention_days <= 0:
-        return 0
+        return 0, 0
     threshold = int(time.time() - retention_days * 86400)
     cur = conn.execute(
         "DELETE FROM raw_dedup WHERE first_seen_ts < ?",
         (threshold,),
     )
+    removed_msgs = cur.rowcount or 0
+    cur = conn.execute(
+        "DELETE FROM raw_link_dedup WHERE first_seen_ts < ?",
+        (threshold,),
+    )
+    removed_links = cur.rowcount or 0
     conn.commit()
-    return cur.rowcount or 0
+    return removed_msgs, removed_links
 
 
 def _resolve_alias(source_url: str) -> str:
@@ -347,9 +449,30 @@ def _maybe_prune(conn) -> None:
     now = time.time()
     if now - _LAST_PRUNE_TS < interval:
         return
-    removed = raw_prune(conn, int(getattr(config, "DEDUP_RETENTION_DAYS", 45)))
-    logger.info("[RAW] prune: removed=%d older_than=%dd", removed, int(getattr(config, "DEDUP_RETENTION_DAYS", 45)))
+    removed_msgs, removed_links = raw_prune(
+        conn, int(getattr(config, "DEDUP_RETENTION_DAYS", 45))
+    )
+    logger.info(
+        "[RAW] prune: removed_msg_keys=%d removed_links=%d older_than=%dd",
+        removed_msgs,
+        removed_links,
+        int(getattr(config, "DEDUP_RETENTION_DAYS", 45)),
+    )
     _LAST_PRUNE_TS = now
+
+
+def _link_keys_from_post(post: RawPost) -> List[str]:
+    keys: List[str] = []
+    for candidate in list(post.links) + [post.permalink, post.channel_url]:
+        normalized = canonical_url(candidate)
+        if normalized:
+            keys.append(normalized)
+    # deduplicate preserving order
+    seen: Dict[str, None] = OrderedDict()
+    for key in keys:
+        if key not in seen:
+            seen[key] = None
+    return list(seen.keys())
 
 
 def run_raw_pipeline_once(
@@ -383,9 +506,14 @@ def run_raw_pipeline_once(
         return
 
     if sources is None:
-        sources = load_sources_file(getattr(config, "RAW_TELEGRAM_SOURCES_FILE", ""))
+        branch_sources = load_sources_by_branch(
+            getattr(config, "RAW_TELEGRAM_SOURCES_FILE", "")
+        )
+    else:
+        branch_sources = OrderedDict({"default": list(dict.fromkeys(sources))})
 
-    if not sources:
+    total_available = sum(len(urls) for urls in branch_sources.values())
+    if total_available == 0:
         _maybe_prune(conn)
         return
     session = session or http_client.get_session()
@@ -396,37 +524,104 @@ def run_raw_pipeline_once(
     limit_channels = int(getattr(config, "RAW_MAX_CHANNELS_PER_TICK", 3))
     limit_per_channel = int(getattr(config, "RAW_MAX_PER_CHANNEL", 10))
     channel_timeout = float(getattr(config, "RAW_CHANNEL_TIMEOUT_SEC", 30.0))
-    for source_url in _round_robin_slice(sources, limit_channels):
+    selected_sources = _round_robin_by_branch(branch_sources, limit_channels)
+    if not selected_sources:
+        _maybe_prune(conn)
+        return
+
+    stats_total_posts = 0
+    stats_new_posts = 0
+    stats_dup_msg = 0
+    stats_dup_links = 0
+    stats_publish_fail = 0
+    stats_fetch_errors = 0
+
+    for branch_name, source_url in selected_sources:
         start_ts = time.monotonic()
         try:
             posts = fetch_tg_web_feed(session, source_url, timeout=timeout)
-            log.info("[RAW] fetch: %s -> OK %d", source_url, len(posts))
+            duration = time.monotonic() - start_ts
+            log.info(
+                "[RAW] fetch: branch=%s url=%s -> OK %d (%.2fs)",
+                branch_name,
+                source_url,
+                len(posts),
+                duration,
+            )
         except requests.RequestException as exc:
-            log.warning("[RAW] fetch: %s -> FAIL %s", source_url, exc)
+            stats_fetch_errors += 1
+            log.warning(
+                "[RAW] fetch: branch=%s url=%s -> FAIL %s",
+                branch_name,
+                source_url,
+                exc,
+                exc_info=True,
+            )
             continue
         except Exception as exc:
-            log.warning("[RAW] fetch: %s -> FAIL %s", source_url, exc)
+            stats_fetch_errors += 1
+            log.exception(
+                "[RAW] fetch: branch=%s url=%s -> unexpected error",
+                branch_name,
+                source_url,
+            )
             continue
 
         new_count = 0
+        bypass_dedup = bool(getattr(config, "RAW_BYPASS_DEDUP", False))
         for post in posts:
             if time.monotonic() - start_ts > channel_timeout:
                 log.warning("[RAW] fetch: %s -> watchdog timeout reached", source_url)
                 break
             msg_key = raw_build_msg_key(post)
             channel_key = _raw_channel_key(source_url, alias=post.alias)
-            if not getattr(config, "RAW_BYPASS_DEDUP", False) and raw_is_dup(conn, channel_key, msg_key):
+            if not bypass_dedup and raw_is_dup(conn, channel_key, msg_key):
+                stats_dup_msg += 1
                 log.info(
-                    "[RAW] dup: %s key=%s — SKIP",
+                    "[RAW] dup: branch=%s url=%s key=%s — SKIP",
+                    branch_name,
                     source_url,
                     _short_key_repr(msg_key),
                 )
                 continue
+            link_keys = _link_keys_from_post(post)
+            if not bypass_dedup:
+                duplicate_link = next(
+                    (key for key in link_keys if raw_link_is_dup(conn, key)),
+                    None,
+                )
+                if duplicate_link is not None:
+                    stats_dup_links += 1
+                    log.info(
+                        "[RAW] dup-link: branch=%s url=%s link=%s — SKIP",
+                        branch_name,
+                        source_url,
+                        duplicate_link,
+                    )
+                    continue
             if publish_to_raw_review(post):
                 raw_mark_seen(conn, channel_key, msg_key, post.permalink or source_url)
+                raw_mark_links(conn, link_keys, post.permalink or source_url)
+                conn.commit()
                 new_count += 1
+                stats_new_posts += 1
+            else:
+                stats_publish_fail += 1
             if new_count >= limit_per_channel:
                 break
+        stats_total_posts += len(posts)
 
     _maybe_prune(conn)
+
+    log.info(
+        "[RAW] summary: branches=%d channels=%d fetched=%d new=%d dup_msg=%d dup_link=%d fetch_errors=%d publish_fail=%d",
+        len({branch for branch, _ in selected_sources}),
+        len(selected_sources),
+        stats_total_posts,
+        stats_new_posts,
+        stats_dup_msg,
+        stats_dup_links,
+        stats_fetch_errors,
+        stats_publish_fail,
+    )
 
