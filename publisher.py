@@ -1003,8 +1003,13 @@ def _send_with_retry(action: Callable[[], Optional[str]], cfg=config) -> Optiona
     for attempt in range(retries + 1):
         try:
             mid = action()
-        except Exception:
-            log.exception("Ошибка отправки (попытка %s)", attempt + 1)
+        except Exception as exc:
+            log.warning(
+                "Ошибка отправки (попытка %s): %s",
+                attempt + 1,
+                exc,
+                exc_info=True,
+            )
             mid = None
         if mid:
             if attempt:
