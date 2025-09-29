@@ -11,7 +11,6 @@ import classifieds
 import config
 import dedup
 import db
-import fetcher
 import filters
 import http_client
 import moderation
@@ -85,31 +84,24 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             logger.warning("[RAW] pipeline error: %s", exc)
 
     items_iter: Iterable[Dict[str, Any]]
-    if getattr(config, "ONLY_TELEGRAM", False):
-        if not getattr(config, "TELEGRAM_AUTO_FETCH", True):
-            logger.info(
-                "SOURCE_MODE=TELEGRAM_ONLY: TELEGRAM_AUTO_FETCH=0, загрузка Telegram пропущена."
-            )
-            items_iter = []
-        else:
-            from telegram_fetcher import fetch_from_telegram
-
-            items_iter = list(
-                fetch_from_telegram(
-                    getattr(config, "TELEGRAM_MODE", "mtproto"),
-                    getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"),
-                    getattr(config, "TELEGRAM_FETCH_LIMIT", 30),
-                )
-            )
-            logger.info(
-                "SOURCE_MODE=TELEGRAM_ONLY: получено %d элементов из Telegram",
-                len(items_iter),
-            )
+    if not getattr(config, "TELEGRAM_AUTO_FETCH", True):
+        logger.info(
+            "TELEGRAM_AUTO_FETCH=0, загрузка Telegram пропущена; парсинг сайтов отключён."
+        )
+        items_iter = []
     else:
+        from telegram_fetcher import fetch_from_telegram
+
         items_iter = list(
-            fetcher.fetch_all(
-                config.SOURCES, limit_per_source=config.FETCH_LIMIT_PER_SOURCE
+            fetch_from_telegram(
+                getattr(config, "TELEGRAM_MODE", "mtproto"),
+                getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"),
+                getattr(config, "TELEGRAM_FETCH_LIMIT", 30),
             )
+        )
+        logger.info(
+            "Загрузка из Telegram: получено %d элементов (парсинг сайтов отключён)",
+            len(items_iter),
         )
 
     seen_urls: set = set()
