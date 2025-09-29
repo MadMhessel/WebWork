@@ -93,9 +93,36 @@ def init_logging(cfg: Any = config) -> None:
     if _LOGGING_INITIALIZED:
         return
 
+    log_dir_candidates: list[Path] = []
+
+    configured_dir = getattr(cfg, "LOG_DIR", None)
+    if configured_dir:
+        log_dir_candidates.append(Path(str(configured_dir)).expanduser())
+
     log_dir_name = getattr(cfg, "LOG_DIR_NAME", "logs") or "logs"
-    log_dir = Path(__file__).resolve().parent / log_dir_name
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dir_path = Path(str(log_dir_name)).expanduser()
+    if log_dir_path.is_absolute():
+        log_dir_candidates.append(log_dir_path)
+    else:
+        config_dir = getattr(cfg, "CONFIG_DIR", None)
+        if config_dir:
+            log_dir_candidates.append(Path(str(config_dir)) / log_dir_path)
+        # fall back to the repository root (next to this file)
+        log_dir_candidates.append(Path(__file__).resolve().parent / log_dir_path)
+
+    log_dir: Path | None = None
+    for candidate in log_dir_candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        log_dir = candidate
+        break
+
+    if log_dir is None:
+        raise OSError(
+            "Не удалось создать директорию для логов. Проверьте настройки LOG_DIR/LOG_DIR_NAME"
+        )
 
     formatter_name = "standard"
     level = getattr(cfg, "LOG_LEVEL", "INFO").upper()
@@ -179,6 +206,7 @@ def init_logging(cfg: Any = config) -> None:
     logging.getLogger().addFilter(SecretsFilter())
 
     _LOGGING_INITIALIZED = True
+    assert log_dir is not None  # for type-checkers
     _LOG_DIR = log_dir
 
     get_logger().info("Логирование инициализировано (директория: %s)", log_dir)
