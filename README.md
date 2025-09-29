@@ -86,6 +86,33 @@ pip install beautifulsoup4
 
 Дополнительные переменные описаны в коде (`config.py`, `webwork/config.py`).
 
+### Профили конфигурации
+
+Для быстрого переключения режимов используйте файл `profiles.yaml`. Укажите имя
+профиля в переменной окружения `NEWSBOT_PROFILE` (или `NEWSBOT_MODE`), чтобы
+подставить набор переменных перед запуском пайплайна. Файл ищется в
+`~/.config/NewsBot/profiles.yaml`, рядом с исходниками или в пути из
+`NEWSBOT_PROFILE_PATH`.
+
+Пример запуска режима только Telegram:
+
+```bash
+NEWSBOT_PROFILE=telegram-only python main.py
+```
+
+Любые переменные, указанные напрямую в окружении или `.env`, имеют приоритет
+над значениями из профиля. Чтобы принудительно перезаписать конкретное
+значение, воспользуйтесь расширенной формой в `profiles.yaml`:
+
+```yaml
+lightweight:
+  extends: default
+  settings:
+    FETCH_LIMIT_PER_SOURCE:
+      value: 10
+      override: true
+```
+
 ## Файлы ссылок
 
 * `telegram_links.txt` — основной список каналов. Формат: одна ссылка вида
@@ -113,6 +140,27 @@ python -m config init            # однократно, создаёт ~/.confi
 python main.py                   # основная лента
 python raw_pipeline.py           # при необходимости запустить RAW отдельно
 ```
+
+### Интерактивный запуск и настройка
+
+Для удобной смены ключей и переменных окружения используйте интерактивный
+интерфейс `tools/launcher.py`:
+
+```bash
+python -m tools.launcher
+```
+
+Скрипт предложит ввести токены и ID каналов, подскажет доступные профили из
+`profiles.yaml`, сохранит значения в `~/.config/NewsBot/.env` и запустит
+указанный скрипт (по умолчанию `main.py`). Чтобы запустить RAW-пайплайн через
+интерфейс, передайте имя скрипта:
+
+```bash
+python -m tools.launcher --script raw_pipeline.py
+```
+
+Дополнительные переменные можно передавать флагом `--set`, например
+`--set DRY_RUN=1 LOG_LEVEL=DEBUG`.
 
 ### Windows
 
