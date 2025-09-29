@@ -599,10 +599,11 @@ def run_raw_pipeline_once(
                         duplicate_link,
                     )
                     continue
-            if publish_to_raw_review(post):
-                raw_mark_seen(conn, channel_key, msg_key, post.permalink or source_url)
-                raw_mark_links(conn, link_keys, post.permalink or source_url)
-                conn.commit()
+            published = publish_to_raw_review(post)
+            raw_mark_seen(conn, channel_key, msg_key, post.permalink or source_url)
+            raw_mark_links(conn, link_keys, post.permalink or source_url)
+            conn.commit()
+            if published:
                 new_count += 1
                 stats_new_posts += 1
             else:
