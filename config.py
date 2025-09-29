@@ -1,6 +1,7 @@
+import logging
 import os
-from urllib.parse import urlparse
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from platformdirs import user_config_dir
@@ -9,6 +10,8 @@ from webwork import dedup_config as _dedup_cfg_loader
 from webwork import http_cfg as _http_cfg_loader
 from webwork import raw_config as _raw_cfg_loader
 from webwork import telegram_cfg as _telegram_cfg_loader
+
+logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - список источников региона
     from sources_nn import SOURCES_NN, SOURCES_BY_DOMAIN, SOURCES_BY_ID
@@ -69,6 +72,16 @@ TELEGRAM_BOT_TOKEN: str = BOT_TOKEN
 _CHANNEL_TEXT_VALUE = (_TELEGRAM_CFG.channel_text_id or DEFAULT_CHANNEL_ID or "").strip()
 _CHANNEL_MEDIA_VALUE = (_TELEGRAM_CFG.channel_media_id or _CHANNEL_TEXT_VALUE).strip()
 _CHANNEL_LEGACY_VALUE = (_TELEGRAM_CFG.legacy_channel_id or _CHANNEL_TEXT_VALUE).strip()
+if not _CHANNEL_TEXT_VALUE and _CHANNEL_LEGACY_VALUE:
+    logger.warning(
+        "CHANNEL_TEXT_CHAT_ID не задан, используется legacy CHANNEL_CHAT_ID=%s",
+        _CHANNEL_LEGACY_VALUE,
+    )
+if not _CHANNEL_MEDIA_VALUE and _CHANNEL_LEGACY_VALUE:
+    logger.warning(
+        "CHANNEL_MEDIA_CHAT_ID не задан, используется legacy CHANNEL_CHAT_ID=%s",
+        _CHANNEL_LEGACY_VALUE,
+    )
 CHANNEL_TEXT_CHAT_ID: str | int = _coerce_chat(_CHANNEL_TEXT_VALUE)
 CHANNEL_MEDIA_CHAT_ID: str | int = _coerce_chat(_CHANNEL_MEDIA_VALUE)
 CHANNEL_ID: str = str(CHANNEL_TEXT_CHAT_ID) if CHANNEL_TEXT_CHAT_ID else _CHANNEL_TEXT_VALUE
@@ -187,8 +200,8 @@ LOOP_DELAY_SECS: int = int(os.getenv("LOOP_DELAY_SECS", "600"))
 ONLY_TELEGRAM: bool = os.getenv("ONLY_TELEGRAM", "false").lower() in {"1", "true", "yes"}
 
 # режим получения новостей из Telegram
-_TELEGRAM_MODE_RAW = os.getenv("TELEGRAM_MODE", "web").strip().lower()
-TELEGRAM_MODE: str = _TELEGRAM_MODE_RAW or "web"
+_TELEGRAM_MODE_RAW = os.getenv("TELEGRAM_MODE", "mtproto").strip().lower()
+TELEGRAM_MODE: str = _TELEGRAM_MODE_RAW or "mtproto"
 
 # путь к списку телеграм-каналов (по одной ссылке на строку)
 TELEGRAM_LINKS_FILE = os.getenv("TELEGRAM_LINKS_FILE", "telegram_links.txt").strip()
