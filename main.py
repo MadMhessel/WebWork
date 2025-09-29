@@ -72,6 +72,11 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 raw_force_run = bool(raw_sources)
 
     if getattr(config, "RAW_STREAM_ENABLED", False) or raw_force_run:
+        logger.info(
+            "[RAW] pipeline: start (force=%s, sources=%d)",
+            raw_force_run,
+            len(raw_sources or []),
+        )
         try:
             raw_pipeline.run_raw_pipeline_once(
                 http_client.get_session(),
@@ -80,8 +85,8 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 force=raw_force_run,
                 sources=raw_sources if raw_force_run else None,
             )
-        except Exception as exc:
-            logger.warning("[RAW] pipeline error: %s", exc)
+        except Exception:
+            logger.exception("[RAW] pipeline error")
 
     items_iter: Iterable[Dict[str, Any]]
     if not getattr(config, "TELEGRAM_AUTO_FETCH", True):

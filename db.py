@@ -154,6 +154,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(channel, msg_key)
         );
         CREATE INDEX IF NOT EXISTS idx_raw_dedup_ts ON raw_dedup(first_seen_ts);
+
+        CREATE TABLE IF NOT EXISTS raw_link_dedup (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            link_key TEXT NOT NULL UNIQUE,
+            first_seen_ts INTEGER NOT NULL,
+            origin_url TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_raw_link_dedup_ts ON raw_link_dedup(first_seen_ts);
         """
     )
 
