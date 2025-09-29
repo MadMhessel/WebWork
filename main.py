@@ -3,7 +3,7 @@ import argparse
 import sys
 import time
 import threading
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import bot_updates
@@ -59,9 +59,28 @@ def _publisher_send_direct(item: Dict) -> bool:
     return bool(mid)
 
 def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
-    if getattr(config, "RAW_STREAM_ENABLED", False):
+    raw_force_run = False
+    raw_sources: Optional[List[str]] = None
+    if not getattr(config, "RAW_STREAM_ENABLED", False):
+        raw_path = getattr(config, "RAW_TELEGRAM_SOURCES_FILE", "")
+        if raw_path:
+            try:
+                raw_sources = raw_pipeline.load_sources_file(raw_path)
+            except Exception as exc:
+                logger.warning("[RAW] sources load error: %s", exc)
+                raw_sources = []
+            else:
+                raw_force_run = bool(raw_sources)
+
+    if getattr(config, "RAW_STREAM_ENABLED", False) or raw_force_run:
         try:
-            raw_pipeline.run_raw_pipeline_once(http_client.get_session(), conn, logger)
+            raw_pipeline.run_raw_pipeline_once(
+                http_client.get_session(),
+                conn,
+                logger,
+                force=raw_force_run,
+                sources=raw_sources if raw_force_run else None,
+            )
         except Exception as exc:
             logger.warning("[RAW] pipeline error: %s", exc)
 
