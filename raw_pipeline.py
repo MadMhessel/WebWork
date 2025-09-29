@@ -99,6 +99,17 @@ def raw_build_msg_key(post: RawPost) -> str:
     return f"sha1:{digest}"
 
 
+def _raw_channel_key(source_url: str, alias: str = "") -> str:
+    alias = (alias or "").strip().lstrip("@")
+    if alias:
+        return alias.lower()
+    resolved = _resolve_alias(source_url)
+    if resolved:
+        return resolved.lower()
+    normalized = source_url.strip().rstrip("/")
+    return normalized.lower()
+
+
 def raw_is_dup(conn, channel: str, msg_key: str) -> bool:
     cur = conn.execute(
         "SELECT 1 FROM raw_dedup WHERE channel = ? AND msg_key = ? LIMIT 1",
@@ -403,7 +414,8 @@ def run_raw_pipeline_once(
                 log.warning("[RAW] fetch: %s -> watchdog timeout reached", source_url)
                 break
             msg_key = raw_build_msg_key(post)
-            if not getattr(config, "RAW_BYPASS_DEDUP", False) and raw_is_dup(conn, source_url, msg_key):
+            channel_key = _raw_channel_key(source_url, alias=post.alias)
+            if not getattr(config, "RAW_BYPASS_DEDUP", False) and raw_is_dup(conn, channel_key, msg_key):
                 log.info(
                     "[RAW] dup: %s key=%s — SKIP",
                     source_url,
@@ -411,7 +423,7 @@ def run_raw_pipeline_once(
                 )
                 continue
             if publish_to_raw_review(post):
-                raw_mark_seen(conn, source_url, msg_key, post.permalink or source_url)
+                raw_mark_seen(conn, channel_key, msg_key, post.permalink or source_url)
                 new_count += 1
             if new_count >= limit_per_channel:
                 break
