@@ -216,11 +216,12 @@ python main.py
 * **Rate limit/429** — увеличьте `HTTP_BACKOFF` или уменьшите `TELEGRAM_FETCH_LIMIT`.
 * **HTML parser fails** — включите MTProto (`TELEGRAM_MODE=mtproto`) или установите
   `beautifulsoup4` для fallback-режима.
-* **Логи пустые** — проверьте каталог `./logs` и переменную `LOG_DIR_NAME`.
+* **Логи пустые** — проверьте каталог `~/NewsBot/logs` (или путь из `LOG_DIR`/`LOG_DIR_NAME`).
 
 ## Отладка
 
-Логи пишутся в `./logs` (ротация по размеру). Основные файлы: `app.log`,
+Логи пишутся в `~/NewsBot/logs` (можно изменить через `LOG_DIR` или `LOG_DIR_NAME`,
+есть fallback в `./logs`) с ротацией по размеру. Основные файлы: `app.log`,
 `errors.log`, `bot.log`, `audit.log`, `sql.log` (по запросу). Уровень логов
 управляется переменной `LOG_LEVEL`.
 

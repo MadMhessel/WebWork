@@ -156,6 +156,7 @@ REGION_HINT: str = os.getenv("REGION_HINT", "Нижегородская обла
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_DIR_NAME: str = os.getenv("LOG_DIR_NAME", "logs").strip() or "logs"
+LOG_DIR: str = os.getenv("LOG_DIR", "").strip()
 LOG_ROTATE_BYTES: int = int(os.getenv("LOG_ROTATE_BYTES", str(10 * 1024 * 1024)))
 LOG_BACKUP_COUNT: int = int(os.getenv("LOG_BACKUP_COUNT", "7"))
 LOG_SQL_DEBUG: bool = os.getenv("LOG_SQL_DEBUG", "false").lower() in {"1", "true", "yes"}
