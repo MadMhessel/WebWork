@@ -1,0 +1,44 @@
+# Профили конфигурации NewsBot. Значения профилей задают переменные окружения
+# (или записи в .env), которые используются модулем config.py. Любой профиль
+# можно расширять через ключ `extends`.
+
+default:
+  description: "Сбор новостей из RSS и сайтов, включены модерация и перепись"
+  settings:
+    ENABLE_MODERATION: true
+    ENABLE_REWRITE: true
+    STRICT_FILTER: false
+    ONLY_TELEGRAM: false
+    RAW_STREAM_ENABLED: false
+    TELEGRAM_AUTO_FETCH: true
+    FETCH_LIMIT_PER_SOURCE: 30
+    LOOP_DELAY_SECS: 600
+
+telegram-only:
+  description: "Работаем только с Telegram-каналами"
+  extends: default
+  settings:
+    ONLY_TELEGRAM: true
+    TELEGRAM_MODE: mtproto
+    TELEGRAM_FETCH_LIMIT: 30
+
+raw-review:
+  description: "Включает быстрый сырый поток без фильтров, отправляет в ревью"
+  extends: default
+  settings:
+    RAW_STREAM_ENABLED: true
+    RAW_BYPASS_FILTERS: true
+    RAW_BYPASS_DEDUP: true
+    ENABLE_MODERATION:
+      value: true
+      override: true
+
+lightweight:
+  description: "Минимальный режим без переписывания и тяжёлых фильтров"
+  extends: default
+  settings:
+    ENABLE_REWRITE: false
+    STRICT_FILTER: true
+    FETCH_LIMIT_PER_SOURCE:
+      value: 10
+      override: true

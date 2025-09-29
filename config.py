@@ -11,6 +11,8 @@ from webwork import http_cfg as _http_cfg_loader
 from webwork import raw_config as _raw_cfg_loader
 from webwork import telegram_cfg as _telegram_cfg_loader
 
+from config_profiles import ProfileError, activate_profile
+
 logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - список источников региона
@@ -30,6 +32,28 @@ ENV_PATH = CONFIG_DIR / ".env"
 # First load persistent config, then allow local .env to override for development
 load_dotenv(ENV_PATH)
 load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+
+try:
+    _PROFILE = activate_profile(config_dir=CONFIG_DIR)
+except ProfileError as exc:
+    logger.warning("Ошибка загрузки профиля конфигурации: %s", exc)
+else:
+    if _PROFILE:
+        logger.info(
+            "Активирован профиль '%s' (%s)",
+            _PROFILE.name,
+            _PROFILE.source,
+        )
+        if _PROFILE.applied:
+            logger.debug(
+                "Параметры, добавленные профилем: %s",
+                ", ".join(f"{k}={v}" for k, v in sorted(_PROFILE.applied.items())),
+            )
+        if _PROFILE.skipped:
+            logger.debug(
+                "Параметры, сохранённые из окружения: %s",
+                ", ".join(sorted(_PROFILE.skipped)),
+            )
 
 # Load hard-coded defaults if available
 try:  # pragma: no cover - simple fallback handling
