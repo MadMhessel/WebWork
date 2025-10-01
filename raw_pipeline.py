@@ -15,7 +15,8 @@ import requests
 from bs4 import BeautifulSoup
 
 import http_client
-from webwork.dedup import canonical_url
+from dedup import SeenStore
+from webwork.dedup import canonical_url, stable_text_key
 
 try:  # pragma: no cover - production style imports
     from . import config, utils, publisher
@@ -533,8 +534,16 @@ def run_raw_pipeline_once(
     stats_new_posts = 0
     stats_dup_msg = 0
     stats_dup_links = 0
+    stats_dedup_guard = 0
     stats_publish_fail = 0
     stats_fetch_errors = 0
+
+    dedup_db_path = getattr(
+        config,
+        "DEDUP_DB_PATH",
+        getattr(config, "SEEN_DB_PATH", "state/seen.sqlite3"),
+    )
+    seen_store = SeenStore(dedup_db_path)
 
     for branch_name, source_url in selected_sources:
         start_ts = time.monotonic()
@@ -599,11 +608,66 @@ def run_raw_pipeline_once(
                         duplicate_link,
                     )
                     continue
+            url_candidate = (post.permalink or (post.links[0] if post.links else "") or "").strip()
+            if not url_candidate:
+                url_candidate = source_url
+            chan_value = (post.alias or "").strip().lstrip("@").lower()
+            if not chan_value:
+                chan_value = channel_key
+            msg_id = str(post.message_id or "").strip()
+            parsed_source = urlparse(post.permalink or post.channel_url or source_url)
+            source_domain = (parsed_source.hostname or "").lower()
+            text_item = {
+                "title": post.summary or "",
+                "content": post.content_text or "",
+                "source_domain": source_domain,
+                "source_id": source_domain,
+            }
+            key_candidates = []
+            if url_candidate:
+                key_candidates.append(("url", canonical_url(url_candidate)))
+            if chan_value and msg_id:
+                key_candidates.append(("tg", f"{chan_value}:{msg_id}"))
+            key_candidates.append(("text", stable_text_key(text_item)))
+
+            dedup_keys: List[Tuple[str, str]] = []
+            skip_due_to_seen = False
+            title_hint = (post.summary or post.content_text or "").strip()
+            for kind, key in key_candidates:
+                if not key:
+                    continue
+                dedup_keys.append((kind, key))
+                if seen_store.is_seen(kind, key):
+                    stats_dedup_guard += 1
+                    log.info(
+                        "[RAW][DEDUP] SKIP kind=%s key=%s title=%r url=%r chan=%r msg_id=%r",
+                        kind,
+                        key,
+                        title_hint,
+                        url_candidate,
+                        chan_value,
+                        msg_id,
+                    )
+                    skip_due_to_seen = True
+                    break
+
+            if skip_due_to_seen:
+                continue
+
+            key_repr = dedup_keys[0][1] if dedup_keys else ""
+            log.info(
+                "[RAW][SEND] %s | reason=no-dup | key=%s",
+                title_hint[:80],
+                key_repr or "<none>",
+            )
+
             published = publish_to_raw_review(post)
-            raw_mark_seen(conn, channel_key, msg_key, post.permalink or source_url)
-            raw_mark_links(conn, link_keys, post.permalink or source_url)
-            conn.commit()
             if published:
+                raw_mark_seen(conn, channel_key, msg_key, post.permalink or source_url)
+                raw_mark_links(conn, link_keys, post.permalink or source_url)
+                conn.commit()
+                for kind, key in dedup_keys:
+                    seen_store.mark(kind, key)
                 new_count += 1
                 stats_new_posts += 1
             else:
@@ -614,12 +678,17 @@ def run_raw_pipeline_once(
 
     _maybe_prune(conn)
 
+    summary_tpl = (
+        "[RAW] summary: branches=%d channels=%d fetched=%d new=%d guard_skip=%d "
+        "dup_msg=%d dup_link=%d fetch_errors=%d publish_fail=%d"
+    )
     log.info(
-        "[RAW] summary: branches=%d channels=%d fetched=%d new=%d dup_msg=%d dup_link=%d fetch_errors=%d publish_fail=%d",
+        summary_tpl,
         len({branch for branch, _ in selected_sources}),
         len(selected_sources),
         stats_total_posts,
         stats_new_posts,
+        stats_dedup_guard,
         stats_dup_msg,
         stats_dup_links,
         stats_fetch_errors,

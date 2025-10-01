@@ -8,11 +8,25 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 from typing import Iterable, Optional
-from urllib.parse import parse_qsl, urlsplit, urlunsplit, urlencode
+from urllib.parse import parse_qsl, urlparse, urlunparse, urlencode
 
 from . import dedup_config
 
 logger = logging.getLogger(__name__)
+
+
+TRACKING_PARAMS = {
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "yclid",
+    "gclid",
+    "fbclid",
+    "_ga",
+    "_gl",
+}
 
 
 def canonical_url(url: Optional[str]) -> str:
@@ -20,19 +34,24 @@ def canonical_url(url: Optional[str]) -> str:
 
     if not url:
         return ""
-    parsed = urlsplit(url)
-    clean_path = parsed.path.rstrip("/")
-    query_params = [
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    clean_query = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if not key.lower().startswith("utm_")
+        if key not in TRACKING_PARAMS
     ]
-    clean_query = urlencode(query_params, doseq=True)
-    return urlunsplit((parsed.scheme, parsed.netloc, clean_path, clean_query, ""))
+    scheme = parsed.scheme.lower() or "https"
+    path = parsed.path or "/"
+    return urlunparse((scheme, host, path, "", urlencode(clean_query, doseq=True), ""))
 
 
 _TITLE_REPLACEMENTS = re.compile(r"\((фото|видео)\)", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
+_SPACE = re.compile(r"\s+", re.U)
+PUNCT = re.compile(r"[^\w\u0400-\u04FF]+", re.U)
 
 
 def title_norm(title: Optional[str]) -> str:
@@ -46,6 +65,24 @@ def title_norm(title: Optional[str]) -> str:
     lowered = re.sub(r"[^0-9a-zа-я ]+", " ", lowered)
     lowered = _WHITESPACE_RE.sub(" ", lowered)
     return lowered.strip()
+
+
+def normalize_text(value: Optional[str]) -> str:
+    """Normalise ``value`` by stripping punctuation and collapsing whitespace."""
+
+    cleaned = PUNCT.sub(" ", (value or "")).strip().lower()
+    return _SPACE.sub(" ", cleaned)
+
+
+def stable_text_key(item: dict) -> str:
+    """Build a stable hash key for fallback deduplication by text content."""
+
+    title = normalize_text(item.get("title") or "")
+    text = normalize_text(item.get("content") or item.get("text") or "")
+    source = (item.get("source_domain") or item.get("source_id") or "").lower()
+    digest = hashlib.sha1()
+    digest.update(f"{source}|{title}|{text[:500]}".encode("utf-8", "ignore"))
+    return digest.hexdigest()
 
 
 def dedup_key(url: Optional[str], title: Optional[str], *, algorithm: str = "sha256") -> str:

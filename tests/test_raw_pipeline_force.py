@@ -24,6 +24,12 @@ def test_raw_pipeline_runs_when_forced(monkeypatch, tmp_path, force_flag):
     monkeypatch.setattr(raw_pipeline.config, "RAW_STREAM_ENABLED", force_flag, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_BYPASS_DEDUP", False, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_REVIEW_CHAT_ID", "@raw_mod", raising=False)
+    monkeypatch.setattr(
+        raw_pipeline.config,
+        "DEDUP_DB_PATH",
+        str(tmp_path / "raw_seen.sqlite3"),
+        raising=False,
+    )
 
     # Provide a sources file to mirror production behaviour when not enabled explicitly
     raw_file = tmp_path / "telegram_links_raw.txt"
@@ -73,10 +79,16 @@ def test_raw_pipeline_runs_when_forced(monkeypatch, tmp_path, force_flag):
     assert len(published) == 1
 
 
-def test_raw_pipeline_detects_duplicates_across_url_variants(monkeypatch):
+def test_raw_pipeline_detects_duplicates_across_url_variants(monkeypatch, tmp_path):
     monkeypatch.setattr(raw_pipeline.config, "RAW_STREAM_ENABLED", True, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_BYPASS_DEDUP", False, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_REVIEW_CHAT_ID", "@raw_mod", raising=False)
+    monkeypatch.setattr(
+        raw_pipeline.config,
+        "DEDUP_DB_PATH",
+        str(tmp_path / "raw_seen.sqlite3"),
+        raising=False,
+    )
 
     def fake_fetch(session, source_url, timeout):
         return [
@@ -128,12 +140,18 @@ def test_raw_pipeline_detects_duplicates_across_url_variants(monkeypatch):
     assert len(published) == 1
 
 
-def test_raw_pipeline_skips_duplicate_links(monkeypatch):
+def test_raw_pipeline_skips_duplicate_links(monkeypatch, tmp_path):
     monkeypatch.setattr(raw_pipeline.config, "RAW_STREAM_ENABLED", True, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_BYPASS_DEDUP", False, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_REVIEW_CHAT_ID", "@raw_mod", raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_MAX_CHANNELS_PER_TICK", 5, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_MAX_PER_CHANNEL", 5, raising=False)
+    monkeypatch.setattr(
+        raw_pipeline.config,
+        "DEDUP_DB_PATH",
+        str(tmp_path / "raw_seen.sqlite3"),
+        raising=False,
+    )
 
     sources = [
         "https://t.me/s/channel_one",
@@ -185,10 +203,16 @@ def test_raw_pipeline_skips_duplicate_links(monkeypatch):
     assert raw_pipeline.raw_link_is_dup(conn, raw_pipeline.canonical_url("https://example.com/news"))
 
 
-def test_raw_pipeline_records_failed_publication_once(monkeypatch):
+def test_raw_pipeline_records_failed_publication_once(monkeypatch, tmp_path):
     monkeypatch.setattr(raw_pipeline.config, "RAW_STREAM_ENABLED", True, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_BYPASS_DEDUP", False, raising=False)
     monkeypatch.setattr(raw_pipeline.config, "RAW_REVIEW_CHAT_ID", "@raw_mod", raising=False)
+    monkeypatch.setattr(
+        raw_pipeline.config,
+        "DEDUP_DB_PATH",
+        str(tmp_path / "raw_seen.sqlite3"),
+        raising=False,
+    )
 
     def fake_fetch(session, source_url, timeout):
         return [
@@ -227,7 +251,8 @@ def test_raw_pipeline_records_failed_publication_once(monkeypatch):
         sources=["https://t.me/s/sample_channel"],
     )
 
-    # A failed publish should not be retried on the next tick thanks to dedup.
+    # A failed publish should be retried on the next tick because dedup is applied
+    # only after a successful send.
     raw_pipeline.run_raw_pipeline_once(
         None,
         conn,
@@ -236,7 +261,7 @@ def test_raw_pipeline_records_failed_publication_once(monkeypatch):
         sources=["https://t.me/s/sample_channel"],
     )
 
-    assert len(attempts) == 1
+    assert len(attempts) == 2
 
 def test_load_sources_by_branch_groups_channels(tmp_path):
     content = """

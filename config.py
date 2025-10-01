@@ -63,6 +63,7 @@ try:  # pragma: no cover - simple fallback handling
         ENABLE_MODERATION as DEFAULT_ENABLE_MODERATION,
         REVIEW_CHAT_ID as DEFAULT_REVIEW_CHAT_ID,
         MODERATOR_IDS as DEFAULT_MODERATOR_IDS,
+        DEDUP_DB_PATH as DEFAULT_DEDUP_DB_PATH,
     )
 except Exception:  # pragma: no cover - executed only when defaults missing
     DEFAULT_BOT_TOKEN = ""
@@ -70,6 +71,7 @@ except Exception:  # pragma: no cover - executed only when defaults missing
     DEFAULT_ENABLE_MODERATION = False
     DEFAULT_REVIEW_CHAT_ID = ""
     DEFAULT_MODERATOR_IDS: set[int] = set()
+    DEFAULT_DEDUP_DB_PATH = os.path.join("state", "seen.sqlite3")
 
 
 _TELEGRAM_CFG = _telegram_cfg_loader()
@@ -258,7 +260,10 @@ RAW_BYPASS_DEDUP: bool = _env_bool(
     "RAW_BYPASS_DEDUP", bool(getattr(_RAW_CFG, "bypass_dedup", False))
 )
 RAW_CHANNEL_CHAT_ID: str = os.getenv("RAW_CHANNEL_CHAT_ID", "").strip()
-SEEN_DB_PATH: str = os.getenv("SEEN_DB_PATH", "seen.sqlite3").strip() or "seen.sqlite3"
+DEDUP_DB_PATH: str = (
+    os.getenv("DEDUP_DB_PATH", DEFAULT_DEDUP_DB_PATH).strip() or DEFAULT_DEDUP_DB_PATH
+)
+SEEN_DB_PATH: str = os.getenv("SEEN_DB_PATH", DEDUP_DB_PATH).strip() or DEDUP_DB_PATH
 RAW_DEDUP_LOG: bool = _env_bool("RAW_DEDUP_LOG", True)
 RAW_MAX_PER_CHANNEL: int = int(os.getenv("RAW_MAX_PER_CHANNEL", "10"))
 RAW_MAX_CHANNELS_PER_TICK: int = int(os.getenv("RAW_MAX_CHANNELS_PER_TICK", "3"))
