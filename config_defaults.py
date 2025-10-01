@@ -9,8 +9,11 @@ Storing credentials in source code is insecure and not recommended for
 production deployments.
 """
 
+import os
+
 BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 CHANNEL_ID = "@your_main_channel"
 ENABLE_MODERATION = True
 REVIEW_CHAT_ID = "@your_review_channel"
 MODERATOR_IDS = {123456789}
+DEDUP_DB_PATH = os.getenv("DEDUP_DB_PATH", os.path.join("state", "seen.sqlite3"))

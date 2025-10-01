@@ -1,6 +1,9 @@
 # newsbot/dedup.py
 import hashlib
+import os
+import pathlib
 import re
+import sqlite3
 import time
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -14,7 +17,12 @@ except ImportError:  # pragma: no cover
     import utils  # type: ignore
 
 from logging_setup import get_logger
-from webwork.dedup import canonical_url, dedup_key as build_dedup_key, near_duplicate, title_norm
+from webwork.dedup import (
+    canonical_url,
+    dedup_key as build_dedup_key,
+    near_duplicate,
+    title_norm,
+)
 
 logger = get_logger(__name__)
 
@@ -157,6 +165,33 @@ def _jaccard(a: Sequence[str] | set[str], b: Sequence[str] | set[str]) -> float:
     if not union:
         return 0.0
     return len(set_a & set_b) / len(union)
+
+
+class SeenStore:
+    """Persistent storage for RAW deduplication guard."""
+
+    def __init__(self, path: str = os.path.join("state", "seen.sqlite3")) -> None:
+        self.path = path
+        directory = os.path.dirname(path) or "."
+        pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(self.path)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS seen(" "kind TEXT, key TEXT, ts INTEGER, PRIMARY KEY(kind, key))"
+        )
+
+    def is_seen(self, kind: str, key: str) -> bool:
+        cur = self.conn.execute(
+            "SELECT 1 FROM seen WHERE kind = ? AND key = ? LIMIT 1",
+            (kind, key),
+        )
+        return cur.fetchone() is not None
+
+    def mark(self, kind: str, key: str) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO seen(kind, key, ts) VALUES(?, ?, ?)",
+            (kind, key, int(time.time())),
+        )
+        self.conn.commit()
 
 
 def make_similarity_profile(title: str) -> Tuple[set[str], set[str]]:
