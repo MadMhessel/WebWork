@@ -57,10 +57,18 @@ def _publisher_send_direct(item: Dict) -> bool:
     )
     return bool(mid)
 
-def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
-    raw_force_run = False
+def run_once(
+    conn,
+    *,
+    raw_mode: str = "auto",
+) -> Tuple[int, int, int, int, int, int, int, int]:
+    raw_mode = raw_mode or "auto"
+    raw_only = raw_mode == "only"
+    raw_skip = raw_mode == "skip"
+    raw_force_run = raw_only
     raw_sources: Optional[List[str]] = None
-    if not getattr(config, "RAW_STREAM_ENABLED", False):
+    raw_stream_enabled = getattr(config, "RAW_STREAM_ENABLED", False)
+    if not raw_skip and (raw_only or not raw_stream_enabled):
         raw_path = getattr(config, "RAW_TELEGRAM_SOURCES_FILE", "")
         if raw_path:
             try:
@@ -69,9 +77,11 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
                 logger.warning("[RAW] sources load error: %s", exc)
                 raw_sources = []
             else:
-                raw_force_run = bool(raw_sources)
+                raw_force_run = raw_force_run or bool(raw_sources)
 
-    if getattr(config, "RAW_STREAM_ENABLED", False) or raw_force_run:
+    should_run_raw = (not raw_skip) and (raw_stream_enabled or raw_force_run)
+
+    if should_run_raw:
         logger.info(
             "[RAW] pipeline: start (force=%s, sources=%d)",
             raw_force_run,
@@ -87,6 +97,9 @@ def run_once(conn) -> Tuple[int, int, int, int, int, int, int, int]:
             )
         except Exception:
             logger.exception("[RAW] pipeline error")
+
+    if raw_only:
+        return (0, 0, 0, 0, 0, 0, 0, 0)
 
     items_iter: Iterable[Dict[str, Any]]
     if not getattr(config, "TELEGRAM_AUTO_FETCH", True):
@@ -364,16 +377,23 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--loop", action="store_true", help="Бесконечный цикл с паузой")
+    parser.add_argument("--only-raw", action="store_true", help="Запустить только RAW-поток")
+    parser.add_argument("--no-raw", action="store_true", help="Пропустить RAW-поток")
     args = parser.parse_args()
 
+    if args.only_raw and args.no_raw:
+        parser.error("Нельзя использовать одновременно --only-raw и --no-raw")
+
+    raw_mode = "only" if args.only_raw else "skip" if args.no_raw else "auto"
+
     if not args.loop:
-        run_once(conn)
+        run_once(conn, raw_mode=raw_mode)
         return 0
 
     logger.info("Старт бесконечного цикла. Пауза: %d сек.", config.LOOP_DELAY_SECS)
     while True:
         try:
-            run_once(conn)
+            run_once(conn, raw_mode=raw_mode)
             time.sleep(config.LOOP_DELAY_SECS)
         except KeyboardInterrupt:
             logger.warning("Остановка по Ctrl+C")
