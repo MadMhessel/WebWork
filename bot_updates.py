@@ -3,17 +3,15 @@ if __name__ == "__main__" or __package__ is None:
     import os, sys
     sys.path.insert(0, os.path.dirname(__file__))
 
-try:
-    from . import config, db, http_client, moderator, publisher  # type: ignore
-except Exception:
-    import config, db, http_client, moderator, publisher  # type: ignore
+import config
+import db
+import http_client
+import moderator
+import publisher
 
 import time
 
-try:
-    from .logging_setup import get_logger  # type: ignore
-except Exception:  # pragma: no cover
-    from logging_setup import get_logger  # type: ignore
+from logging_setup import get_logger
 
 logger = get_logger(__name__)
 

@@ -10,11 +10,8 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-try:
-    from . import config, publisher
-except ImportError:  # pragma: no cover
-    import config  # type: ignore
-    import publisher  # type: ignore
+import config
+import publisher
 
 from logging_setup import get_logger
 

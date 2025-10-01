@@ -11,10 +11,7 @@ import logging
 import sqlite3
 import time
 
-try:  # pragma: no cover - optional package-relative import
-    from . import config
-except Exception:  # pragma: no cover - fallback when run as script
-    import config  # type: ignore
+import config
 
 
 _LOG = logging.getLogger("webwork.raw")

@@ -11,11 +11,8 @@ from typing import Optional, Dict
 
 import requests
 
-try:  # pragma: no cover
-    from . import config, http_client
-except Exception:  # pragma: no cover
-    import config  # type: ignore
-    import http_client  # type: ignore
+import config
+import http_client
 
 from logging_setup import get_logger
 

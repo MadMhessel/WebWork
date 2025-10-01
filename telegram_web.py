@@ -19,10 +19,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
-try:  # pragma: no cover - optional import during tests
-    from . import config  # type: ignore
-except ImportError:  # pragma: no cover - executed for direct runs
-    import config  # type: ignore
+import config
 
 logger = logging.getLogger(__name__)
 

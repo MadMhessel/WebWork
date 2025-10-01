@@ -1,6 +1,7 @@
 import logging
 import os
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from platformdirs import user_config_dir
@@ -150,7 +151,19 @@ except Exception:  # pragma: no cover - executed only when defaults missing
 
 _TELEGRAM_CFG = _telegram_cfg_loader()
 _HTTP_CFG = _http_cfg_loader()
-_DEDUP_CFG = _dedup_cfg_loader()
+def _load_dedup_cfg(loader: Any):
+    if loader is None:
+        raise RuntimeError("dedup_config module not available")
+    if callable(loader):
+        return loader()
+    for attr in ("load", "dedup_cfg"):
+        target = getattr(loader, attr, None)
+        if callable(target):
+            return target()
+    raise TypeError("Unsupported dedup_config loader")
+
+
+_DEDUP_CFG = _load_dedup_cfg(_dedup_cfg_loader)
 _RAW_CFG = _raw_cfg_loader()
 
 

@@ -7,28 +7,23 @@ if __name__ == "__main__" or __package__ is None:
 
 import json
 import logging
+import re
+import sqlite3
 import time
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional, Sequence
-import re
-import sqlite3
 from urllib.parse import urlparse
 
 import requests
 
-from formatting import clean_html_tags, html_escape, truncate_by_chars
-
-import moderation
+import config
 import dedup
+import moderation
+import rewrite
 import seen_store
+from formatting import clean_html_tags, html_escape, truncate_by_chars
 from logging_setup import audit, get_logger, mask_secrets
-
-try:  # pragma: no cover - package import in production
-    from . import config, rewrite
-except ImportError:  # pragma: no cover - direct script execution
-    import config  # type: ignore
-    import rewrite  # type: ignore
 from webwork.utils.formatting import chunk_text, safe_format, TG_TEXT_LIMIT
 from webwork.router import route_and_publish
 

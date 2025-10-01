@@ -16,12 +16,9 @@ from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-try:
-    from . import config, db, utils
-except ImportError:  # pragma: no cover
-    import config  # type: ignore
-    import db  # type: ignore
-    import utils  # type: ignore
+import config
+import db
+import utils
 
 from logging_setup import get_logger
 from webwork.dedup import (

@@ -108,7 +108,9 @@ def near_duplicate(
 ) -> Optional[tuple[str, float]]:
     """Return the most similar candidate if "near duplicates" are enabled."""
 
-    cfg = dedup_config()
+    if dedup_config is None:
+        return None
+    cfg = dedup_config.load()
     if not cfg.near_duplicates_enabled:
         return None
     base = title_norm(title)
