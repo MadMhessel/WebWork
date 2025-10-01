@@ -1469,15 +1469,20 @@ class App(tk.Tk):
         self.txt_logs.configure(state="disabled")
 
     def on_state_change(self, state: str, code: int | None = None):
-        if state == "running":
-            self.lbl_status.configure(text="выполняется")
-            self._net_io_start = None
-        elif state == "stopped":
-            self.lbl_status.configure(text=f"завершено (код {code})")
-            self._net_io_start = None
-            if hasattr(self, "status_sys"):
-                self.status_sys.configure(text="CPU: —  MEM: —  NET: —/—")
-            self._schedule_repeat()
+        def _update():
+            if state == "running":
+                self.lbl_status.configure(text="выполняется")
+                self._net_io_start = None
+            elif state == "stopped":
+                self.lbl_status.configure(text=f"завершено (код {code})")
+                self._net_io_start = None
+                if hasattr(self, "status_sys"):
+                    self.status_sys.configure(text="CPU: —  MEM: —  NET: —/—")
+                self._schedule_repeat()
+
+        # on_state_change может вызываться из фонового потока ProcessRunner,
+        # поэтому переносим обновление UI в главный поток Tkinter.
+        self.after(0, _update)
 
     def _find_in_logs(self, pattern: str | None = None):
         pattern = (pattern or self.var_filter.get()).strip()
