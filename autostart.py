@@ -12,11 +12,13 @@ import tempfile
 import threading
 import subprocess
 import urllib.request
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog, ttk
+
+import yaml
 
 APP_NAME = "WebWork Manager"
 APP_VERSION = "3.0"
@@ -56,6 +58,99 @@ DEFAULT_ENV_KEYS = [
     ("CHANNEL_TEXT_CHAT_ID", ""),
     ("CHANNEL_MEDIA_CHAT_ID", ""),
 ]
+
+ENV_BOOL_KEYS = {
+    "DRY_RUN",
+    "ENABLE_MODERATION",
+    "NEAR_DUPLICATES_ENABLED",
+    "RAW_STREAM_ENABLED",
+    "RAW_BYPASS_FILTERS",
+    "RAW_BYPASS_DEDUP",
+}
+
+ENV_INT_KEYS = {
+    "CAPTION_LIMIT",
+    "TG_API_ID",
+    "TELETHON_API_ID",
+    "HTTP_TIMEOUT",
+    "HTTP_TIMEOUT_CONNECT",
+    "HTTP_RETRY_TOTAL",
+}
+
+ENV_FLOAT_KEYS = {
+    "NEAR_DUPLICATE_THRESHOLD",
+    "HTTP_BACKOFF",
+}
+
+ENV_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "TELEGRAM_MODE": {"type": "string", "enum": ["BOT_API", "MTPROTO", "WEB"]},
+        "CHANNEL_CHAT_ID": {"type": "string", "minLength": 1},
+        "CHANNEL_TEXT_CHAT_ID": {"type": "string"},
+        "CHANNEL_MEDIA_CHAT_ID": {"type": "string"},
+        "TG_API_ID": {"type": "integer"},
+        "TG_API_HASH": {"type": "string", "minLength": 1},
+        "TG_SESSION_FILE": {"type": "string"},
+        "TG_SESSION_STRING": {"type": "string"},
+        "TELETHON_API_ID": {"type": "integer"},
+        "TELETHON_API_HASH": {"type": "string", "minLength": 1},
+        "TELEGRAM_BOT_TOKEN": {"type": "string", "minLength": 1},
+        "NEAR_DUPLICATE_THRESHOLD": {"type": "number"},
+        "NEAR_DUPLICATES_ENABLED": {"type": "boolean"},
+        "ENABLE_MODERATION": {"type": "boolean"},
+        "RAW_STREAM_ENABLED": {"type": "boolean"},
+        "RAW_REVIEW_CHAT_ID": {"type": "string"},
+        "RAW_BYPASS_FILTERS": {"type": "boolean"},
+        "RAW_BYPASS_DEDUP": {"type": "boolean"},
+        "RAW_FORWARD_STRATEGY": {"type": "string", "enum": ["copy", "forward", "link"]},
+        "HTTP_TIMEOUT": {"type": "integer", "minimum": 0},
+        "HTTP_TIMEOUT_CONNECT": {"type": "integer", "minimum": 0},
+        "HTTP_RETRY_TOTAL": {"type": "integer", "minimum": 0},
+        "HTTP_BACKOFF": {"type": "number", "minimum": 0},
+    },
+    "required": ["TELEGRAM_MODE"],
+    "allOf": [
+        {
+            "if": {"properties": {"TELEGRAM_MODE": {"const": "BOT_API"}}},
+            "then": {"required": ["TELEGRAM_BOT_TOKEN", "CHANNEL_CHAT_ID"]},
+        },
+        {
+            "if": {"properties": {"TELEGRAM_MODE": {"const": "MTPROTO"}}},
+            "then": {
+                "anyOf": [
+                    {"required": ["TG_API_ID", "TG_API_HASH"]},
+                    {"required": ["TELETHON_API_ID", "TELETHON_API_HASH"]},
+                ]
+            },
+        },
+    ],
+}
+
+YAML_SCHEMAS = {
+    "sources_nn.yaml": {
+        "type": "object",
+        "properties": {
+            "version": {"type": "integer"},
+            "region": {"type": "string"},
+            "defaults": {"type": "object"},
+            "sources": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["name", "url", "type", "source_domain"],
+                    "properties": {
+                        "name": {"type": "string", "minLength": 1},
+                        "url": {"type": "string", "format": "uri"},
+                        "type": {"type": "string"},
+                        "source_domain": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+        },
+        "required": ["sources"],
+    }
+}
 
 def load_env_file(path: Path) -> dict:
     env = {}
@@ -217,6 +312,13 @@ class App(tk.Tk):
         self.env: dict[str, str] = {}
         self.runner = ProcessRunner(self.on_output, self.on_state_change)
         self.cfg = self._load_cfg()
+        self.secret_entries: dict[str, tuple[tk.Entry, ttk.Button]] = {}
+        self.var_profile = tk.StringVar(value="")
+        self._last_search_pos = "1.0"
+        self._psutil_last_update = 0.0
+        self._net_io_start: tuple[float, float] | None = None
+        self.active_profile: str | None = None
+        self._psutil_failed = False
 
         self._build_ui()
         self.after(100, self._tick)
@@ -251,71 +353,164 @@ class App(tk.Tk):
         self._build_tab_edit()
         self._build_tab_update()
 
+    def _sanitize_profile_name(self, name: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", name.strip())
+        return cleaned[:64]
+
+    def _profiles_dir(self, ensure: bool = False) -> Path:
+        if not self._ensure_repo():
+            raise RuntimeError("Репозиторий не выбран")
+        path = self.repo_dir / ".env.profiles"
+        if ensure:
+            path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _profile_path(self, name: str, ensure_dir: bool = False) -> Path:
+        directory = self._profiles_dir(ensure=ensure_dir)
+        return directory / f"{name}.env"
+
+    def _refresh_profiles(self):
+        if not hasattr(self, "cb_profile"):
+            return
+        values: list[str] = []
+        if self.repo_dir and (self.repo_dir / ".env.profiles").exists():
+            for path in sorted((self.repo_dir / ".env.profiles").glob("*.env")):
+                values.append(path.stem)
+        self.cb_profile.configure(values=values)
+        if self.active_profile and self.active_profile in values:
+            self.var_profile.set(self.active_profile)
+        elif self.var_profile.get() not in values:
+            self.var_profile.set(values[0] if values else "")
+
+    def _apply_env_to_fields(self, env: dict[str, str]):
+        merged = merge_with_defaults(env)
+        self.env = merged
+        for k, var in self.fields.items():
+            var.set(self.env.get(k, ""))
+
+    def _gather_env_values(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for k, var in self.fields.items():
+            val = var.get().strip()
+            if val:
+                values[k] = val
+        for k, v in self.env.items():
+            if k not in values and v:
+                values[k] = v
+        return values
+
+    def _write_env_to_path(self, path: Path, values: dict[str, str]) -> None:
+        cleaned = {k: str(v) for k, v in values.items() if v is not None and str(v) != ""}
+        if path.parent and not path.parent.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(dump_env(cleaned), encoding="utf-8")
+
     # ---- Tab ENV ----
     def _build_tab_env(self):
         frm = self.tab_env
         frm.columnconfigure(1, weight=1)
+        frm.columnconfigure(2, weight=0)
+        frm.columnconfigure(3, weight=1)
         row = 0
 
+        prof_bar = ttk.Frame(frm)
+        prof_bar.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        ttk.Label(prof_bar, text="Профиль:").pack(side="left", padx=(0, 4))
+        self.cb_profile = ttk.Combobox(
+            prof_bar,
+            textvariable=self.var_profile,
+            values=[],
+            width=24,
+            state="readonly",
+        )
+        self.cb_profile.pack(side="left")
+        self.cb_profile.bind("<<ComboboxSelected>>", lambda _event: self._load_profile())
+        ttk.Button(prof_bar, text="Загрузить профиль", command=self._load_profile).pack(side="left", padx=4)
+        ttk.Button(prof_bar, text="Сохранить профиль", command=self._save_profile).pack(side="left", padx=4)
+        ttk.Button(prof_bar, text="Новый профиль", command=self._new_profile).pack(side="left", padx=4)
+        ttk.Button(prof_bar, text="Дублировать", command=self._duplicate_profile).pack(side="left", padx=4)
+        row += 1
+
+        ttk.Separator(frm).grid(row=row, column=0, columnspan=4, sticky="ew", pady=6); row += 1
+
         bbar = ttk.Frame(frm)
-        bbar.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(8,6))
+        bbar.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(0, 6))
         ttk.Button(bbar, text="Загрузить из .env", command=self._load_env).pack(side="left", padx=4)
-        ttk.Button(bbar, text="Загрузить из .env.example", command=lambda: self._load_env(example=True)).pack(side="left", padx=4)
+        ttk.Button(
+            bbar,
+            text="Загрузить из .env.example",
+            command=lambda: self._load_env(example=True),
+        ).pack(side="left", padx=4)
         ttk.Button(bbar, text="Сохранить в .env", command=self._save_env).pack(side="left", padx=4)
         ttk.Button(bbar, text="Проверить заполнение", command=self._validate_env).pack(side="left", padx=4)
         row += 1
 
-        ttk.Separator(frm).grid(row=row, column=0, columnspan=3, sticky="ew", pady=6); row += 1
+        ttk.Separator(frm).grid(row=row, column=0, columnspan=4, sticky="ew", pady=6); row += 1
         self.fields = {}
 
-        def add_field(label, key, values=None, hint=""):
+        def add_field(label, key, values=None, hint="", secret=False):
             nonlocal row
             ttk.Label(frm, text=label).grid(row=row, column=0, sticky="w", padx=6, pady=4)
             if values:
                 var = tk.StringVar()
                 cb = ttk.Combobox(frm, textvariable=var, values=values, state="readonly")
-                cb.grid(row=row, column=1, sticky="ew", padx=6, pady=4)
+                cb.grid(row=row, column=1, columnspan=2, sticky="ew", padx=6, pady=4)
                 self.fields[key] = var
+                hint_col = 3
             else:
                 var = tk.StringVar()
-                ent = ttk.Entry(frm, textvariable=var)
+                ent = ttk.Entry(frm, textvariable=var, show="•" if secret else "")
                 ent.grid(row=row, column=1, sticky="ew", padx=6, pady=4)
+                if secret:
+                    toggle = ttk.Button(
+                        frm,
+                        text="👁",
+                        width=3,
+                        command=lambda k=key: self._toggle_secret(k),
+                    )
+                    toggle.grid(row=row, column=2, sticky="w", padx=(0, 4))
+                    self.secret_entries[key] = (ent, toggle)
+                    hint_col = 3
+                else:
+                    hint_col = 2
                 self.fields[key] = var
             if hint:
-                ttk.Label(frm, text=hint, foreground="#555").grid(row=row, column=2, sticky="w")
+                ttk.Label(frm, text=hint, foreground="#555").grid(
+                    row=row, column=hint_col, sticky="w", padx=(4, 0)
+                )
             row += 1
 
         # Режим
         add_field("TELEGRAM_MODE", "TELEGRAM_MODE", values=["BOT_API", "MTPROTO", "WEB"], hint="Способ отправки")
 
-        ttk.Separator(frm).grid(row=row, column=0, columnspan=3, sticky="ew", pady=6); row += 1
+        ttk.Separator(frm).grid(row=row, column=0, columnspan=4, sticky="ew", pady=6); row += 1
 
         # Bot API
         ttk.Label(frm, text="Bot API", font=("", 10, "bold")).grid(row=row, column=0, sticky="w", padx=6); row += 1
-        add_field("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", hint="Токен бота")
+        add_field("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", hint="Токен бота", secret=True)
         add_field("CHANNEL_CHAT_ID", "CHANNEL_CHAT_ID", hint="@alias или -100...")
         add_field("REVIEW_CHAT_ID", "REVIEW_CHAT_ID", hint="для модерации/RAW")
         add_field("PARSE_MODE", "PARSE_MODE", values=["HTML", "MarkdownV2"])
         add_field("DRY_RUN", "DRY_RUN", values=["false", "true"])
         add_field("CAPTION_LIMIT", "CAPTION_LIMIT")
 
-        ttk.Separator(frm).grid(row=row, column=0, columnspan=3, sticky="ew", pady=6); row += 1
+        ttk.Separator(frm).grid(row=row, column=0, columnspan=4, sticky="ew", pady=6); row += 1
 
         # MTProto
         ttk.Label(frm, text="Telegram API (MTProto)", font=("", 10, "bold")).grid(row=row, column=0, sticky="w", padx=6); row += 1
         add_field("TG_API_ID", "TG_API_ID", hint="или TELETHON_API_ID")
-        add_field("TG_API_HASH", "TG_API_HASH", hint="или TELETHON_API_HASH")
+        add_field("TG_API_HASH", "TG_API_HASH", hint="или TELETHON_API_HASH", secret=True)
         add_field("TG_SESSION_FILE", "TG_SESSION_FILE", hint="путь к .session (опц.)")
-        add_field("TG_SESSION_STRING", "TG_SESSION_STRING", hint="строка-сессия (опц.)")
+        add_field("TG_SESSION_STRING", "TG_SESSION_STRING", hint="строка-сессия (опц.)", secret=True)
 
-        ttk.Separator(frm).grid(row=row, column=0, columnspan=3, sticky="ew", pady=6); row += 1
+        ttk.Separator(frm).grid(row=row, column=0, columnspan=4, sticky="ew", pady=6); row += 1
 
         # Раздельные чаты
         ttk.Label(frm, text="Раздельные чаты (если используются)", font=("", 10, "bold")).grid(row=row, column=0, sticky="w", padx=6); row += 1
         add_field("CHANNEL_TEXT_CHAT_ID", "CHANNEL_TEXT_CHAT_ID", hint="@alias или -100...")
         add_field("CHANNEL_MEDIA_CHAT_ID", "CHANNEL_MEDIA_CHAT_ID", hint="@alias или -100...")
 
-        ttk.Separator(frm).grid(row=row, column=0, columnspan=3, sticky="ew", pady=6); row += 1
+        ttk.Separator(frm).grid(row=row, column=0, columnspan=4, sticky="ew", pady=6); row += 1
 
         # Модерация/RAW/HTTP
         ttk.Label(frm, text="Модерация/RAW/Дедуп/HTTP", font=("", 10, "bold")).grid(row=row, column=0, sticky="w", padx=6); row += 1
@@ -332,10 +527,23 @@ class App(tk.Tk):
         add_field("HTTP_RETRY_TOTAL", "HTTP_RETRY_TOTAL")
         add_field("HTTP_BACKOFF", "HTTP_BACKOFF")
 
+    def _toggle_secret(self, key: str):
+        pair = self.secret_entries.get(key)
+        if not pair:
+            return
+        entry, button = pair
+        current = entry.cget("show")
+        if current:
+            entry.configure(show="")
+            button.configure(text="🙈")
+        else:
+            entry.configure(show="•")
+            button.configure(text="👁")
+
     # ---- Tab RUN ----
     def _build_tab_run(self):
         frm = self.tab_run
-        frm.rowconfigure(1, weight=1)
+        frm.rowconfigure(2, weight=1)
         frm.columnconfigure(0, weight=1)
 
         controls = ttk.Frame(frm, padding=(4,6))
@@ -346,26 +554,63 @@ class App(tk.Tk):
 
         ttk.Separator(controls, orient="vertical").pack(side="left", fill="y", padx=8)
 
+        ttk.Button(
+            controls,
+            text="Только RAW",
+            command=lambda: self._start_with_args(["--only-raw"]),
+        ).pack(side="left", padx=4)
+        ttk.Button(
+            controls,
+            text="Без RAW",
+            command=lambda: self._start_with_args(["--no-raw"]),
+        ).pack(side="left", padx=4)
+
+        ttk.Separator(controls, orient="vertical").pack(side="left", fill="y", padx=8)
+
+        ttk.Button(controls, text="Создать venv", command=self._create_venv).pack(side="left", padx=4)
+        ttk.Button(controls, text="Установить зависимости", command=self._install_requirements).pack(side="left", padx=4)
+        ttk.Button(controls, text="Проверить getMe", command=self._check_getme).pack(side="left", padx=4)
+        ttk.Button(controls, text="Проверить MTProto", command=self._check_telethon_login).pack(side="left", padx=4)
+
+        ttk.Separator(controls, orient="vertical").pack(side="left", fill="y", padx=8)
+
         ttk.Button(controls, text="Установить Telethon", command=self._install_telethon).pack(side="left", padx=4)
         ttk.Button(controls, text="Проверка окружения", command=self._env_check).pack(side="left", padx=4)
-        ttk.Button(controls, text="Установить requirements.txt", command=self._install_requirements).pack(side="left", padx=4)
+        ttk.Button(controls, text="Сетевой тест", command=self._network_test).pack(side="left", padx=4)
 
         ttk.Label(controls, text="Статус:").pack(side="left", padx=(16,4))
         self.lbl_status = ttk.Label(controls, text="ожидание")
         self.lbl_status.pack(side="left")
 
+        log_tools = ttk.Frame(frm, padding=(6, 0))
+        log_tools.grid(row=1, column=0, sticky="ew")
+        log_tools.columnconfigure(1, weight=1)
+        ttk.Label(log_tools, text="Поиск:").grid(row=0, column=0, padx=(0, 4), pady=(6, 0))
+        self.var_filter = tk.StringVar()
+        ent_filter = ttk.Entry(log_tools, textvariable=self.var_filter)
+        ent_filter.grid(row=0, column=1, sticky="ew", pady=(6, 0))
+        ttk.Button(log_tools, text="Найти", command=self._find_in_logs).grid(row=0, column=2, padx=4, pady=(6, 0))
+        ttk.Button(log_tools, text="ERROR", command=lambda: self._jump_to_level("ERROR")).grid(row=0, column=3, padx=2, pady=(6, 0))
+        ttk.Button(log_tools, text="WARNING", command=lambda: self._jump_to_level("WARNING")).grid(row=0, column=4, padx=2, pady=(6, 0))
+        ttk.Button(log_tools, text="INFO", command=lambda: self._jump_to_level("INFO")).grid(row=0, column=5, padx=2, pady=(6, 0))
+        ttk.Button(log_tools, text="Сброс", command=self._reset_search).grid(row=0, column=6, padx=4, pady=(6, 0))
+
         self.txt_logs = tk.Text(frm, wrap="none", state="disabled")
-        self.txt_logs.grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
+        self.txt_logs.grid(row=2, column=0, sticky="nsew", padx=6, pady=6)
         self.txt_logs.tag_configure("stderr", foreground="#B00020")
         self.txt_logs.tag_configure("stdout", foreground="#222")
         self.txt_logs.tag_configure("meta", foreground="#555")
+        self.txt_logs.tag_configure("search_highlight", background="#fff2a8")
 
         scroll_y = ttk.Scrollbar(frm, orient="vertical", command=self.txt_logs.yview)
-        scroll_y.grid(row=1, column=1, sticky="ns")
+        scroll_y.grid(row=2, column=1, sticky="ns")
         self.txt_logs.configure(yscrollcommand=scroll_y.set)
 
+        self.status_sys = ttk.Label(frm, text="CPU: —  MEM: —  NET: —/—", foreground="#555")
+        self.status_sys.grid(row=3, column=0, sticky="w", padx=8)
+
         tips = ttk.Label(frm, text="Подсказка: если нет start.sh/start.bat — запускается python main.py.", foreground="#555")
-        tips.grid(row=2, column=0, sticky="w", padx=8)
+        tips.grid(row=4, column=0, sticky="w", padx=8)
 
     # ---- Tab EDIT ----
     def _build_tab_edit(self):
@@ -380,8 +625,10 @@ class App(tk.Tk):
             "tag_rules.yaml",
         ]
         for name in self.edit_files:
-            btn = ttk.Button(frm, text=f"Открыть {name}", command=lambda n=name: self._open_yaml(n))
-            btn.grid(row=row, column=0, sticky="w", padx=6, pady=4)
+            line = ttk.Frame(frm)
+            line.grid(row=row, column=0, sticky="w", padx=6, pady=4)
+            ttk.Button(line, text=f"Открыть {name}", command=lambda n=name: self._open_yaml(n)).pack(side="left")
+            ttk.Button(line, text="Проверить схему", command=lambda n=name: self._validate_yaml(n)).pack(side="left", padx=6)
             row += 1
 
     # ---- Tab UPDATE ----
@@ -418,6 +665,7 @@ class App(tk.Tk):
         self.repo_dir = Path(path)
         self.repo_entry.delete(0, "end")
         self.repo_entry.insert(0, str(self.repo_dir))
+        self._refresh_profiles()
 
     def _open_repo(self):
         if not self._ensure_repo():
@@ -443,47 +691,219 @@ class App(tk.Tk):
             env = load_env_file(self._env_path(example=example))
         except RuntimeError as e:
             messagebox.showerror(APP_NAME, str(e)); return
-        merged = merge_with_defaults(env)
-        self.env = merged
-        for k, var in self.fields.items():
-            var.set(self.env.get(k, ""))
+        self._apply_env_to_fields(env)
+        self.active_profile = None
+        self.var_profile.set("")
+        self._refresh_profiles()
         messagebox.showinfo(APP_NAME, ("Загружено из .env.example" if example else "Загружено из .env"))
 
     def _save_env(self):
         if not self._ensure_repo():
             return
-        for k, var in self.fields.items():
-            self.env[k] = var.get().strip()
-        cleaned = {k: v for k, v in self.env.items() if v is not None and str(v) != ""}
         try:
-            self._env_path(example=False).write_text(dump_env(cleaned), encoding="utf-8")
+            values = self._gather_env_values()
+            self._write_env_to_path(self._env_path(example=False), values)
+            self.env = merge_with_defaults(values)
             messagebox.showinfo(APP_NAME, f".env сохранён в {self._env_path(example=False)}")
         except Exception as e:
             messagebox.showerror(APP_NAME, f"Ошибка сохранения .env: {e}")
 
+    def _load_profile(self):
+        if not self._ensure_repo():
+            return
+        name = (self.var_profile.get() or "").strip()
+        if not name:
+            messagebox.showwarning(APP_NAME, "Выберите профиль для загрузки")
+            return
+        path = self._profile_path(name)
+        if not path.exists():
+            messagebox.showerror(APP_NAME, f"Профиль '{name}' не найден")
+            return
+        try:
+            env = load_env_file(path)
+            self._apply_env_to_fields(env)
+            self._write_env_to_path(self._env_path(False), self._gather_env_values())
+            self.active_profile = name
+            messagebox.showinfo(APP_NAME, f"Профиль '{name}' загружен")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Ошибка загрузки профиля: {exc}")
+        self._refresh_profiles()
+
+    def _save_profile(self):
+        if not self._ensure_repo():
+            return
+        name = (self.var_profile.get() or self.active_profile or "").strip()
+        if not name:
+            messagebox.showwarning(APP_NAME, "Укажите имя профиля в выпадающем списке")
+            return
+        sanitized = self._sanitize_profile_name(name)
+        if not sanitized:
+            messagebox.showerror(APP_NAME, "Имя профиля не должно быть пустым")
+            return
+        try:
+            values = self._gather_env_values()
+            self._write_env_to_path(self._profile_path(sanitized, ensure_dir=True), values)
+            self._write_env_to_path(self._env_path(False), values)
+            self.env = merge_with_defaults(values)
+            self.active_profile = sanitized
+            self.var_profile.set(sanitized)
+            messagebox.showinfo(APP_NAME, f"Профиль '{sanitized}' сохранён")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Ошибка сохранения профиля: {exc}")
+        self._refresh_profiles()
+
+    def _new_profile(self):
+        if not self._ensure_repo():
+            return
+        name = simpledialog.askstring(APP_NAME, "Название нового профиля")
+        if not name:
+            return
+        sanitized = self._sanitize_profile_name(name)
+        if not sanitized:
+            messagebox.showerror(APP_NAME, "Имя профиля не должно быть пустым")
+            return
+        path = self._profile_path(sanitized, ensure_dir=True)
+        if path.exists():
+            messagebox.showerror(APP_NAME, "Профиль с таким именем уже существует")
+            return
+        try:
+            values = self._gather_env_values()
+            self._write_env_to_path(path, values)
+            self._write_env_to_path(self._env_path(False), values)
+            self.env = merge_with_defaults(values)
+            self.active_profile = sanitized
+            self.var_profile.set(sanitized)
+            messagebox.showinfo(APP_NAME, f"Создан профиль '{sanitized}'")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Ошибка создания профиля: {exc}")
+        self._refresh_profiles()
+
+    def _duplicate_profile(self):
+        if not self._ensure_repo():
+            return
+        source = (self.var_profile.get() or "").strip()
+        if not source:
+            messagebox.showwarning(APP_NAME, "Выберите профиль для дублирования")
+            return
+        src_path = self._profile_path(source)
+        if not src_path.exists():
+            messagebox.showerror(APP_NAME, f"Профиль '{source}' не найден")
+            return
+        name = simpledialog.askstring(APP_NAME, "Название нового профиля")
+        if not name:
+            return
+        sanitized = self._sanitize_profile_name(name)
+        if not sanitized:
+            messagebox.showerror(APP_NAME, "Имя профиля не должно быть пустым")
+            return
+        dst_path = self._profile_path(sanitized, ensure_dir=True)
+        if dst_path.exists():
+            messagebox.showerror(APP_NAME, "Профиль с таким именем уже существует")
+            return
+        try:
+            values = load_env_file(src_path)
+            self._write_env_to_path(dst_path, values)
+            self._apply_env_to_fields(values)
+            self._write_env_to_path(self._env_path(False), self._gather_env_values())
+            self.active_profile = sanitized
+            self.var_profile.set(sanitized)
+            messagebox.showinfo(APP_NAME, f"Профиль '{source}' скопирован в '{sanitized}'")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Ошибка дублирования профиля: {exc}")
+        self._refresh_profiles()
+
     def _validate_env(self):
-        missing = []
+        try:
+            import jsonschema
+        except Exception:
+            messagebox.showerror(APP_NAME, "Установите пакет jsonschema для проверки .env")
+            return
+
+        values = self._gather_env_values()
+        typed: dict[str, object] = {}
+        errors: list[str] = []
+
         mode = self.fields["TELEGRAM_MODE"].get().strip() or "BOT_API"
-        if mode.upper() == "BOT_API":
-            for k in ("TELEGRAM_BOT_TOKEN", "CHANNEL_CHAT_ID"):
-                if not self.fields[k].get().strip():
-                    missing.append(k)
-        elif mode.upper() == "MTPROTO":
-            # допускаем два имени переменных
-            id_ok = self.fields["TG_API_ID"].get().strip() or self.env.get("TELETHON_API_ID", "")
-            hash_ok = self.fields["TG_API_HASH"].get().strip() or self.env.get("TELETHON_API_HASH", "")
-            if not id_ok: missing.append("TG_API_ID/TELETHON_API_ID")
-            if not hash_ok: missing.append("TG_API_HASH/TELETHON_API_HASH")
-        if missing:
-            messagebox.showwarning(APP_NAME, "Заполните обязательные поля: " + ", ".join(missing))
-        else:
-            messagebox.showinfo(APP_NAME, "Похоже, всё заполнено нормально 🙂")
+        typed["TELEGRAM_MODE"] = mode
+
+        for key, value in values.items():
+            if key == "TELEGRAM_MODE":
+                continue
+            if key in ENV_BOOL_KEYS:
+                low = value.lower()
+                if low in {"true", "1", "yes"}:
+                    typed[key] = True
+                elif low in {"false", "0", "no"}:
+                    typed[key] = False
+                else:
+                    errors.append(f"{key}: ожидается true/false")
+            elif key in ENV_INT_KEYS:
+                try:
+                    typed[key] = int(value)
+                except ValueError:
+                    errors.append(f"{key}: ожидается целое число")
+            elif key in ENV_FLOAT_KEYS:
+                try:
+                    typed[key] = float(value)
+                except ValueError:
+                    errors.append(f"{key}: ожидается число")
+            else:
+                typed[key] = value
+
+        # Дополнительные поля, которые могли быть в профиле, но отсутствуют в форме
+        for key in ("TG_API_HASH", "TG_API_ID", "TELETHON_API_ID", "TELETHON_API_HASH"):
+            if key in values and key not in typed:
+                typed[key] = values[key]
+
+        if errors:
+            messagebox.showwarning(APP_NAME, "Исправьте ошибки: " + "; ".join(errors))
+            return
+
+        try:
+            jsonschema.validate(typed, ENV_SCHEMA)
+        except jsonschema.ValidationError as exc:
+            messagebox.showerror(APP_NAME, f"Неверное окружение: {exc.message}")
+            return
+
+        messagebox.showinfo(APP_NAME, "Файл .env проходит проверку схемы")
 
     def _open_yaml(self, name: str):
         if not self._ensure_repo():
             return
         p = self.repo_dir / name
         TextEditor(self, p)
+
+    def _validate_yaml(self, name: str):
+        if not self._ensure_repo():
+            return
+        path = self.repo_dir / name
+        if not path.exists():
+            messagebox.showerror(APP_NAME, f"Файл {name} не найден в репозитории")
+            return
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Ошибка чтения YAML: {exc}")
+            return
+        schema = YAML_SCHEMAS.get(name)
+        if not schema:
+            messagebox.showinfo(APP_NAME, f"Схема для {name} не задана, синтаксис корректен")
+            return
+        try:
+            import jsonschema
+        except Exception:
+            messagebox.showerror(APP_NAME, "Установите пакет jsonschema для проверки YAML")
+            return
+        try:
+            jsonschema.validate(data, schema, format_checker=jsonschema.FormatChecker())
+        except jsonschema.ValidationError as exc:
+            path_hint = " → ".join(str(p) for p in exc.absolute_path)
+            messagebox.showerror(
+                APP_NAME,
+                f"{name}: несоответствие схеме: {exc.message}" + (f" (путь: {path_hint})" if path_hint else ""),
+            )
+        else:
+            messagebox.showinfo(APP_NAME, f"{name}: проверка схемы успешно пройдена")
 
     def _ensure_repo(self) -> bool:
         if self.repo_dir and (self.repo_dir / "main.py").exists():
@@ -493,6 +913,7 @@ class App(tk.Tk):
             p = Path(txt)
             if (p / "main.py").exists():
                 self.repo_dir = p
+                self._refresh_profiles()
                 return True
         messagebox.showwarning(APP_NAME, "Укажите папку, где лежит main.py (репозиторий WebWork).")
         return False
@@ -512,6 +933,9 @@ class App(tk.Tk):
 
     # ---------- RUN actions ----------
     def _start_bot(self):
+        self._start_with_args([])
+
+    def _start_with_args(self, extra_args: list[str]):
         if not self._ensure_repo():
             return
         if sys.platform == "win32" and (self.repo_dir / "start.bat").exists():
@@ -520,16 +944,36 @@ class App(tk.Tk):
             cmd_list = ["bash", str(self.repo_dir / "start.sh")]
         else:
             cmd_list = [sys.executable, "main.py"]
+        cmd_list = [*cmd_list, *extra_args]
         env = self._collect_env()
         try:
             self.runner.start(cmd_list, cwd=str(self.repo_dir), env=env)
-            self._log_meta(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Запуск: {' '.join(shlex.quote(x) for x in cmd_list)}\n")
+            self._log_meta(
+                f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Запуск: "
+                f"{' '.join(shlex.quote(x) for x in cmd_list)}\n"
+            )
         except RuntimeError as e:
             messagebox.showerror(APP_NAME, str(e))
 
     def _stop_bot(self):
         self.runner.terminate()
         self._log_meta(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Остановка процесса по запросу пользователя\n")
+
+    def _create_venv(self):
+        if not self._ensure_repo():
+            return
+        if (self.repo_dir / ".venv").exists():
+            if not messagebox.askyesno(APP_NAME, ".venv уже существует. Пересоздать?"):
+                return
+        cmd_list = [sys.executable, "-m", "venv", ".venv"]
+        try:
+            self.runner.start(cmd_list, cwd=str(self.repo_dir), env=os.environ.copy())
+            self._log_meta(
+                "Создание виртуального окружения (.venv). "
+                "Для PowerShell может потребоваться Set-ExecutionPolicy RemoteSigned.\n"
+            )
+        except RuntimeError as e:
+            messagebox.showerror(APP_NAME, str(e))
 
     def _install_telethon(self):
         """pip install --upgrade telethon (и pip) в текущем интерпретаторе."""
@@ -554,6 +998,98 @@ class App(tk.Tk):
             self._log_meta(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Установка зависимостей из requirements.txt\n")
         except RuntimeError as e:
             messagebox.showerror(APP_NAME, str(e))
+
+    def _check_getme(self):
+        token = (self.fields.get("TELEGRAM_BOT_TOKEN") or tk.StringVar()).get().strip()
+        if not token:
+            messagebox.showwarning(APP_NAME, "Укажите TELEGRAM_BOT_TOKEN в профиле")
+            return
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Ошибка getMe: {exc}")
+            return
+        if data.get("ok"):
+            result = data.get("result", {})
+            username = result.get("username") or "—"
+            bot_id = result.get("id")
+            messagebox.showinfo(APP_NAME, f"Токен валиден: @{username} (id={bot_id})")
+        else:
+            messagebox.showerror(APP_NAME, f"getMe вернул ошибку: {data}")
+
+    def _check_telethon_login(self):
+        if not self._ensure_repo():
+            return
+        env = self._collect_env()
+        api_id = env.get("TG_API_ID") or env.get("TELETHON_API_ID")
+        api_hash = env.get("TG_API_HASH") or env.get("TELETHON_API_HASH")
+        if not api_id or not api_hash:
+            messagebox.showwarning(APP_NAME, "Укажите TG_API_ID/TG_API_HASH или TELETHON_API_ID/TELETHON_API_HASH")
+            return
+        code = (
+            "from telethon.sync import TelegramClient\n"
+            "import os\n"
+            "api_id=os.getenv('TG_API_ID') or os.getenv('TELETHON_API_ID')\n"
+            "api_hash=os.getenv('TG_API_HASH') or os.getenv('TELETHON_API_HASH')\n"
+            "sess=os.getenv('TG_SESSION_FILE') or 'webwork'\n"
+            "with TelegramClient(sess, int(api_id), api_hash) as client:\n"
+            "    me = client.get_me()\n"
+            "    print('OK', me.username or me.id)\n"
+        )
+        try:
+            self.runner.start(
+                [sys.executable, "-c", code],
+                cwd=str(self.repo_dir),
+                env=env,
+            )
+            self._log_meta("Проверка Telethon: client.get_me()\n")
+        except RuntimeError as e:
+            messagebox.showerror(APP_NAME, str(e))
+
+    def _network_test(self):
+        if not self._ensure_repo():
+            return
+
+        def run_checks():
+            results: list[str] = ["=== Сетевой тест ==="]
+
+            def check_url(url: str, method: str = "GET") -> None:
+                start = time.perf_counter()
+                req = urllib.request.Request(url)
+                if method.upper() == "HEAD":
+                    req.get_method = lambda: "HEAD"  # type: ignore[attr-defined]
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        resp.read(1 if method == "GET" else 0)
+                        status = resp.status
+                except Exception as exc:
+                    results.append(f"{method} {url} → ошибка: {exc}")
+                    return
+                elapsed = (time.perf_counter() - start) * 1000
+                results.append(f"{method} {url} → {status}, {elapsed:.0f} мс")
+
+            check_url("https://api.telegram.org", method="GET")
+
+            sample_urls = []
+            sources_file = self.repo_dir / "sources_nn.yaml"
+            if sources_file.exists():
+                try:
+                    raw = yaml.safe_load(sources_file.read_text(encoding="utf-8")) or {}
+                    for entry in raw.get("sources", [])[:2]:
+                        if isinstance(entry, dict) and entry.get("url"):
+                            sample_urls.append(str(entry["url"]))
+                except Exception as exc:
+                    results.append(f"Ошибка чтения sources_nn.yaml: {exc}")
+
+            for url in sample_urls:
+                check_url(url, method="HEAD")
+
+            text = "\n".join(results) + "\n"
+            self.after(0, lambda: self._log_meta(text))
+
+        threading.Thread(target=run_checks, daemon=True).start()
 
     def _env_check(self):
         """Диагностика окружения: python, pip, telethon, git, repo."""
@@ -732,8 +1268,46 @@ class App(tk.Tk):
     def on_state_change(self, state: str, code: int | None = None):
         if state == "running":
             self.lbl_status.configure(text="выполняется")
+            self._net_io_start = None
         elif state == "stopped":
             self.lbl_status.configure(text=f"завершено (код {code})")
+            self._net_io_start = None
+            if hasattr(self, "status_sys"):
+                self.status_sys.configure(text="CPU: —  MEM: —  NET: —/—")
+
+    def _find_in_logs(self, pattern: str | None = None):
+        pattern = (pattern or self.var_filter.get()).strip()
+        if not pattern:
+            messagebox.showinfo(APP_NAME, "Введите текст для поиска")
+            return
+        start = self._last_search_pos or "1.0"
+        self.txt_logs.configure(state="normal")
+        idx = self.txt_logs.search(pattern, start, tk.END, nocase=True)
+        if not idx and start != "1.0":
+            idx = self.txt_logs.search(pattern, "1.0", tk.END, nocase=True)
+        if idx:
+            end = f"{idx}+{len(pattern)}c"
+            self.txt_logs.tag_remove("search_highlight", "1.0", tk.END)
+            self.txt_logs.tag_add("search_highlight", idx, end)
+            self.txt_logs.see(idx)
+            self._last_search_pos = end
+        else:
+            self.txt_logs.tag_remove("search_highlight", "1.0", tk.END)
+            self._last_search_pos = "1.0"
+            messagebox.showinfo(APP_NAME, f"'{pattern}' не найдено в логах")
+        self.txt_logs.configure(state="disabled")
+
+    def _jump_to_level(self, level: str):
+        self.var_filter.set(level)
+        self._last_search_pos = "1.0"
+        self._find_in_logs(level)
+
+    def _reset_search(self):
+        self.var_filter.set("")
+        self._last_search_pos = "1.0"
+        self.txt_logs.configure(state="normal")
+        self.txt_logs.tag_remove("search_highlight", "1.0", tk.END)
+        self.txt_logs.configure(state="disabled")
 
     def _set_logs(self, text: str):
         self.txt_logs.configure(state="normal")
@@ -749,7 +1323,49 @@ class App(tk.Tk):
 
     def _tick(self):
         self.runner.poll()
+        self._update_psutil()
         self.after(100, self._tick)
+
+    def _update_psutil(self):
+        if not hasattr(self, "status_sys"):
+            return
+        now = time.time()
+        if now - self._psutil_last_update < 1:
+            return
+        self._psutil_last_update = now
+        if self._psutil_failed:
+            return
+        proc = getattr(self.runner, "proc", None)
+        if not proc or proc.poll() is not None:
+            self.status_sys.configure(text="CPU: 0.0%  MEM: —  NET: —/—")
+            self._net_io_start = None
+            return
+        try:
+            import psutil  # type: ignore
+        except Exception:
+            self._psutil_failed = True
+            self.status_sys.configure(text="psutil недоступен — установите пакет psutil")
+            return
+        try:
+            proc_info = psutil.Process(proc.pid)
+            cpu = proc_info.cpu_percent(interval=0.0)
+            mem = proc_info.memory_info().rss / (1024 * 1024)
+            net_text = "—/—"
+            try:
+                net = proc_info.net_io_counters()  # type: ignore[attr-defined]
+            except Exception:
+                net = None
+            if net:
+                if self._net_io_start is None:
+                    self._net_io_start = (net.bytes_sent, net.bytes_recv)
+                sent = max(0.0, (net.bytes_sent - self._net_io_start[0]) / 1024)
+                recv = max(0.0, (net.bytes_recv - self._net_io_start[1]) / 1024)
+                net_text = f"{sent:.0f}К/{recv:.0f}К"
+            self.status_sys.configure(
+                text=f"CPU: {cpu:.1f}%  MEM: {mem:.1f} МБ  NET: {net_text}"
+            )
+        except Exception:
+            self.status_sys.configure(text="CPU: —  MEM: —  NET: —/—")
 
 
 def main():
