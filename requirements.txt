@@ -1,12 +1,13 @@
 feedparser==6.0.11
 requests==2.32.4
 beautifulsoup4==4.12.3
-Pillow==10.3.0
-platformdirs==4.2.0
+Pillow==11.0.0
 PyYAML==6.0.1
 telethon>=1.36.0
 # Pinned due to upstream sdist build failure (KeyError: __version__)
 tgcrypto==1.2.5
-# Ensure env loading
-python-dotenv>=1.0.0
 TgCrypto-pyrofork>=1.2.7
+
+# обязательные доп. зависимости
+python-dotenv>=1.0.0
+platformdirs>=4.0.0
