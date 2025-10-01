@@ -1,15 +1,14 @@
 # import-shim: allow running as a script (no package parent)
 if __name__ == "__main__" or __package__ is None:
-    import os
-    import sys
+    import os, sys
     sys.path.insert(0, os.path.dirname(__file__))
 # end of shim
 
 import time
 
 try:
-    from . import config, db, http_client, moderator, publisher
-except ImportError:  # pragma: no cover
+    from . import config, db, http_client, moderator, publisher  # type: ignore
+except Exception:  # pragma: no cover
     import config  # type: ignore
     import db  # type: ignore
     import http_client  # type: ignore
