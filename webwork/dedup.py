@@ -45,6 +45,8 @@ def canonical_url(url: Optional[str]) -> str:
     ]
     scheme = parsed.scheme.lower() or "https"
     path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/") or "/"
     return urlunparse((scheme, host, path, "", urlencode(clean_query, doseq=True), ""))
 
 
