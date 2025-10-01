@@ -1141,11 +1141,18 @@ class App(tk.Tk):
             messagebox.showwarning(APP_NAME, "Процесс уже выполняется")
             return
         self._cancel_repeat_job()
-        self._start_with_args([])
+        try:
+            started = self._start_with_args([])
+        except Exception:
+            if self.repeat_enabled.get():
+                self._schedule_repeat()
+            raise
+        if not started and self.repeat_enabled.get():
+            self._schedule_repeat()
 
-    def _start_with_args(self, extra_args: list[str]):
+    def _start_with_args(self, extra_args: list[str]) -> bool:
         if not self._ensure_repo():
-            return
+            return False
         if sys.platform == "win32" and (self.repo_dir / "start.bat").exists():
             cmd_list = [str(self.repo_dir / "start.bat")]
         elif sys.platform != "win32" and (self.repo_dir / "start.sh").exists():
@@ -1160,8 +1167,10 @@ class App(tk.Tk):
                 f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Запуск: "
                 f"{' '.join(shlex.quote(x) for x in cmd_list)}\n"
             )
+            return True
         except RuntimeError as e:
             messagebox.showerror(APP_NAME, str(e))
+            return False
 
     def _stop_bot(self):
         if self.repeat_enabled.get():
