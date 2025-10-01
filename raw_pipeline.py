@@ -25,12 +25,9 @@ import http_client
 from dedup import SeenStore
 from webwork.dedup import canonical_url, stable_text_key
 
-try:  # pragma: no cover - production style imports
-    from . import config, utils, publisher
-except ImportError:  # pragma: no cover - direct script execution
-    import config  # type: ignore
-    import utils  # type: ignore
-    import publisher  # type: ignore
+import config
+import publisher
+import utils
 
 
 logger = logging.getLogger(__name__)

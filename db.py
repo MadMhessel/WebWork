@@ -12,10 +12,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
-try:
-    from . import config
-except ImportError:  # pragma: no cover
-    import config  # type: ignore
+import config
 
 from logging_setup import get_logger
 

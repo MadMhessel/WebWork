@@ -3,44 +3,56 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Tuple
+from importlib import import_module
+from typing import TYPE_CHECKING, Tuple
 
-from .config import (
-    AppConfig,
-    HttpCfg,
-    LogCfg,
-    TelegramCfg,
-    dedup_cfg,
-    load_all,
-    raw_stream_cfg,
-)
+if TYPE_CHECKING:  # pragma: no cover - imported for type checkers only
+    from .config import AppConfig, HttpCfg, LogCfg, TelegramCfg
+
+
+def _config_module():
+    """Return the lazily-imported configuration module."""
+
+    return import_module(__name__ + ".config")
 
 
 @lru_cache()
-def _cached_config() -> AppConfig:
-    return load_all()
+def _cached_config() -> "AppConfig":
+    return _config_module().load_all()
 
 
-def telegram_cfg() -> TelegramCfg:
+def telegram_cfg() -> "TelegramCfg":
     return _cached_config().telegram
 
 
-def http_cfg() -> HttpCfg:
+def http_cfg() -> "HttpCfg":
     return _cached_config().http
 
 
-def log_cfg() -> LogCfg:
+def log_cfg() -> "LogCfg":
     return _cached_config().log
 
 
-def dedup_config():
-    return dedup_cfg()
-
-
 def raw_config():
-    return raw_stream_cfg()
+    return _cached_config().raw
 
 
-def load() -> Tuple[TelegramCfg, LogCfg]:
+def load() -> Tuple["TelegramCfg", "LogCfg"]:
     cfg = _cached_config()
     return cfg.telegram, cfg.log
+
+
+try:
+    dedup_config = import_module(__name__ + ".dedup_config")
+except Exception:  # pragma: no cover - optional module
+    dedup_config = None  # type: ignore[assignment]
+
+
+__all__ = [
+    "dedup_config",
+    "http_cfg",
+    "load",
+    "log_cfg",
+    "raw_config",
+    "telegram_cfg",
+]

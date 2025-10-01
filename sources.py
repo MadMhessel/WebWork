@@ -5,11 +5,9 @@ if __name__ == "__main__" or __package__ is None:
     sys.path.insert(0, os.path.dirname(__file__))
 # end of shim
 
-from typing import Iterable, Dict
-try:
-    from . import config
-except ImportError:  # pragma: no cover
-    import config  # type: ignore
+from typing import Dict, Iterable
+
+import config
 
 def iter_sources() -> Iterable[Dict[str, str]]:
     for s in config.SOURCES:

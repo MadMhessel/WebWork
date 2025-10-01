@@ -21,10 +21,8 @@ import yaml
 _DEFAULTS_CACHE: Dict[str, Any] | None = None
 _SOURCES_CACHE: List[Dict[str, Any]] | None = None
 _log = logging.getLogger("webwork.app.sources")
-try:  # pragma: no cover
-    from . import config  # пакетный импорт
-except Exception:  # pragma: no cover
-    import config  # прямой запуск
+
+import config
 
 VERSION_REQUIRED = 2
 _RUBRICS = {"kazusy", "objects", "persons"}

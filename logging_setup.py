@@ -16,10 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-try:  # pragma: no cover - package import for production/runtime
-    from . import config  # type: ignore
-except ImportError:  # pragma: no cover - direct script execution
-    import config  # type: ignore
+import config
 
 from webwork.logging_setup import SecretsFilter
 

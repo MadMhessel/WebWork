@@ -16,16 +16,11 @@ from urllib.parse import urljoin, urlparse
 import feedparser
 import requests
 
-try:
-    from . import config, dedup, net
-    from .utils import canonicalize_url, normalize_whitespace
-    from .parsers import html as html_parsers
-except ImportError:  # pragma: no cover
-    import config  # type: ignore
-    import dedup  # type: ignore
-    import net  # type: ignore
-    from utils import canonicalize_url, normalize_whitespace  # type: ignore
-    html_parsers = None  # type: ignore
+import config
+import dedup
+import net
+from parsers import html as html_parsers
+from utils import canonicalize_url, normalize_whitespace
 
 from logging_setup import get_logger
 
@@ -187,9 +182,11 @@ def _notify_service_chat(message: str) -> None:
         logger.debug("Пропущено уведомление в служебный чат: нет токена или DRY_RUN")
         return
     try:  # pragma: no cover - heavy dependency, not critical for tests
-        from . import publisher  # type: ignore
-    except ImportError:  # pragma: no cover - direct execution
         import publisher  # type: ignore
+    except Exception:  # pragma: no cover - optional dependency
+        publisher = None  # type: ignore[assignment]
+    if not publisher:
+        return
     try:
         publisher.send_message(str(chat_id), message, cfg=config)
     except Exception as exc:  # pragma: no cover - logging side effect
