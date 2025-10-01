@@ -14,13 +14,24 @@ import threading
 import subprocess
 import importlib
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "WebWork Manager"
 APP_VERSION = "3.0"
 CFG_FILE = Path.home() / ".webwork_manager.json"  # хранение настроек (url, ветка и т.д.)
 ERROR_LOG_FILE = Path.home() / "webwork_autostart_error.log"
+
+
+def _guess_repo_dir() -> Path | None:
+    here = Path(__file__).resolve().parent
+    candidates = [here, here.parent]
+    sentinels = {"main.py", "sources_nn.yaml", "requirements.txt"}
+
+    for base in candidates:
+        if any((base / sentinel).exists() for sentinel in sentinels):
+            return base
+    return None
 
 
 def _fatal_error(message: str, exc: BaseException | None = None) -> "NoReturn":
@@ -391,6 +402,33 @@ class TextEditor(tk.Toplevel):
         except Exception as e:
             messagebox.showerror(APP_NAME, f"Ошибка сохранения: {e}")
 
+
+# ---------------- Прокручиваемые контейнеры ----------------
+class ScrollableFrame(ttk.Frame):
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+        canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0)
+        vbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        self.inner = ttk.Frame(canvas)
+
+        self.inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        window_id = canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(window_id, width=e.width),
+        )
+        canvas.configure(yscrollcommand=vbar.set)
+
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vbar.grid(row=0, column=1, sticky="ns")
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+
 # ---------------- Основное приложение ----------------
 class App(tk.Tk):
     def __init__(self):
@@ -400,6 +438,7 @@ class App(tk.Tk):
         self.minsize(1040, 680)
 
         self.repo_dir: Path | None = None
+        self.repo_dir_var = tk.StringVar(value="")
         self.env: dict[str, str] = {}
         self.runner = ProcessRunner(self.on_output, self.on_state_change)
         self.cfg = self._load_cfg()
@@ -410,8 +449,17 @@ class App(tk.Tk):
         self._net_io_start: tuple[float, float] | None = None
         self.active_profile: str | None = None
         self._psutil_failed = False
+        self.repeat_job_id: str | None = None
+        self.repeat_enabled = tk.BooleanVar(value=False)
+        self.repeat_minutes = tk.IntVar(value=15)
 
         self._build_ui()
+        self._on_repeat_toggle()
+        guessed = _guess_repo_dir()
+        if guessed:
+            self.repo_dir = guessed
+            self.repo_dir_var.set(str(guessed))
+            self._refresh_profiles()
         self.after(100, self._tick)
 
     # ---------- UI ----------
@@ -420,7 +468,7 @@ class App(tk.Tk):
         top = ttk.Frame(self, padding=8)
         top.pack(fill="x")
         ttk.Label(top, text="Папка репозитория WebWork:").pack(side="left")
-        self.repo_entry = ttk.Entry(top, width=60)
+        self.repo_entry = ttk.Entry(top, width=60, textvariable=self.repo_dir_var)
         self.repo_entry.pack(side="left", padx=6, fill="x", expand=True)
         ttk.Button(top, text="Выбрать…", command=self._choose_repo).pack(side="left")
         ttk.Button(top, text="Открыть в проводнике", command=self._open_repo).pack(side="left", padx=(6,0))
@@ -498,7 +546,9 @@ class App(tk.Tk):
 
     # ---- Tab ENV ----
     def _build_tab_env(self):
-        frm = self.tab_env
+        container = ScrollableFrame(self.tab_env)
+        container.pack(fill="both", expand=True)
+        frm = container.inner
         frm.columnconfigure(1, weight=1)
         frm.columnconfigure(2, weight=0)
         frm.columnconfigure(3, weight=1)
@@ -643,6 +693,23 @@ class App(tk.Tk):
         ttk.Button(controls, text="Остановить", command=self._stop_bot).pack(side="left", padx=4)
         ttk.Button(controls, text="Очистить лог", command=lambda: self._set_logs("")).pack(side="left", padx=4)
 
+        ttk.Checkbutton(
+            controls,
+            text="Повторять",
+            variable=self.repeat_enabled,
+            command=self._on_repeat_toggle,
+        ).pack(side="left", padx=(12, 4))
+        ttk.Label(controls, text="каждые").pack(side="left", padx=(0, 2))
+        self.spin_repeat = ttk.Spinbox(
+            controls,
+            from_=1,
+            to=1440,
+            textvariable=self.repeat_minutes,
+            width=5,
+        )
+        self.spin_repeat.pack(side="left")
+        ttk.Label(controls, text="мин.").pack(side="left", padx=(2, 4))
+
         ttk.Separator(controls, orient="vertical").pack(side="left", fill="y", padx=8)
 
         ttk.Button(
@@ -703,6 +770,45 @@ class App(tk.Tk):
         tips = ttk.Label(frm, text="Подсказка: если нет start.sh/start.bat — запускается python main.py.", foreground="#555")
         tips.grid(row=4, column=0, sticky="w", padx=8)
 
+    def _get_repeat_minutes(self) -> int:
+        try:
+            minutes = int(self.repeat_minutes.get())
+        except (tk.TclError, ValueError):
+            minutes = 1
+        if minutes < 1:
+            minutes = 1
+        self.repeat_minutes.set(minutes)
+        return minutes
+
+    def _cancel_repeat_job(self) -> None:
+        if self.repeat_job_id is not None:
+            try:
+                self.after_cancel(self.repeat_job_id)
+            except Exception:
+                pass
+            finally:
+                self.repeat_job_id = None
+
+    def _schedule_repeat(self) -> None:
+        if not self.repeat_enabled.get():
+            self._cancel_repeat_job()
+            return
+        minutes = self._get_repeat_minutes()
+        delay_ms = minutes * 60_000
+        self._cancel_repeat_job()
+        self.repeat_job_id = self.after(delay_ms, self._start_bot)
+        next_time = datetime.now() + timedelta(minutes=minutes)
+        self._log_meta(
+            f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Следующий запуск запланирован на {next_time:%H:%M:%S}\n"
+        )
+
+    def _on_repeat_toggle(self) -> None:
+        if hasattr(self, "spin_repeat"):
+            state = "normal" if self.repeat_enabled.get() else "disabled"
+            self.spin_repeat.configure(state=state)
+        if not self.repeat_enabled.get():
+            self._cancel_repeat_job()
+
     # ---- Tab EDIT ----
     def _build_tab_edit(self):
         frm = self.tab_edit
@@ -754,8 +860,7 @@ class App(tk.Tk):
         if not path:
             return
         self.repo_dir = Path(path)
-        self.repo_entry.delete(0, "end")
-        self.repo_entry.insert(0, str(self.repo_dir))
+        self.repo_dir_var.set(str(self.repo_dir))
         self._refresh_profiles()
 
     def _open_repo(self):
@@ -999,7 +1104,7 @@ class App(tk.Tk):
     def _ensure_repo(self) -> bool:
         if self.repo_dir and (self.repo_dir / "main.py").exists():
             return True
-        txt = self.repo_entry.get().strip()
+        txt = self.repo_dir_var.get().strip()
         if txt:
             p = Path(txt)
             if (p / "main.py").exists():
@@ -1024,6 +1129,10 @@ class App(tk.Tk):
 
     # ---------- RUN actions ----------
     def _start_bot(self):
+        if self.runner.proc and self.runner.proc.poll() is None:
+            messagebox.showwarning(APP_NAME, "Процесс уже выполняется")
+            return
+        self._cancel_repeat_job()
         self._start_with_args([])
 
     def _start_with_args(self, extra_args: list[str]):
@@ -1047,6 +1156,9 @@ class App(tk.Tk):
             messagebox.showerror(APP_NAME, str(e))
 
     def _stop_bot(self):
+        if self.repeat_enabled.get():
+            self.repeat_enabled.set(False)
+            self._on_repeat_toggle()
         self.runner.terminate()
         self._log_meta(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Остановка процесса по запросу пользователя\n")
 
@@ -1365,6 +1477,7 @@ class App(tk.Tk):
             self._net_io_start = None
             if hasattr(self, "status_sys"):
                 self.status_sys.configure(text="CPU: —  MEM: —  NET: —/—")
+            self._schedule_repeat()
 
     def _find_in_logs(self, pattern: str | None = None):
         pattern = (pattern or self.var_filter.get()).strip()
