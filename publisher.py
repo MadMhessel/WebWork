@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -12,6 +13,8 @@ import requests
 from formatting import clean_html_tags, html_escape, truncate_by_chars
 
 import moderation
+import dedup
+import seen_store
 from logging_setup import audit, get_logger, mask_secrets
 
 try:  # pragma: no cover - package import in production
@@ -23,6 +26,7 @@ from webwork.utils.formatting import chunk_text, safe_format, TG_TEXT_LIMIT
 from webwork.router import route_and_publish
 
 log = get_logger("webwork.bot")
+raw_log = logging.getLogger("webwork.raw")
 
 _API_BASE = "https://api.telegram.org"
 _client_base_url: Optional[str] = None
@@ -1061,11 +1065,32 @@ def publish_structured_item(
 ) -> Optional[str]:
     if not chat_id:
         return None
+    raw_chat = getattr(cfg, "RAW_CHANNEL_CHAT_ID", "")
+    chat_match = False
+    if chat_id and raw_chat:
+        chat_match = str(chat_id) == str(raw_chat)
+    is_raw_target = bool(item.get("is_raw")) or chat_match
     data = dict(item)
     if rewrite_item:
         data = rewrite.maybe_rewrite_item(data, cfg)
     msg_limit = int(getattr(cfg, "TELEGRAM_MESSAGE_LIMIT", 4096))
     chunk_limit = min(4000, msg_limit)
+
+    dedup_key: Optional[str] = None
+    seen_conn = None
+    if is_raw_target and not getattr(cfg, "RAW_BYPASS_DEDUP", False):
+        try:
+            dedup_key = dedup.make_key(data)
+            seen_conn = seen_store.get_conn()
+            if seen_store.is_seen(seen_conn, dedup_key):
+                if getattr(cfg, "RAW_DEDUP_LOG", True):
+                    raw_log.info("[RAW] дубликат, пропуск: %s", dedup_key)
+                return None
+        except Exception as exc:  # pragma: no cover - defensive logging
+            raw_log.warning("[RAW] ошибка проверки дубликата: %s", exc)
+            dedup_key = None
+            seen_conn = None
+
     chunks = _prepare_publication_chunks(data, chunk_limit)
     log.info(
         "Публикация карточки: chat_id=%s source=%s title=%s",
@@ -1089,6 +1114,25 @@ def publish_structured_item(
             url=data.get("url"),
             title=data.get("title"),
         )
+        if (
+            is_raw_target
+            and not getattr(cfg, "RAW_BYPASS_DEDUP", False)
+            and dedup_key
+        ):
+            try:
+                conn = seen_conn or seen_store.get_conn()
+                seen_store.mark_seen(
+                    conn,
+                    dedup_key,
+                    source_domain=str(data.get("source_domain") or ""),
+                    title=str(data.get("title") or ""),
+                )
+                if getattr(cfg, "RAW_DEDUP_LOG", True):
+                    raw_log.info(
+                        "[RAW] пометил как увиденное: %s (mid=%s)", dedup_key, mid
+                    )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                raw_log.warning("[RAW] не удалось пометить как увиденное: %s", exc)
     else:
         log.error(
             "Публикация не удалась: chat_id=%s url=%s title=%s",

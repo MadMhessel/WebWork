@@ -4,6 +4,7 @@ import re
 import time
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Sequence, Tuple
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 try:
     from . import config, db, utils
@@ -18,6 +19,64 @@ from webwork.dedup import canonical_url, dedup_key as build_dedup_key, near_dupl
 logger = get_logger(__name__)
 
 _WORD_RE = re.compile(r"[0-9a-zа-яё]+", re.I)
+
+_TRACKING_PREFIXES = ("utm_", "yclid", "gclid", "fbclid", "spm", "_openstat")
+
+
+def normalize_url(url: str | None) -> str:
+    if not url:
+        return ""
+    raw = str(url).strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    filtered_query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not any(key.lower().startswith(prefix) for prefix in _TRACKING_PREFIXES)
+    ]
+    cleaned = parsed._replace(
+        netloc=host,
+        query=urlencode(filtered_query, doseq=True),
+        fragment="",
+    )
+    return urlunparse(cleaned)
+
+
+def make_key(item: dict) -> str:
+    url_fields = (
+        "url",
+        "URL",
+        "link",
+        "Link",
+        "source_url",
+        "SourceURL",
+        "sourceURL",
+        "sourceUrl",
+    )
+    normalized_url = ""
+    for field in url_fields:
+        value = item.get(field)
+        if value:
+            normalized_url = normalize_url(str(value))
+            if normalized_url:
+                break
+    if normalized_url:
+        return f"url:{normalized_url}"
+
+    title = str(item.get("title") or "").strip().lower()
+    domain_fields = ("source_domain", "domain", "source")
+    domain = ""
+    for field in domain_fields:
+        value = item.get(field)
+        if value:
+            domain = str(value).strip().lower()
+            if domain:
+                break
+    return f"title:{domain}:{title}"
 
 
 def deduplicate(items: Sequence[Dict[str, object]], *, scope: str = "default") -> List[Dict[str, object]]:

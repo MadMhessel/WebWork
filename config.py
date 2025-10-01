@@ -78,6 +78,18 @@ _DEDUP_CFG = _dedup_cfg_loader()
 _RAW_CFG = _raw_cfg_loader()
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    return default
+
+
 def _coerce_chat(value: str | None) -> str | int:
     if not value:
         return ""
@@ -242,7 +254,12 @@ if _RAW_FORWARD_STRATEGY not in {"copy", "forward", "link"}:
     _RAW_FORWARD_STRATEGY = "copy"
 RAW_FORWARD_STRATEGY: str = _RAW_FORWARD_STRATEGY
 RAW_BYPASS_FILTERS: bool = _RAW_CFG.bypass_filters
-RAW_BYPASS_DEDUP: bool = _RAW_CFG.bypass_dedup
+RAW_BYPASS_DEDUP: bool = _env_bool(
+    "RAW_BYPASS_DEDUP", bool(getattr(_RAW_CFG, "bypass_dedup", False))
+)
+RAW_CHANNEL_CHAT_ID: str = os.getenv("RAW_CHANNEL_CHAT_ID", "").strip()
+SEEN_DB_PATH: str = os.getenv("SEEN_DB_PATH", "seen.sqlite3").strip() or "seen.sqlite3"
+RAW_DEDUP_LOG: bool = _env_bool("RAW_DEDUP_LOG", True)
 RAW_MAX_PER_CHANNEL: int = int(os.getenv("RAW_MAX_PER_CHANNEL", "10"))
 RAW_MAX_CHANNELS_PER_TICK: int = int(os.getenv("RAW_MAX_CHANNELS_PER_TICK", "3"))
 RAW_CHANNEL_TIMEOUT_SEC: float = float(os.getenv("RAW_CHANNEL_TIMEOUT_SEC", "30"))
