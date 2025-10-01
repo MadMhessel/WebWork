@@ -1,8 +1,5 @@
 @echo off
 setlocal
-REM One-click launcher: runs PowerShell with temporary policy bypass and UTF-8
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ^
-   $env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; ^
-   & '%~dp0bootstrap.ps1' @args"
+REM One-click launcher: reliable arg passing to PowerShell and UTF-8 console
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0bootstrap.ps1" %*
 endlocal
