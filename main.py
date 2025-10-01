@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+# import-shim: allow running as a script (no package parent)
+if __name__ == "__main__" or __package__ is None:
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(__file__))
+# end of shim
+
 import argparse
 import sys
 import time
@@ -6,24 +14,46 @@ import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
-import bot_updates
-import classifieds
-import config
-import dedup
-import db
-import filters
-import http_client
-import moderation
-import moderator
-import raw_pipeline
-import rewrite
-import tagging
-from utils import compute_title_hash, normalize_whitespace
+try:  # pragma: no cover - package-relative imports when executed via -m
+    from . import (
+        bot_updates,
+        classifieds,
+        config,
+        dedup,
+        db,
+        filters,
+        http_client,
+        moderation,
+        moderator,
+        raw_pipeline,
+        rewrite,
+        tagging,
+    )
+    from .utils import compute_title_hash, normalize_whitespace
+    from .logging_setup import get_logger, init_logging
+except ImportError:  # pragma: no cover - direct script execution fallback
+    import bot_updates  # type: ignore
+    import classifieds  # type: ignore
+    import config  # type: ignore
+    import dedup  # type: ignore
+    import db  # type: ignore
+    import filters  # type: ignore
+    import http_client  # type: ignore
+    import moderation  # type: ignore
+    import moderator  # type: ignore
+    import raw_pipeline  # type: ignore
+    import rewrite  # type: ignore
+    import tagging  # type: ignore
+    from utils import compute_title_hash, normalize_whitespace  # type: ignore
+    from logging_setup import get_logger, init_logging  # type: ignore
+
 try:  # pragma: no cover - publisher may be optional in tests
-    import publisher  # type: ignore
-except Exception:  # pragma: no cover
-    publisher = None  # type: ignore
-from logging_setup import get_logger, init_logging
+    from . import publisher  # type: ignore
+except ImportError:  # pragma: no cover - executed when run as script
+    try:
+        import publisher  # type: ignore
+    except Exception:  # pragma: no cover
+        publisher = None  # type: ignore
 
 logger = get_logger(__name__)
 

@@ -6,3 +6,5 @@ python-dotenv==1.0.1
 platformdirs==4.2.0
 PyYAML==6.0.1
 telethon>=1.36.0
+# Pinned due to upstream sdist build failure (KeyError: __version__)
+tgcrypto==1.2.5
