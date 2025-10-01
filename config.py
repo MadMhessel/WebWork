@@ -3,8 +3,50 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from dotenv import dotenv_values, load_dotenv
 from platformdirs import user_config_dir
+
+logger = logging.getLogger(__name__)
+
+import config_state
+
+try:  # pragma: no cover - fallback used only when dependency missing
+    from dotenv import dotenv_values, load_dotenv  # type: ignore
+except ImportError:  # pragma: no cover - executed on systems without python-dotenv
+    logger.warning(
+        "Библиотека python-dotenv не установлена, используется упрощённый парсер .env"
+    )
+
+    def _read_env_file(path: os.PathLike[str] | str | None) -> dict[str, str]:
+        values: dict[str, str] = {}
+        if not path:
+            return values
+        file_path = Path(path)
+        if not file_path.is_file():
+            return values
+        try:
+            for line in file_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if "=" not in stripped:
+                    continue
+                key, _, value = stripped.partition("=")
+                key = key.strip()
+                if not key:
+                    continue
+                cleaned = value.strip().strip("\"\'")
+                values[key] = cleaned
+        except OSError as exc:
+            logger.debug("Не удалось прочитать %s: %s", file_path, exc)
+        return values
+
+    def dotenv_values(path: os.PathLike[str] | str | None) -> dict[str, str]:
+        return _read_env_file(path)
+
+    def load_dotenv(path: os.PathLike[str] | str | None) -> bool:
+        for key, value in _read_env_file(path).items():
+            os.environ.setdefault(key, value)
+        return True
 
 from webwork import dedup_config as _dedup_cfg_loader
 from webwork import http_cfg as _http_cfg_loader
@@ -12,8 +54,6 @@ from webwork import raw_config as _raw_cfg_loader
 from webwork import telegram_cfg as _telegram_cfg_loader
 
 from config_profiles import ProfileError, activate_profile
-
-logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - список источников региона
     from sources_nn import SOURCES_NN, SOURCES_BY_DOMAIN, SOURCES_BY_ID
@@ -34,7 +74,10 @@ REPO_ENV_PATH = Path(__file__).resolve().parent / ".env"
 def _snapshot_environment() -> dict[str, str]:
     """Capture the current environment values before local overrides."""
 
-    return dict(os.environ)
+    env = dict(os.environ)
+    for key in config_state.PROFILE_MANAGED_KEYS:
+        env.pop(key, None)
+    return env
 
 
 _ORIGINAL_ENV = _snapshot_environment()
@@ -58,6 +101,7 @@ def _apply_env_priority(*paths: Path) -> None:
                 continue
             os.environ[key] = value
 
+_PROFILE = None
 try:
     _PROFILE = activate_profile(config_dir=CONFIG_DIR)
 except ProfileError as exc:
@@ -81,6 +125,9 @@ else:
             )
 
 _apply_env_priority(ENV_PATH, REPO_ENV_PATH)
+
+if _PROFILE and _PROFILE.applied:
+    config_state.PROFILE_MANAGED_KEYS.update(_PROFILE.applied.keys())
 
 # Load hard-coded defaults if available
 try:  # pragma: no cover - simple fallback handling
