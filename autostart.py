@@ -803,11 +803,19 @@ class App(tk.Tk):
         )
 
     def _on_repeat_toggle(self) -> None:
+        # включаем/выключаем спинбокс
         if hasattr(self, "spin_repeat"):
             state = "normal" if self.repeat_enabled.get() else "disabled"
             self.spin_repeat.configure(state=state)
+        # если сняли галочку — просто отменяем расписание
         if not self.repeat_enabled.get():
             self._cancel_repeat_job()
+            return
+        # если галочку поставили и сейчас НИЧЕГО не работает и нет уже запланированной задачи —
+        # сразу ставим первый запуск через указанное кол-во минут
+        proc_running = bool(self.runner.proc and self.runner.proc.poll() is None)
+        if not proc_running and not self.repeat_job_id:
+            self._schedule_repeat()
 
     # ---- Tab EDIT ----
     def _build_tab_edit(self):
