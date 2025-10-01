@@ -4,8 +4,7 @@ beautifulsoup4==4.12.3
 Pillow==11.0.0
 PyYAML==6.0.1
 telethon>=1.36.0
-# Pinned due to upstream sdist build failure (KeyError: __version__)
-tgcrypto==1.2.5
+# tgcrypto disabled on CPython 3.12+: wheelless sdist causes MSVC build
 TgCrypto-pyrofork>=1.2.7
 
 # обязательные доп. зависимости

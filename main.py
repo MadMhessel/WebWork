@@ -1,9 +1,7 @@
-# -*- coding: utf-8 -*-
-# import-shim: запуск как скрипта без пакетного родителя
+# import-shim for flat layout
 if __name__ == "__main__" or __package__ is None:
     import os, sys
     sys.path.insert(0, os.path.dirname(__file__))
-# end shim
 
 import argparse
 import sys

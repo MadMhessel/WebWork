@@ -1,21 +1,14 @@
-# import-shim: запуск как скрипта без пакетного родителя
+# import-shim for flat layout
 if __name__ == "__main__" or __package__ is None:
     import os, sys
     sys.path.insert(0, os.path.dirname(__file__))
-# end shim
-
-import time
 
 try:
     from . import config, db, http_client, moderator, publisher  # type: ignore
-except Exception:  # pragma: no cover
-    # абсолютные импорты как fallback
-    # from .module -> import module
-    import config  # type: ignore
-    import db  # type: ignore
-    import http_client  # type: ignore
-    import moderator  # type: ignore
-    import publisher  # type: ignore
+except Exception:
+    import config, db, http_client, moderator, publisher  # type: ignore
+
+import time
 
 try:
     from .logging_setup import get_logger  # type: ignore
