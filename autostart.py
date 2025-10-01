@@ -7,6 +7,7 @@ import shlex
 import time
 import queue
 import shutil
+import traceback
 import zipfile
 import tempfile
 import threading
@@ -15,14 +16,82 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
-
-import yaml
-
 APP_NAME = "WebWork Manager"
 APP_VERSION = "3.0"
 CFG_FILE = Path.home() / ".webwork_manager.json"  # хранение настроек (url, ветка и т.д.)
+ERROR_LOG_FILE = Path.home() / "webwork_autostart_error.log"
+
+
+def _fatal_error(message: str, exc: BaseException | None = None) -> "NoReturn":
+    """Записывает ошибку в лог и пытается показать пользователю понятное сообщение."""
+
+    log_note = ""
+    details = ""
+    if exc is not None:
+        details = "".join(traceback.format_exception(exc))
+
+    try:
+        with ERROR_LOG_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}\n")
+            if details:
+                fh.write(details)
+            fh.write("\n")
+        log_note = f"\n\nПолный текст ошибки сохранён в {ERROR_LOG_FILE}"
+    except Exception:
+        log_note = ""
+
+    display_text = message + log_note
+    if exc is not None and not log_note:
+        display_text += f"\n\n{exc}"
+
+    shown = False
+    tk_module = globals().get("tk")
+    if tk_module and hasattr(tk_module, "Tk"):
+        try:
+            root = tk_module.Tk()
+            root.withdraw()
+            messagebox.showerror(APP_NAME, display_text)
+            root.destroy()
+            shown = True
+        except Exception:
+            shown = False
+
+    if not shown and os.name == "nt":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(0, display_text, APP_NAME, 0x10)
+            shown = True
+        except Exception:
+            shown = False
+
+    if not shown:
+        sys.stderr.write(display_text + "\n")
+        try:
+            if sys.stdin.isatty():
+                input("Нажмите Enter для выхода...")
+        except Exception:
+            pass
+
+    raise SystemExit(1)
+
+
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, simpledialog, ttk
+except Exception as exc:  # pragma: no cover - зависит от окружения пользователя
+    _fatal_error(
+        "Не удалось загрузить модуль tkinter. Установите поддержку Tkinter и повторите запуск.",
+        exc,
+    )
+
+try:
+    import yaml
+except Exception as exc:  # pragma: no cover - зависит от окружения пользователя
+    _fatal_error(
+        "Не удалось загрузить модуль PyYAML (yaml). Установите пакет PyYAML и повторите запуск.",
+        exc,
+    )
 
 # --- ключи окружения (см. v2) ---
 DEFAULT_ENV_KEYS = [
@@ -1374,4 +1443,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - пользовательская среда
+        _fatal_error("Критическая ошибка при запуске панели управления WebWork.", exc)
