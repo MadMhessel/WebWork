@@ -1,3 +1,3 @@
 python -m pip install -U pip setuptools wheel build
-python -m pip install -U --only-binary=:all: --upgrade-strategy eager
-python -m pip install --only-binary=:all: tgcrypto==1.2.5
+# policy hint for humans: prefer wheels
+Write-Host "Prefer wheels: use --prefer-binary / --only-binary=:all: if a build fails"
