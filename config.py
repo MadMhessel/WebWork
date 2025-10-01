@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from platformdirs import user_config_dir
 
 from webwork import dedup_config as _dedup_cfg_loader
@@ -28,10 +28,35 @@ APP_NAME = "NewsBot"
 CONFIG_DIR = Path(user_config_dir(APP_NAME))
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 ENV_PATH = CONFIG_DIR / ".env"
+REPO_ENV_PATH = Path(__file__).resolve().parent / ".env"
 
-# First load persistent config, then allow local .env to override for development
+
+def _snapshot_environment() -> dict[str, str]:
+    """Capture the current environment values before local overrides."""
+
+    return dict(os.environ)
+
+
+_ORIGINAL_ENV = _snapshot_environment()
+
+# First load persistent config, then allow local .env to provide defaults
 load_dotenv(ENV_PATH)
-load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+load_dotenv(REPO_ENV_PATH)
+
+
+def _apply_env_priority(*paths: Path) -> None:
+    """Re-apply .env files so they override profile defaults but not real env."""
+
+    for path in paths:
+        if not path or not path.is_file():
+            continue
+        values = dotenv_values(path)
+        for key, value in values.items():
+            if value is None:
+                continue
+            if key in _ORIGINAL_ENV:
+                continue
+            os.environ[key] = value
 
 try:
     _PROFILE = activate_profile(config_dir=CONFIG_DIR)
@@ -54,6 +79,8 @@ else:
                 "Параметры, сохранённые из окружения: %s",
                 ", ".join(sorted(_PROFILE.skipped)),
             )
+
+_apply_env_priority(ENV_PATH, REPO_ENV_PATH)
 
 # Load hard-coded defaults if available
 try:  # pragma: no cover - simple fallback handling
