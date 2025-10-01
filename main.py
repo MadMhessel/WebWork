@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-# import-shim: allow running as a script (no package parent)
+# import-shim: запуск как скрипта без пакетного родителя
 if __name__ == "__main__" or __package__ is None:
-    import os
-    import sys
-
+    import os, sys
     sys.path.insert(0, os.path.dirname(__file__))
-# end of shim
+# end shim
 
 import argparse
 import sys
@@ -31,7 +29,9 @@ try:  # pragma: no cover - package-relative imports when executed via -m
     )
     from .utils import compute_title_hash, normalize_whitespace
     from .logging_setup import get_logger, init_logging
-except ImportError:  # pragma: no cover - direct script execution fallback
+except Exception:  # pragma: no cover - direct script execution fallback
+    # абсолютные импорты как fallback
+    # from .module -> import module
     import bot_updates  # type: ignore
     import classifieds  # type: ignore
     import config  # type: ignore
