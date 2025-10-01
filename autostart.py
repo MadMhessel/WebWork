@@ -12,6 +12,7 @@ import zipfile
 import tempfile
 import threading
 import subprocess
+import importlib
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -85,13 +86,34 @@ except Exception as exc:  # pragma: no cover - зависит от окруже�
         exc,
     )
 
-try:
-    import yaml
-except Exception as exc:  # pragma: no cover - зависит от окружения пользователя
-    _fatal_error(
-        "Не удалось загрузить модуль PyYAML (yaml). Установите пакет PyYAML и повторите запуск.",
-        exc,
-    )
+def _ensure_dependency(module_name: str, package_name: str, friendly_name: str):
+    """Гарантирует наличие зависимости. При необходимости пытается установить через pip."""
+
+    try:
+        return importlib.import_module(module_name)
+    except Exception:
+        install_cmd = [sys.executable, "-m", "pip", "install", package_name]
+        try:
+            subprocess.check_call(install_cmd)
+        except Exception as exc:  # pragma: no cover - зависит от окружения пользователя
+            cmd_display = " ".join(shlex.quote(x) for x in install_cmd)
+            _fatal_error(
+                "Не удалось загрузить модуль "
+                f"{friendly_name}. Автоматическая установка через pip завершилась ошибкой.\n"
+                f"Попробуйте вручную выполнить команду: {cmd_display}",
+                exc,
+            )
+        try:
+            return importlib.import_module(module_name)
+        except Exception as exc:  # pragma: no cover - зависит от окружения пользователя
+            _fatal_error(
+                "Не удалось загрузить модуль "
+                f"{friendly_name} даже после установки. Проверьте окружение и повторите запуск.",
+                exc,
+            )
+
+
+yaml = _ensure_dependency("yaml", "PyYAML", "PyYAML (yaml)")
 
 # --- ключи окружения (см. v2) ---
 DEFAULT_ENV_KEYS = [
