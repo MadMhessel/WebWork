@@ -1,3 +1,10 @@
+# import-shim: allow running as a script (no package parent)
+if __name__ == "__main__" or __package__ is None:
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+# end of shim
+
 import json
 import sqlite3
 import time

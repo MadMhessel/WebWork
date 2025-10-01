@@ -227,3 +227,10 @@ python main.py
 
 Для ручной отладки MTProto воспользуйтесь `tools/telethon_shell.py`
 (запускается в виртуальном окружении и использует те же переменные окружения).
+
+## Windows quick start
+
+```powershell
+.\scripts\setup_env.ps1
+.\scripts\run.ps1
+```
