@@ -690,6 +690,7 @@ class App(tk.Tk):
         controls = ttk.Frame(frm, padding=(4,6))
         controls.grid(row=0, column=0, sticky="ew")
         ttk.Button(controls, text="Запустить", command=self._start_bot).pack(side="left", padx=4)
+        ttk.Button(controls, text="Бесконечный цикл", command=self._start_loop_bot).pack(side="left", padx=4)
         ttk.Button(controls, text="Остановить", command=self._stop_bot).pack(side="left", padx=4)
         ttk.Button(controls, text="Очистить лог", command=lambda: self._set_logs("")).pack(side="left", padx=4)
 
@@ -1149,6 +1150,20 @@ class App(tk.Tk):
             raise
         if not started and self.repeat_enabled.get():
             self._schedule_repeat()
+
+    def _start_loop_bot(self):
+        if self.runner.proc and self.runner.proc.poll() is None:
+            messagebox.showwarning(APP_NAME, "Процесс уже выполняется")
+            return
+        if self.repeat_enabled.get():
+            self.repeat_enabled.set(False)
+            self._on_repeat_toggle()
+        self._cancel_repeat_job()
+        started = self._start_with_args(["--loop"])
+        if started:
+            self._log_meta(
+                f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Запуск в бесконечном цикле (--loop).\n"
+            )
 
     def _start_with_args(self, extra_args: list[str]) -> bool:
         if not self._ensure_repo():
