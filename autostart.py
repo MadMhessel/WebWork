@@ -1168,8 +1168,26 @@ class App(tk.Tk):
     def _start_with_args(self, extra_args: list[str]) -> bool:
         if not self._ensure_repo():
             return False
-        if sys.platform == "win32" and (self.repo_dir / "start.bat").exists():
-            cmd_list = [str(self.repo_dir / "start.bat")]
+        if sys.platform == "win32":
+            cmd_list: list[str] = []
+            windows_candidates: list[tuple[str, list[str]]] = [
+                ("Start-WebWork.bat", ["cmd", "/c", "call"]),
+                ("start.bat", ["cmd", "/c", "call"]),
+                ("bootstrap.ps1", [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ]),
+            ]
+            for name, prefix in windows_candidates:
+                path = self.repo_dir / name
+                if path.exists():
+                    cmd_list = [*prefix, str(path)]
+                    break
+            if not cmd_list:
+                cmd_list = [sys.executable, "main.py"]
         elif sys.platform != "win32" and (self.repo_dir / "start.sh").exists():
             cmd_list = ["bash", str(self.repo_dir / "start.sh")]
         else:
