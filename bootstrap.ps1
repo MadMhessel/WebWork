@@ -18,6 +18,27 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     try { winget install --id=astral-sh.uv -e --source winget --silent | Out-Null } catch { }
   }
 }
+
+# Ensure we can reach uv.exe even if the installer modified only the user PATH.
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+  $candidatePaths = @()
+  if ($env:USERPROFILE) { $candidatePaths += Join-Path $env:USERPROFILE ".local\bin\uv.exe" }
+  if ($env:LOCALAPPDATA) { $candidatePaths += Join-Path $env:LOCALAPPDATA "Programs\uv\uv.exe" }
+
+  foreach ($candidate in $candidatePaths) {
+    if (-not $candidate) { continue }
+    if (-not (Test-Path $candidate)) { continue }
+
+    $dir = Split-Path -Parent $candidate
+    if (-not $dir) { continue }
+
+    $pathEntries = $env:Path -split ';'
+    if (-not ($pathEntries | Where-Object { $_ -and ($_ -ieq $dir) })) {
+      $env:Path = "$dir;$env:Path"
+    }
+  }
+}
+
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { throw "uv is not available" }
 
 # 3) Create venv if missing
