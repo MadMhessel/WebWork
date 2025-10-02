@@ -1,10 +1,10 @@
 #requires -Version 5.1
-$ErrorActionPreference = "Stop"
-
 param(
   [Parameter(ValueFromRemainingArguments=$true)]
   [string[]]$AppArgs
 )
+
+$ErrorActionPreference = "Stop"
 
 # 0) Work in script directory
 Set-Location -LiteralPath (Split-Path -Parent $MyInvocation.MyCommand.Path)
