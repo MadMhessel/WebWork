@@ -10,8 +10,12 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-import config
-import publisher
+try:
+    from . import config
+    from . import publisher
+except ImportError:  # pragma: no cover - fallback for script execution
+    import config  # type: ignore
+    import publisher  # type: ignore
 
 from logging_setup import get_logger
 

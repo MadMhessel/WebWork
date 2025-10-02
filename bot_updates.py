@@ -3,11 +3,18 @@ if __name__ == "__main__" or __package__ is None:
     import os, sys
     sys.path.insert(0, os.path.dirname(__file__))
 
-import config
-import db
-import http_client
-import moderator
-import publisher
+try:
+    from . import config
+    from . import db
+    from . import http_client
+    from . import moderator
+    from . import publisher
+except ImportError:  # pragma: no cover - fallback when executed as script
+    import config  # type: ignore
+    import db  # type: ignore
+    import http_client  # type: ignore
+    import moderator  # type: ignore
+    import publisher  # type: ignore
 
 import time
 

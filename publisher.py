@@ -17,11 +17,18 @@ from urllib.parse import urlparse
 
 import requests
 
-import config
-import dedup
-import moderation
-import rewrite
-import seen_store
+try:
+    from . import config
+    from . import dedup
+    from . import moderation
+    from . import rewrite
+    from . import seen_store
+except ImportError:  # pragma: no cover - fallback for script execution
+    import config  # type: ignore
+    import dedup  # type: ignore
+    import moderation  # type: ignore
+    import rewrite  # type: ignore
+    import seen_store  # type: ignore
 from formatting import clean_html_tags, html_escape, truncate_by_chars
 from logging_setup import audit, get_logger, mask_secrets
 from webwork.utils.formatting import chunk_text, safe_format, TG_TEXT_LIMIT
