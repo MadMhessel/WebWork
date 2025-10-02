@@ -44,6 +44,12 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { throw "uv is not avai
 # 3) Create venv if missing
 if (-not (Test-Path ".venv")) { uv venv | Out-Null }
 
+$venvPython = Join-Path ".venv" "Scripts/python.exe"
+if (-not (Test-Path $venvPython)) {
+  $venvPython = Join-Path ".venv" "bin/python"
+}
+if (-not (Test-Path $venvPython)) { throw "Python executable not found in virtual environment" }
+
 # 4) Dependencies (wheel-first) + minimal guarantees
 if (Test-Path "requirements.txt") {
   $req = Get-Content "requirements.txt" -Raw
@@ -65,10 +71,16 @@ if (Test-Path "requirements.txt") {
     }
   }
 
-  uv sync --no-dev
+  & $venvPython -m pip install --upgrade pip
+  & $venvPython -m pip install -r "requirements.txt"
 } else {
-  uv pip install python-dotenv platformdirs
+  & $venvPython -m pip install --upgrade pip
+  & $venvPython -m pip install python-dotenv>=1.0.0 platformdirs>=4.0.0
 }
 
 # 5) Run app and forward user args
-if ($AppArgs.Count -gt 0) { uv run python .\main.py @AppArgs } else { uv run python .\main.py }
+if ($AppArgs.Count -gt 0) {
+  & $venvPython "./main.py" @AppArgs
+} else {
+  & $venvPython "./main.py"
+}
