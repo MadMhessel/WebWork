@@ -51,6 +51,33 @@ if (-not (Test-Path $venvPython)) {
 if (-not (Test-Path $venvPython)) { throw "Python executable not found in virtual environment" }
 
 # 4) Dependencies (wheel-first) + minimal guarantees
+# Ensure pip is available inside the virtual environment.
+$pipReady = $false
+try {
+  & $venvPython -m pip --version | Out-Null
+  $pipReady = $true
+} catch {
+  $pipReady = $false
+}
+
+if (-not $pipReady) {
+  try {
+    & $venvPython -m ensurepip --upgrade | Out-Null
+  } catch {
+    Write-Verbose "ensurepip is unavailable or failed: $_"
+  }
+  try {
+    & $venvPython -m pip --version | Out-Null
+    $pipReady = $true
+  } catch {
+    $pipReady = $false
+  }
+}
+
+if (-not $pipReady) {
+  throw "pip is not available in the virtual environment"
+}
+
 if (Test-Path "requirements.txt") {
   $req = Get-Content "requirements.txt" -Raw
 
