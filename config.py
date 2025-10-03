@@ -1,10 +1,31 @@
+import importlib.util
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from platformdirs import user_config_dir
+_platformdirs_spec = importlib.util.find_spec("platformdirs")
+if _platformdirs_spec is not None:  # pragma: no cover - optional dependency
+    from platformdirs import user_config_dir
+else:  # pragma: no cover - executed on systems without platformdirs
+    def user_config_dir(app_name: str) -> str:
+        """Fallback for :func:`platformdirs.user_config_dir`."""
+
+        if sys.platform.startswith("win"):
+            base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+            if not base:
+                base = Path.home() / "AppData" / "Roaming"
+        elif sys.platform == "darwin":
+            base = Path.home() / "Library" / "Application Support"
+        else:
+            base = os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
+        return str(Path(base) / app_name)
+
+    logging.getLogger(__name__).warning(
+        "Библиотека platformdirs не установлена, используется резервный путь настроек"
+    )
 
 logger = logging.getLogger(__name__)
 
