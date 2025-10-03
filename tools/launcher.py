@@ -4,18 +4,86 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, MutableMapping, Optional
 
-import yaml
-from dotenv import dotenv_values
-from platformdirs import user_config_dir
-
 from config_profiles import CONFIG_FILE_NAME, DEFAULT_PROFILE_NAME, PROFILE_PATH_ENV_VAR
+
+
+def _pip_is_available() -> bool:
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_pip() -> None:
+    if _pip_is_available():
+        return
+
+    try:  # pragma: no branch - зависит от окружения пользователя
+        import ensurepip
+
+        ensurepip.bootstrap(upgrade=True)
+    except Exception:
+        pass
+
+    if _pip_is_available():
+        return
+
+    tmp_file = Path(tempfile.gettempdir()) / f"get-pip-{int(time.time())}.py"
+    try:
+        with urllib.request.urlopen("https://bootstrap.pypa.io/get-pip.py") as src, tmp_file.open(
+            "wb"
+        ) as dst:
+            shutil.copyfileobj(src, dst)
+        subprocess.check_call([sys.executable, str(tmp_file)])
+    finally:
+        try:
+            tmp_file.unlink()
+        except Exception:
+            pass
+
+    if not _pip_is_available():  # pragma: no cover - зависит от окружения пользователя
+        raise RuntimeError(
+            "pip недоступен в текущем окружении. Установите его вручную и повторите запуск."
+        )
+
+
+def _ensure_dependency(module_name: str, package_spec: str):
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        _ensure_pip()
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package_spec])
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - зависит от окружения пользователя
+            raise RuntimeError(
+                f"Не удалось автоматически установить зависимость {package_spec}."
+            ) from exc
+        return importlib.import_module(module_name)
+
+
+dotenv_module = _ensure_dependency("dotenv", "python-dotenv>=1.0.0")
+platformdirs_module = _ensure_dependency("platformdirs", "platformdirs>=4.0.0")
+yaml = _ensure_dependency("yaml", "PyYAML")
+
+dotenv_values = dotenv_module.dotenv_values
+user_config_dir = platformdirs_module.user_config_dir
 
 
 @dataclass
