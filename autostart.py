@@ -14,6 +14,7 @@ import threading
 import subprocess
 import importlib
 import urllib.request
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -509,6 +510,11 @@ class App(tk.Tk):
         self.repeat_job_id: str | None = None
         self.repeat_enabled = tk.BooleanVar(value=False)
         self.repeat_minutes = tk.IntVar(value=15)
+        self._runner_purpose: str | None = None
+        self._pending_requirements_hash: str | None = None
+        self._auto_setup_in_progress = False
+        self._auto_setup_target: Path | None = None
+        self._auto_setup_retry = False
 
         self._build_ui()
         self._on_repeat_toggle()
@@ -518,6 +524,7 @@ class App(tk.Tk):
             self.repo_dir_var.set(str(guessed))
             self._refresh_profiles()
         self.after(100, self._tick)
+        self.after(750, self._auto_setup_if_needed)
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -928,6 +935,7 @@ class App(tk.Tk):
         self.repo_dir = Path(path)
         self.repo_dir_var.set(str(self.repo_dir))
         self._refresh_profiles()
+        self.after(200, self._auto_setup_if_needed)
 
     def _open_repo(self):
         if not self._ensure_repo():
@@ -1277,12 +1285,14 @@ class App(tk.Tk):
                 return
         cmd_list = [sys.executable, "-m", "venv", ".venv"]
         try:
+            self._runner_purpose = "create_venv"
             self.runner.start(cmd_list, cwd=str(self.repo_dir), env=os.environ.copy())
             self._log_meta(
                 "Создание виртуального окружения (.venv). "
                 "Для PowerShell может потребоваться Set-ExecutionPolicy RemoteSigned.\n"
             )
         except RuntimeError as e:
+            self._runner_purpose = None
             messagebox.showerror(APP_NAME, str(e))
 
     def _install_telethon(self):
@@ -1302,11 +1312,16 @@ class App(tk.Tk):
         if not req.exists():
             messagebox.showwarning(APP_NAME, "Файл requirements.txt не найден в репозитории.")
             return
-        cmd_list = [sys.executable, "-m", "pip", "install", "-r", str(req)]
+        python_cmd = self._venv_python_path() or Path(sys.executable)
+        cmd_list = [str(python_cmd), "-m", "pip", "install", "-r", str(req)]
         try:
+            self._runner_purpose = "install_requirements"
+            self._pending_requirements_hash = self._current_requirements_hash()
             self.runner.start(cmd_list, cwd=str(self.repo_dir), env=os.environ.copy())
             self._log_meta(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Установка зависимостей из requirements.txt\n")
         except RuntimeError as e:
+            self._runner_purpose = None
+            self._pending_requirements_hash = None
             messagebox.showerror(APP_NAME, str(e))
 
     def _check_getme(self):
@@ -1566,6 +1581,133 @@ class App(tk.Tk):
                     continue
                 shutil.copy2(s, d)
 
+    def _venv_python_path(self, repo: Path | None = None) -> Path | None:
+        repo = repo or self.repo_dir
+        if not repo:
+            return None
+        if sys.platform == "win32":
+            candidate = repo / ".venv" / "Scripts" / "python.exe"
+        else:
+            candidate = repo / ".venv" / "bin" / "python"
+        return candidate if candidate.exists() else None
+
+    def _requirements_marker_path(self, repo: Path | None = None) -> Path | None:
+        repo = repo or self.repo_dir
+        if not repo:
+            return None
+        return repo / ".venv" / ".requirements_hash"
+
+    def _current_requirements_hash(self, repo: Path | None = None) -> str | None:
+        repo = repo or self.repo_dir
+        if not repo:
+            return None
+        req = repo / "requirements.txt"
+        if not req.exists():
+            return None
+        return hashlib.sha256(req.read_bytes()).hexdigest()
+
+    def _stored_requirements_hash(self, repo: Path | None = None) -> str | None:
+        marker = self._requirements_marker_path(repo)
+        if not marker or not marker.exists():
+            return None
+        try:
+            return marker.read_text(encoding="utf-8").strip() or None
+        except Exception:
+            return None
+
+    def _store_requirements_marker(self, value: str | None, repo: Path | None = None) -> None:
+        if not value:
+            return
+        marker = self._requirements_marker_path(repo)
+        if not marker:
+            return
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(value, encoding="utf-8")
+        except Exception:
+            pass
+
+    def _log_meta_async(self, text: str) -> None:
+        self.after(0, lambda: self._log_meta(text))
+
+    def _auto_setup_if_needed(self):
+        if not self.repo_dir:
+            return
+        if self._auto_setup_in_progress:
+            if self._auto_setup_target != self.repo_dir:
+                self._auto_setup_retry = True
+            return
+        if self.runner.proc and self.runner.proc.poll() is None:
+            self.after(2000, self._auto_setup_if_needed)
+            return
+        repo = self.repo_dir
+        if not repo:
+            return
+        venv_cfg = repo / ".venv" / "pyvenv.cfg"
+        req_hash = self._current_requirements_hash(repo)
+        needs_venv = not venv_cfg.exists()
+        needs_reqs = bool(req_hash) and req_hash != self._stored_requirements_hash(repo)
+        if not needs_venv and not needs_reqs:
+            self._auto_setup_retry = False
+            self._auto_setup_target = None
+            return
+        self._auto_setup_in_progress = True
+        self._auto_setup_target = repo
+        self._auto_setup_retry = False
+
+        def worker():
+            try:
+                self._deploy_environment_if_needed(repo, needs_venv, needs_reqs, req_hash)
+            finally:
+                self._auto_setup_in_progress = False
+                self._auto_setup_target = None
+                if self._auto_setup_retry:
+                    self._auto_setup_retry = False
+                    self.after(0, self._auto_setup_if_needed)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ensure_pip_for_python(self, python_exe: Path, cwd: Path) -> None:
+        try:
+            subprocess.check_call(
+                [str(python_exe), "-m", "pip", "--version"],
+                cwd=str(cwd),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        except Exception:
+            pass
+        try:
+            subprocess.check_call([str(python_exe), "-m", "ensurepip", "--upgrade"], cwd=str(cwd))
+        except Exception:
+            pass
+        subprocess.check_call([str(python_exe), "-m", "pip", "--version"], cwd=str(cwd))
+
+    def _deploy_environment_if_needed(self, repo: Path, needs_venv: bool, needs_reqs: bool, req_hash: str | None):
+        try:
+            if needs_venv:
+                self._log_meta_async("[auto-setup] Создание виртуального окружения .venv…\n")
+                subprocess.check_call([sys.executable, "-m", "venv", ".venv"], cwd=str(repo))
+            python_exe = self._venv_python_path(repo) or Path(sys.executable)
+            if needs_venv or needs_reqs:
+                self._log_meta_async("[auto-setup] Проверка pip…\n")
+                self._ensure_pip_for_python(python_exe, repo)
+                if needs_venv:
+                    self._log_meta_async("[auto-setup] Обновление pip в виртуальном окружении…\n")
+                    subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"], cwd=str(repo))
+                if req_hash and (needs_reqs or needs_venv):
+                    self._log_meta_async("[auto-setup] Установка зависимостей из requirements.txt…\n")
+                    subprocess.check_call([str(python_exe), "-m", "pip", "install", "-r", "requirements.txt"], cwd=str(repo))
+                    self._store_requirements_marker(req_hash, repo)
+            self._log_meta_async("[auto-setup] Автоматическая настройка завершена.\n")
+        except subprocess.CalledProcessError as exc:
+            self._log_meta_async(
+                f"[auto-setup] Ошибка: команда {' '.join(shlex.quote(str(x)) for x in exc.cmd)} завершилась с кодом {exc.returncode}.\n"
+            )
+        except Exception as exc:
+            self._log_meta_async(f"[auto-setup] Ошибка автоматической настройки: {exc}\n")
+
     # ---------- Runner callbacks ----------
     def on_output(self, items):
         self.txt_logs.configure(state="normal")
@@ -1586,6 +1728,12 @@ class App(tk.Tk):
                 if hasattr(self, "status_sys"):
                     self.status_sys.configure(text="CPU: —  MEM: —  NET: —/—")
                 self._schedule_repeat()
+                if code == 0 and self._runner_purpose == "install_requirements":
+                    self._store_requirements_marker(self._pending_requirements_hash, self.repo_dir)
+                if code == 0 and self._runner_purpose == "create_venv":
+                    self.after(500, self._auto_setup_if_needed)
+                self._pending_requirements_hash = None
+                self._runner_purpose = None
 
         # on_state_change может вызываться из фонового потока ProcessRunner,
         # поэтому переносим обновление UI в главный поток Tkinter.
