@@ -1,10 +1,35 @@
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from platformdirs import user_config_dir
+try:
+    from platformdirs import user_config_dir
+except ImportError:  # pragma: no cover - executed when dependency missing
+    logger = logging.getLogger(__name__)
+    logger.warning(
+        "Библиотека platformdirs не установлена, используется упрощённый путь конфигурации"
+    )
+
+    def user_config_dir(appname: str, roaming: bool = False) -> str:
+        """Fallback implementation mimicking platformdirs.user_config_dir."""
+
+        home = Path.home()
+        if os.name == "nt":
+            appdata = os.getenv("APPDATA")
+            if appdata:
+                base = Path(appdata)
+            else:
+                roaming_dir = "Roaming" if roaming else "Local"
+                base = home / "AppData" / roaming_dir
+        elif sys.platform == "darwin":
+            base = home / "Library" / "Application Support"
+        else:
+            base = Path(os.getenv("XDG_CONFIG_HOME", home / ".config"))
+        return str(base / appname)
+
 
 logger = logging.getLogger(__name__)
 
