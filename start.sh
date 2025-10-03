@@ -12,6 +12,12 @@ ensure_pip() {
     return 0
   fi
 
+  python3 -m venv --upgrade-deps .venv >/dev/null 2>&1 || true
+
+  if python -m pip --version >/dev/null 2>&1; then
+    return 0
+  fi
+
   python -m ensurepip --upgrade >/dev/null 2>&1 || true
 
   if python -m pip --version >/dev/null 2>&1; then
