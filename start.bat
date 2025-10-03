@@ -42,6 +42,38 @@ if not exist "%VENV_PY%" (
     )
 )
 
+call "%VENV_PY%" -m pip --version >nul 2>&1
+if errorlevel 1 (
+    call "%VENV_PY%" -m ensurepip --upgrade >nul 2>&1
+)
+
+call "%VENV_PY%" -m pip --version >nul 2>&1
+if errorlevel 1 (
+    set "GETPIP_FILE=%TEMP%\get-pip.py"
+    for %%P in (powershell.exe pwsh.exe) do (
+        where /Q %%P 2>nul
+        if not errorlevel 1 (
+            %%P -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%GETPIP_FILE%'" 2>nul
+            goto :after_getpip_download
+        )
+    )
+    echo [INFO] Downloading get-pip.py via bitsadmin fallback...
+    bitsadmin /transfer getpipdownloadjob /download /priority normal https://bootstrap.pypa.io/get-pip.py "%GETPIP_FILE%" >nul 2>&1
+:after_getpip_download
+    if exist "%GETPIP_FILE%" (
+        call "%VENV_PY%" "%GETPIP_FILE%"
+        del /Q "%GETPIP_FILE%" >nul 2>&1
+    )
+)
+
+call "%VENV_PY%" -m pip --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] pip is not available in the virtual environment.
+    set "ERR=1"
+    popd >nul 2>&1
+    endlocal & exit /b %ERR%
+)
+
 if exist requirements.txt (
     echo [INFO] Installing dependencies from requirements.txt
     call "%VENV_PY%" -m pip install -r requirements.txt --no-cache-dir
