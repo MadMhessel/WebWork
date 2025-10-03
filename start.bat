@@ -44,6 +44,11 @@ if not exist "%VENV_PY%" (
 
 call "%VENV_PY%" -m pip --version >nul 2>&1
 if errorlevel 1 (
+    call %PY_CMD% %PY_ARGS% -m venv --upgrade-deps "%VENV_DIR%"
+)
+
+call "%VENV_PY%" -m pip --version >nul 2>&1
+if errorlevel 1 (
     call "%VENV_PY%" -m ensurepip --upgrade >nul 2>&1
 )
 
