@@ -97,12 +97,67 @@ except Exception as exc:  # pragma: no cover - зависит от окруже�
         exc,
     )
 
+def _pip_is_available() -> bool:
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_pip() -> None:
+    """Проверяет наличие pip и при необходимости устанавливает его."""
+
+    if _pip_is_available():
+        return
+
+    # Попытка через встроенный ensurepip (если доступен)
+    try:  # pragma: no branch - импорт зависит от окружения
+        import ensurepip
+
+        ensurepip.bootstrap(upgrade=True)
+    except Exception:
+        pass
+
+    if _pip_is_available():
+        return
+
+    # Фоллбэк: загрузить get-pip.py и выполнить его
+    tmp_file = Path(tempfile.gettempdir()) / f"get-pip-{int(time.time())}.py"
+    try:
+        with urllib.request.urlopen("https://bootstrap.pypa.io/get-pip.py") as src, tmp_file.open(
+            "wb"
+        ) as dst:
+            shutil.copyfileobj(src, dst)
+        subprocess.check_call([sys.executable, str(tmp_file)])
+    except Exception as exc:  # pragma: no cover - зависит от окружения пользователя
+        _fatal_error(
+            "pip недоступен в текущем окружении и не удалось установить его автоматически.",
+            exc,
+        )
+    finally:
+        try:
+            tmp_file.unlink()
+        except Exception:
+            pass
+
+    if not _pip_is_available():  # pragma: no cover - зависит от окружения пользователя
+        _fatal_error(
+            "pip недоступен даже после попытки автоматической установки. Проверьте окружение и повторите запуск.",
+        )
+
+
 def _ensure_dependency(module_name: str, package_name: str, friendly_name: str):
     """Гарантирует наличие зависимости. При необходимости пытается установить через pip."""
 
     try:
         return importlib.import_module(module_name)
     except Exception:
+        _ensure_pip()
         install_cmd = [sys.executable, "-m", "pip", "install", package_name]
         try:
             subprocess.check_call(install_cmd)
@@ -124,6 +179,8 @@ def _ensure_dependency(module_name: str, package_name: str, friendly_name: str):
             )
 
 
+_ensure_dependency("platformdirs", "platformdirs>=4.0.0", "platformdirs")
+_ensure_dependency("dotenv", "python-dotenv>=1.0.0", "python-dotenv (dotenv)")
 yaml = _ensure_dependency("yaml", "PyYAML", "PyYAML (yaml)")
 
 # --- ключи окружения (см. v2) ---
