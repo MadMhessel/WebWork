@@ -75,6 +75,26 @@ if (-not $pipReady) {
 }
 
 if (-not $pipReady) {
+  $tempDir = [IO.Path]::GetTempPath()
+  $getPipPath = Join-Path $tempDir "get-pip.py"
+  try {
+    Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPipPath -UseBasicParsing | Out-Null
+    & $venvPython $getPipPath | Out-Null
+  } catch {
+    throw "Failed to bootstrap pip in the virtual environment: $_"
+  } finally {
+    if (Test-Path $getPipPath) { Remove-Item $getPipPath -ErrorAction SilentlyContinue }
+  }
+
+  try {
+    & $venvPython -m pip --version | Out-Null
+    $pipReady = $true
+  } catch {
+    $pipReady = $false
+  }
+}
+
+if (-not $pipReady) {
   throw "pip is not available in the virtual environment"
 }
 
