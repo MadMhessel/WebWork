@@ -25,12 +25,26 @@ import tagging
 from logging_setup import get_logger, init_logging
 from utils import compute_title_hash, normalize_whitespace
 
+try:
+    from fetcher import get_host_fail_stats as _get_host_fail_stats
+except Exception as exc:  # pragma: no cover - optional dependency failures
+    _FETCHER_IMPORT_ERROR = exc
+    _get_host_fail_stats = None
+else:
+    _FETCHER_IMPORT_ERROR = None
+
 try:  # pragma: no cover - publisher may be optional in tests
     import publisher
 except Exception:  # pragma: no cover
     publisher = None  # type: ignore[assignment]
 
 logger = get_logger(__name__)
+
+if _FETCHER_IMPORT_ERROR:
+    logger.warning(
+        "Сводка повторных сбоев источников недоступна: %s",
+        _FETCHER_IMPORT_ERROR,
+    )
 
 
 def _normalize_domain_value(domain: str) -> str:
@@ -334,7 +348,15 @@ def run_once(
             batch_limit=int(getattr(config, "DB_PRUNE_BATCH", 500)),
         )
 
-    active_failures = fetcher.get_host_fail_stats(active_only=True)
+    active_failures: Dict[str, Dict[str, float]] = {}
+    if _get_host_fail_stats is not None:
+        try:
+            active_failures = _get_host_fail_stats(active_only=True)
+        except Exception:
+            logger.exception(
+                "Не удалось получить статистику повторных сбоев источников"
+            )
+            active_failures = {}
     if active_failures:
         parts = []
         now = time.time()
