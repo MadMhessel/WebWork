@@ -127,19 +127,30 @@ def run_once(
         )
         items_iter = []
     else:
-        from telegram_fetcher import fetch_from_telegram
-
-        items_iter = list(
-            fetch_from_telegram(
-                getattr(config, "TELEGRAM_MODE", "mtproto"),
-                getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"),
-                getattr(config, "TELEGRAM_FETCH_LIMIT", 30),
+        mode = getattr(config, "TELEGRAM_MODE", "mtproto")
+        if mode == "mtproto" and (
+            int(getattr(config, "TELETHON_API_ID", 0) or 0) <= 0
+            or not getattr(config, "TELETHON_API_HASH", "")
+        ):
+            logger.warning(
+                "TELEGRAM_MODE=mtproto, но TELETHON_API_ID/TELETHON_API_HASH не заданы. "
+                "Пропускаем загрузку из Telegram."
             )
-        )
-        logger.info(
-            "Загрузка из Telegram: получено %d элементов (парсинг сайтов отключён)",
-            len(items_iter),
-        )
+            items_iter = []
+        else:
+            from telegram_fetcher import fetch_from_telegram
+
+            items_iter = list(
+                fetch_from_telegram(
+                    mode,
+                    getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"),
+                    getattr(config, "TELEGRAM_FETCH_LIMIT", 30),
+                )
+            )
+            logger.info(
+                "Загрузка из Telegram: получено %d элементов (парсинг сайтов отключён)",
+                len(items_iter),
+            )
 
     seen_urls: set = set()
     seen_title_hashes: set = set()
