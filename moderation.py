@@ -174,8 +174,9 @@ def run_hold_flags(item: Dict[str, Any]) -> List[Flag]:
         if re.search(pattern, text, flags=re.I | re.U):
             flag = _make_flag(entry, requires_quality_note=quality_note)
             logger.info(
-                "[MODERATION:hold] key=%s pattern=%s title=%s",
+                "[MODERATION:hold] key=%s label=%s pattern=%s title=%s",
                 flag.key,
+                flag.label,
                 flag.pattern,
                 (item.get("title") or "")[:140],
             )
@@ -272,8 +273,9 @@ def run_deprioritize_flags(item: Dict[str, Any]) -> List[Flag]:
         if re.search(pattern, text, flags=re.I | re.U):
             flag = _make_flag(entry)
             logger.info(
-                "[MODERATION:deprioritize] key=%s pattern=%s title=%s",
+                "[MODERATION:deprioritize] key=%s label=%s pattern=%s title=%s",
                 flag.key,
+                flag.label,
                 flag.pattern,
                 (item.get("title") or "")[:140],
             )

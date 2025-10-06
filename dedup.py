@@ -122,8 +122,8 @@ def deduplicate(items: Sequence[Dict[str, object]], *, scope: str = "default") -
         if not dedup_key:
             dedup_key = repr(item)
         if dedup_key in seen:
-            logger.debug(
-                "DEDUP(in-memory:%s): пропуск дубля key=%s", scope, dedup_key
+            logger.info(
+                "DEDUP: source=in-memory scope=%s key=%s", scope, dedup_key
             )
             removed += 1
             continue
@@ -271,17 +271,17 @@ def is_duplicate(
     try:
         canonical = canonical_url(url)
         if url and db.exists_url(db_conn, url):
-            logger.debug("DEDUP(SQLite): найден URL %s", url)
+            logger.info("DEDUP: source=sqlite match=url key=%s", url)
             return True
         if canonical and canonical != url and db.exists_url(db_conn, canonical):
-            logger.debug("DEDUP(SQLite): найден canonical URL %s", canonical)
+            logger.info("DEDUP: source=sqlite match=canonical_url key=%s", canonical)
             return True
         if guid and db.exists_guid(db_conn, guid):
-            logger.debug("DEDUP(SQLite): найден GUID %s", guid)
+            logger.info("DEDUP: source=sqlite match=guid key=%s", guid)
             return True
         thash = calc_title_hash(title or "")
         if thash and db.exists_title_hash(db_conn, thash):
-            logger.debug("DEDUP(SQLite): найден hash %s", thash)
+            logger.info("DEDUP: source=sqlite match=title_hash key=%s", thash)
             return True
         if _has_similar_title(title or "", db_conn):
             return True
@@ -339,10 +339,20 @@ def _has_similar_title(title: str, db_conn) -> bool:
     approx = near_duplicate(
         title,
         (cand_title for cand_title, _ in candidates),
-        threshold=float(getattr(config, "NEAR_DUPLICATE_THRESHOLD", getattr(config, "CLUSTER_SIM_THRESHOLD", 0.9))),
+        threshold=float(
+            getattr(
+                config,
+                "NEAR_DUPLICATE_THRESHOLD",
+                getattr(config, "CLUSTER_SIM_THRESHOLD", 0.9),
+            )
+        ),
     )
     if approx:
-        logger.info("[DUP_SIMILAR] near duplicate %.2f with '%s'", approx[1], approx[0][:140])
+        logger.info(
+            "DEDUP: source=sqlite match=title_similarity score=%.2f key=%s",
+            approx[1],
+            (approx[0] or "")[:140],
+        )
         return True
 
     for cand_title, _ in candidates:
@@ -354,7 +364,9 @@ def _has_similar_title(title: str, db_conn) -> bool:
         score = title_similarity(normalized, cand_norm)
         if score >= threshold:
             logger.info(
-                "[DUP_SIMILAR] совпадение %.2f с '%s'", score, (cand_title or "")[:140]
+                "DEDUP: source=sqlite match=title_similarity score=%.2f key=%s",
+                score,
+                (cand_title or "")[:140],
             )
             return True
     return False

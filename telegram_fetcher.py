@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional
@@ -15,6 +17,7 @@ try:  # pragma: no cover - optional import for package mode
 except ImportError:  # pragma: no cover - direct execution
     import config  # type: ignore
 
+from rate_limiter import get_global_bucket
 from teleapi_client import fetch_bulk_channels, get_mtproto_client, normalize_telegram_link
 from telegram_web import fetch_latest as web_fetch_latest
 from webwork.utils.formatting import TG_TEXT_LIMIT, safe_format
@@ -50,6 +53,79 @@ class TelegramPost:
             "source_id": f"tg:{self.alias}",
         }
         return payload
+
+
+@dataclass(slots=True)
+class FetchOptions:
+    max_channels_per_iter: int = 50
+    fetch_workers: int = 5
+    messages_per_channel: int = 50
+    rate: float = 25.0
+    flood_sleep_threshold: int = 30
+
+
+def _state_path() -> Path:
+    path = Path(getattr(config, "PIPELINE_STATE_PATH", "var/state.json"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _load_state() -> Dict[str, Any]:
+    path = _state_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Telegram: не удалось прочитать состояние %s: %s", path, exc)
+        return {}
+
+
+def _save_state(data: Dict[str, Any]) -> None:
+    path = _state_path()
+    try:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        log.warning("Telegram: не удалось сохранить состояние %s: %s", path, exc)
+
+
+def _state_key(links_file: str) -> str:
+    try:
+        resolved = str(Path(links_file).resolve())
+    except Exception:
+        resolved = str(Path(links_file))
+    return f"telegram::{resolved}"
+
+
+def _load_chunk_index(state_key: str, chunk_count: int) -> int:
+    if chunk_count <= 0:
+        return 0
+    state = _load_state()
+    telegram_state = state.get("telegram", {}) if isinstance(state, dict) else {}
+    entry = telegram_state.get(state_key, {}) if isinstance(telegram_state, dict) else {}
+    try:
+        pointer = int(entry.get("next_index", 0))
+    except (TypeError, ValueError):
+        pointer = 0
+    if pointer < 0 or pointer >= chunk_count:
+        pointer = 0
+    return pointer
+
+
+def _store_chunk_index(state_key: str, chunk_count: int, next_index: int) -> None:
+    state = _load_state()
+    if not isinstance(state, dict):
+        state = {}
+    telegram_state = state.setdefault("telegram", {})
+    if not isinstance(telegram_state, dict):
+        telegram_state = {}
+        state["telegram"] = telegram_state
+    telegram_state[state_key] = {
+        "next_index": int(max(0, next_index)),
+        "total_chunks": int(max(1, chunk_count)) if chunk_count else 0,
+        "updated_at": int(time.time()),
+    }
+    _save_state(state)
 
 
 def _enforce_limit(text: str, limit: int) -> str:
@@ -136,15 +212,36 @@ def _load_aliases(path: str) -> List[str]:
     return unique_aliases
 
 
-async def _fetch_mtproto_async(aliases: Iterable[str], limit: int) -> List[TelegramPost]:
+async def _fetch_mtproto_async(
+    aliases: Iterable[str],
+    limit: int,
+    *,
+    options: Optional[FetchOptions] = None,
+) -> List[TelegramPost]:
     api_id = getattr(config, "TELETHON_API_ID", 0)
     api_hash = getattr(config, "TELETHON_API_HASH", "")
     session = getattr(config, "TELETHON_SESSION_NAME", "webwork_telethon")
     if api_id <= 0 or not api_hash:
         raise RuntimeError("TELETHON_API_ID/TELETHON_API_HASH не заданы")
-    client = get_mtproto_client(api_id, api_hash, session)
+    flood_threshold = None
+    if options is not None:
+        flood_threshold = options.flood_sleep_threshold
+    client = get_mtproto_client(
+        api_id,
+        api_hash,
+        session,
+        flood_sleep_threshold=flood_threshold,
+    )
+    concurrency = options.fetch_workers if options else 5
+    bucket = get_global_bucket((options.rate if options else 25.0) or 25.0)
     async with client:
-        messages_by_alias = await fetch_bulk_channels(client, aliases, limit)
+        messages_by_alias = await fetch_bulk_channels(
+            client,
+            aliases,
+            limit,
+            concurrency=concurrency,
+            bucket=bucket,
+        )
     posts: List[TelegramPost] = []
     for alias, messages in messages_by_alias.items():
         for message in messages:
@@ -152,16 +249,46 @@ async def _fetch_mtproto_async(aliases: Iterable[str], limit: int) -> List[Teleg
     return posts
 
 
-def fetch_from_telegram(mode: str, links_file: str, limit: int) -> List[Dict[str, Any]]:
+def _chunk_aliases(aliases: List[str], chunk_size: int) -> List[List[str]]:
+    if chunk_size <= 0:
+        return [aliases]
+    result: List[List[str]] = []
+    for idx in range(0, len(aliases), chunk_size):
+        result.append(aliases[idx : idx + chunk_size])
+    return result or [aliases]
+
+
+def fetch_from_telegram(
+    mode: str,
+    links_file: str,
+    limit: int,
+    *,
+    options: Optional[FetchOptions] = None,
+) -> List[Dict[str, Any]]:
     aliases = _load_aliases(links_file)
     if not aliases:
         return []
+    opts = options or FetchOptions()
+    chunk_size = max(1, min(opts.max_channels_per_iter, len(aliases)))
+    chunks = _chunk_aliases(aliases, chunk_size)
+    state_key = _state_key(links_file)
+    chunk_index = _load_chunk_index(state_key, len(chunks))
+    current_chunk = chunks[chunk_index]
+    log.info(
+        "Telegram: обработка чанка %s/%s (%s каналов)",
+        chunk_index + 1,
+        len(chunks),
+        len(current_chunk),
+    )
     mode_normalized = (mode or "mtproto").strip().lower()
+    msg_limit = opts.messages_per_channel or limit
     if mode_normalized == "mtproto":
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
-            posts = loop.run_until_complete(_fetch_mtproto_async(aliases, limit))
+            posts = loop.run_until_complete(
+                _fetch_mtproto_async(current_chunk, msg_limit, options=opts)
+            )
         finally:
             try:
                 loop.close()
@@ -169,8 +296,10 @@ def fetch_from_telegram(mode: str, links_file: str, limit: int) -> List[Dict[str
                 pass
     elif mode_normalized == "web":
         posts = []
-        for alias in aliases:
+        bucket = get_global_bucket(opts.rate)
+        for alias in current_chunk:
             try:
+                bucket.consume()
                 items = web_fetch_latest(alias, limit=limit)
             except Exception as exc:  # pragma: no cover - network errors
                 log.warning("Telegram web fetch error for %s: %s", alias, exc)
@@ -179,6 +308,7 @@ def fetch_from_telegram(mode: str, links_file: str, limit: int) -> List[Dict[str
                 posts.append(_web_item_to_post(item))
     else:
         raise ValueError(f"Unknown telegram mode: {mode}")
+    _store_chunk_index(state_key, len(chunks), (chunk_index + 1) % len(chunks))
     log.info("Telegram: получено %d сообщений (mode=%s)", len(posts), mode_normalized)
     return [post.as_item() for post in posts]
 

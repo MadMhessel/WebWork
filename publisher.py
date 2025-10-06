@@ -33,6 +33,7 @@ from formatting import clean_html_tags, html_escape, truncate_by_chars
 from logging_setup import audit, get_logger, mask_secrets
 from webwork.utils.formatting import chunk_text, safe_format, TG_TEXT_LIMIT
 from webwork.router import route_and_publish
+from rate_limiter import get_bucket, get_global_bucket
 
 log = get_logger("webwork.bot")
 raw_log = logging.getLogger("webwork.raw")
@@ -41,6 +42,29 @@ _API_BASE = "https://api.telegram.org"
 _client_base_url: Optional[str] = None
 
 _RAW_ALIAS_CACHE: dict[str, int] = {}
+
+
+
+def _per_chat_rate_limit(chat_id: Any) -> float:
+    raw = str(chat_id) if chat_id is not None else ""
+    try:
+        numeric = int(raw)
+    except (TypeError, ValueError):
+        numeric = None
+    if raw.startswith("@") or (numeric is not None and numeric < 0):
+        # каналы/группы — не более ~20 сообщений в минуту
+        return 20.0 / 60.0
+    return 1.0
+
+
+def _throttle_bot_request(chat_id: Any) -> None:
+    global_bucket = get_global_bucket(getattr(config, "TELEGRAM_RATE_LIMIT", 25.0))
+    global_bucket.consume()
+    if chat_id is None:
+        return
+    rate = max(_per_chat_rate_limit(chat_id), 0.1)
+    capacity = max(1.0, rate * 10)
+    get_bucket(f"chat:{chat_id}", rate, capacity).consume()
 
 
 
@@ -852,8 +876,10 @@ def _api_post(
     url = f"{_client_base_url}/{method}"
     safe_url = mask_secrets(url)
     max_attempts = 2
+    chat_id = payload.get("chat_id")
     for attempt in range(1, max_attempts + 1):
         try:
+            _throttle_bot_request(chat_id)
             response = requests.post(url, data=payload, files=files, timeout=30)
         except Exception:  # pragma: no cover - network failure guard
             log.exception("Исключение при вызове Telegram %s (%s)", method, safe_url)
