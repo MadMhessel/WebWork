@@ -1233,8 +1233,10 @@ class App(tk.Tk):
     def _start_with_args(self, extra_args: list[str]) -> bool:
         if not self._ensure_repo():
             return False
-        normalized_args = [arg for arg in extra_args if arg != "--loop"]
-        normalized_args.insert(0, "--loop")
+        if any(arg == "--loop" for arg in extra_args):
+            normalized_args = ["--loop", *(arg for arg in extra_args if arg != "--loop")]
+        else:
+            normalized_args = [*extra_args]
         if sys.platform == "win32":
             cmd_list: list[str] = []
             windows_candidates: list[tuple[str, list[str]]] = [
