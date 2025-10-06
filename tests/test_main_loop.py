@@ -34,9 +34,17 @@ def test_run_once_skips_mtproto_when_credentials_missing(monkeypatch, caplog):
 
     caplog.set_level(logging.WARNING)
 
-    result = main.run_once(conn, raw_mode="skip")
+    summary = main.run_once(conn, raw_mode="skip")
 
-    assert result == (0, 0, 0, 0, 0, 0, 0, 0)
+    assert summary.totals == (0, 0, 0, 0, 0, 0, 0, 0)
+    assert summary.stages == {
+        "in": 0,
+        "after_fetch": 0,
+        "after_filters": 0,
+        "after_dedup": 0,
+        "after_moderation": 0,
+        "to_publish": 0,
+    }
     assert not fake_fetch_called
     assert any(
         "TELEGRAM_MODE=mtproto" in record.message for record in caplog.records

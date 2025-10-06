@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -25,6 +26,7 @@ import rewrite
 import tagging
 from logging_setup import get_logger, init_logging
 from utils import compute_title_hash, normalize_whitespace
+from rate_limiter import configure_global as configure_rate_limiter
 
 try:
     from fetcher import get_host_fail_stats as _get_host_fail_stats
@@ -84,11 +86,20 @@ def _publisher_send_direct(item: Dict) -> bool:
     )
     return bool(mid)
 
+@dataclass
+class RunSummary:
+    totals: Tuple[int, int, int, int, int, int, int, int]
+    stages: Dict[str, int]
+
+    def __iter__(self):  # pragma: no cover - legacy unpacking
+        return iter(self.totals)
+
+
 def run_once(
     conn,
     *,
     raw_mode: str = "auto",
-) -> Tuple[int, int, int, int, int, int, int, int]:
+) -> RunSummary:
     raw_mode = raw_mode or "auto"
     raw_only = raw_mode == "only"
     raw_skip = raw_mode == "skip"
@@ -125,8 +136,17 @@ def run_once(
         except Exception:
             logger.exception("[RAW] pipeline error")
 
+    stage_counts: Dict[str, int] = {
+        "in": 0,
+        "after_fetch": 0,
+        "after_filters": 0,
+        "after_dedup": 0,
+        "after_moderation": 0,
+        "to_publish": 0,
+    }
+
     if raw_only:
-        return (0, 0, 0, 0, 0, 0, 0, 0)
+        return RunSummary((0, 0, 0, 0, 0, 0, 0, 0), stage_counts)
 
     items_iter: Iterable[Dict[str, Any]]
     if not getattr(config, "TELEGRAM_AUTO_FETCH", True):
@@ -146,19 +166,36 @@ def run_once(
             )
             items_iter = []
         else:
-            from telegram_fetcher import fetch_from_telegram
+            from telegram_fetcher import FetchOptions, fetch_from_telegram
 
+            fetch_options = FetchOptions(
+                max_channels_per_iter=int(
+                    max(1, getattr(config, "TELEGRAM_MAX_CHANNELS_PER_ITER", 50))
+                ),
+                fetch_workers=int(max(1, getattr(config, "TELEGRAM_FETCH_WORKERS", 5))),
+                messages_per_channel=int(
+                    max(1, getattr(config, "TELEGRAM_MESSAGES_PER_CHANNEL", 30))
+                ),
+                rate=float(max(0.1, getattr(config, "TELEGRAM_RATE_LIMIT", 25.0))),
+                flood_sleep_threshold=int(
+                    max(0, getattr(config, "TELETHON_FLOOD_SLEEP_THRESHOLD", 30))
+                ),
+            )
             items_iter = list(
                 fetch_from_telegram(
                     mode,
                     getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"),
-                    getattr(config, "TELEGRAM_FETCH_LIMIT", 30),
+                    fetch_options.messages_per_channel,
+                    options=fetch_options,
                 )
             )
             logger.info(
                 "Загрузка из Telegram: получено %d элементов (парсинг сайтов отключён)",
                 len(items_iter),
             )
+
+    stage_counts["in"] = len(items_iter)
+    stage_counts["after_fetch"] = len(items_iter)
 
     seen_urls: set = set()
     seen_title_hashes: set = set()
@@ -198,6 +235,7 @@ def run_once(
                 logger.info("[SKIP] %s | %s | причина: рекламная публикация", src, title)
                 continue
             cnt_relevant += 1
+            stage_counts["after_filters"] += 1
 
             # дубликаты в пакете
             thash = compute_title_hash(title) if title else ""
@@ -219,6 +257,7 @@ def run_once(
                 cnt_dup_db += 1
                 logger.info("[DUP_DB] url=%s | найден в истории", url)
                 continue
+            stage_counts["after_dedup"] += 1
 
             # отправка
             filter_meta = {
@@ -291,6 +330,7 @@ def run_once(
                     block.label or block.pattern,
                 )
                 continue
+            stage_counts["after_moderation"] += 1
 
             flags_hold = moderation.run_hold_flags(item_clean)
             flags_deprio = moderation.run_deprioritize_flags(item_clean)
@@ -336,6 +376,7 @@ def run_once(
             if remember_success:
                 # запоминаем в БД только успешно поставленные/отправленные материалы
                 dedup.remember(conn, item_clean)
+                stage_counts["to_publish"] += 1
 
         except KeyboardInterrupt:
             raise
@@ -355,6 +396,16 @@ def run_once(
         cnt_published,
         cnt_errors,
         cnt_not_sent,
+    )
+
+    logger.info(
+        "[PIPELINE] in=%d after_fetch=%d after_filters=%d after_dedup=%d after_moderation=%d to_publish=%d",
+        stage_counts["in"],
+        stage_counts["after_fetch"],
+        stage_counts["after_filters"],
+        stage_counts["after_dedup"],
+        stage_counts["after_moderation"],
+        stage_counts["to_publish"],
     )
 
     items_ttl = int(getattr(config, "ITEM_RETENTION_DAYS", 0))
@@ -387,15 +438,18 @@ def run_once(
             )
         logger.warning("Источники с повторными сбоями: %s", "; ".join(parts))
 
-    return (
-        cnt_total,
-        cnt_relevant,
-        cnt_dup_inpack_url,
-        cnt_dup_inpack_title,
-        cnt_dup_db,
-        cnt_queued,
-        cnt_published,
-        cnt_errors,
+    return RunSummary(
+        (
+            cnt_total,
+            cnt_relevant,
+            cnt_dup_inpack_url,
+            cnt_dup_inpack_title,
+            cnt_dup_db,
+            cnt_queued,
+            cnt_published,
+            cnt_errors,
+        ),
+        stage_counts,
     )
 
 def main() -> int:
@@ -407,9 +461,52 @@ def main() -> int:
     mode_group.add_argument("--loop", action="store_true", help="Бесконечный цикл с паузой")
     mode_group.add_argument("--once", action="store_true", help="Выполнить один проход и выйти")
     parser.add_argument("--dry-run", action="store_true", help="Не отправлять сообщения в Telegram")
+    parser.add_argument(
+        "--max-channels-per-iter",
+        type=int,
+        default=getattr(config, "TELEGRAM_MAX_CHANNELS_PER_ITER", 50),
+        help="Сколько каналов обрабатывать за одну итерацию",
+    )
+    parser.add_argument(
+        "--fetch-workers",
+        type=int,
+        default=getattr(config, "TELEGRAM_FETCH_WORKERS", 5),
+        help="Количество асинхронных воркеров Telethon",
+    )
+    parser.add_argument(
+        "--messages-per-channel",
+        type=int,
+        default=getattr(
+            config,
+            "TELEGRAM_MESSAGES_PER_CHANNEL",
+            getattr(config, "TELEGRAM_FETCH_LIMIT", 30),
+        ),
+        help="Сколько сообщений загружать из каждого канала",
+    )
+    parser.add_argument(
+        "--rate",
+        type=float,
+        default=getattr(config, "TELEGRAM_RATE_LIMIT", 25.0),
+        help="Глобальный лимит операций Telegram (запросов в секунду)",
+    )
+    parser.add_argument(
+        "--flood-sleep-threshold",
+        type=int,
+        default=getattr(config, "TELETHON_FLOOD_SLEEP_THRESHOLD", 30),
+        help="Порог авто-ожидания FloodWait для Telethon (сек)",
+    )
     parser.add_argument("--only-raw", action="store_true", help="Запустить только RAW-поток")
     parser.add_argument("--no-raw", action="store_true", help="Пропустить RAW-поток")
     args = parser.parse_args()
+
+    config.TELEGRAM_MAX_CHANNELS_PER_ITER = max(1, int(args.max_channels_per_iter))
+    config.TELEGRAM_FETCH_WORKERS = max(1, int(args.fetch_workers))
+    config.TELEGRAM_FETCH_LIMIT = max(1, int(args.messages_per_channel))
+    config.TELEGRAM_MESSAGES_PER_CHANNEL = config.TELEGRAM_FETCH_LIMIT
+    config.TELEGRAM_RATE_LIMIT = max(0.1, float(args.rate))
+    config.TELETHON_FLOOD_SLEEP_THRESHOLD = max(0, int(args.flood_sleep_threshold))
+
+    configure_rate_limiter(config.TELEGRAM_RATE_LIMIT)
 
     if args.dry_run:
         os.environ["DRY_RUN"] = "1"
@@ -457,7 +554,17 @@ def main() -> int:
     if not args.loop:
         if args.once:
             logger.info("Запрошен одиночный прогон (--once)")
-        run_once(conn, raw_mode=raw_mode)
+        summary = run_once(conn, raw_mode=raw_mode)
+        if args.once and args.dry_run:
+            logger.info(
+                "[DRY-RUN] pipeline counters: in=%d after_fetch=%d after_filters=%d after_dedup=%d after_moderation=%d to_publish=%d",
+                summary.stages["in"],
+                summary.stages["after_fetch"],
+                summary.stages["after_filters"],
+                summary.stages["after_dedup"],
+                summary.stages["after_moderation"],
+                summary.stages["to_publish"],
+            )
         return 0
 
     logger.info("Старт бесконечного цикла. Пауза: %d сек.", config.LOOP_DELAY_SECS)

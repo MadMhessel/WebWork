@@ -10,6 +10,8 @@ from telethon import TelegramClient
 from telethon.errors import FloodWaitError, RPCError
 from telethon.tl.custom.message import Message
 
+from rate_limiter import TokenBucket
+
 logger = logging.getLogger(__name__)
 
 _ALIAS_RE = re.compile(r"(?:https?://)?t\.me/(?:s/)?(@?[\w\d_+\-]+)")
@@ -38,7 +40,13 @@ def normalize_telegram_link(value: str) -> Optional[str]:
     return alias
 
 
-def get_mtproto_client(api_id: int, api_hash: str, session_name: str) -> TelegramClient:
+def get_mtproto_client(
+    api_id: int,
+    api_hash: str,
+    session_name: str,
+    *,
+    flood_sleep_threshold: Optional[int] = None,
+) -> TelegramClient:
     """Factory helper for a configured Telethon ``TelegramClient`` instance."""
 
     if api_id <= 0:
@@ -47,13 +55,19 @@ def get_mtproto_client(api_id: int, api_hash: str, session_name: str) -> Telegra
         raise ValueError("api_hash is required")
     session = session_name or "webwork_telethon"
     logger.debug("Creating Telethon client: session=%s", session)
-    return TelegramClient(session, api_id, api_hash)
+    kwargs = {}
+    if flood_sleep_threshold is not None:
+        kwargs["flood_sleep_threshold"] = int(flood_sleep_threshold)
+    return TelegramClient(session, api_id, api_hash, **kwargs)
 
 
 async def fetch_channel_messages(
     client: TelegramClient,
     link_or_username: str,
     limit: int,
+    *,
+    bucket: Optional[TokenBucket] = None,
+    max_attempts: int = 5,
 ) -> List[Message]:
     """Fetch messages from a Telegram channel/group using Telethon.
 
@@ -67,13 +81,15 @@ async def fetch_channel_messages(
     if not alias:
         raise ValueError(f"Invalid Telegram link: {link_or_username!r}")
     limit = max(1, int(limit or 1))
-    base_delay = 5.0
+    transient_delays = (0.5, 1.0, 2.0, 4.0)
     attempt = 0
-    max_attempts = 5
+    flood_retries = 0
 
-    while True:
+    while attempt < max_attempts:
         attempt += 1
         try:
+            if bucket is not None:
+                await bucket.acquire()
             logger.debug("Fetching up to %s messages from %s", limit, alias)
             messages: List[Message] = []
             async for message in client.iter_messages(alias, limit=limit):
@@ -89,15 +105,19 @@ async def fetch_channel_messages(
                 "TELEGRAM: FloodWait для %s на %s с — ожидание", alias, wait_seconds
             )
             await asyncio.sleep(wait_seconds)
-            # FloodWait обнуляет счётчик попыток, так как это штатная пауза API.
-            attempt = 0
+            flood_retries += 1
+            if flood_retries >= max_attempts:
+                logger.error(
+                    "TELEGRAM: %s — превышено число FloodWait (%s)", alias, max_attempts
+                )
+                raise
         except (RPCError, asyncio.TimeoutError, ConnectionError) as exc:
             if attempt >= max_attempts:
                 logger.exception(
                     "TELEGRAM: %s — ошибка после %s попыток: %s", alias, attempt, exc
                 )
                 raise
-            wait = min(300.0, base_delay * (2 ** (attempt - 1)))
+            wait = transient_delays[min(attempt - 1, len(transient_delays) - 1)]
             jitter = random.uniform(0, wait * 0.1)
             delay = wait + jitter
             logger.warning(
@@ -116,18 +136,34 @@ async def fetch_bulk_channels(
     client: TelegramClient,
     identifiers: Iterable[str],
     limit: int,
+    *,
+    concurrency: int = 5,
+    bucket: Optional[TokenBucket] = None,
 ) -> dict[str, List[Message]]:
     """Fetch messages for multiple aliases with shared client."""
 
     result: dict[str, List[Message]] = {}
-    for identifier in identifiers:
+    sem = asyncio.Semaphore(max(1, int(concurrency)))
+
+    async def _runner(identifier: str) -> tuple[Optional[str], List[Message]]:
         alias = normalize_telegram_link(identifier)
         if not alias:
             logger.warning("TELEGRAM: skip invalid link %s", identifier)
-            continue
+            return None, []
         try:
-            result[alias] = await fetch_channel_messages(client, alias, limit)
+            async with sem:
+                messages = await fetch_channel_messages(
+                    client, alias, limit, bucket=bucket
+                )
         except Exception as exc:  # pragma: no cover - network/telethon errors
             logger.exception("TELEGRAM: failed to fetch %s: %s", alias, exc)
-            result.setdefault(alias, [])
+            messages = []
+        return alias, messages
+
+    tasks = [asyncio.create_task(_runner(identifier)) for identifier in identifiers]
+    for task in asyncio.as_completed(tasks):
+        alias, messages = await task
+        if alias is None:
+            continue
+        result[alias] = messages
     return result

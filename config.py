@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 from urllib.parse import urlparse
 
 _platformdirs_spec = importlib.util.find_spec("platformdirs")
@@ -387,6 +387,14 @@ TELEGRAM_AUTO_FETCH: bool = os.getenv("TELEGRAM_AUTO_FETCH", "true").lower() in 
 
 # лимит сообщений на канал в Telegram
 TELEGRAM_FETCH_LIMIT: int = int(os.getenv("TELEGRAM_FETCH_LIMIT", "30"))
+TELEGRAM_MESSAGES_PER_CHANNEL: int = int(
+    os.getenv("TELEGRAM_MESSAGES_PER_CHANNEL", str(TELEGRAM_FETCH_LIMIT))
+)
+TELEGRAM_MAX_CHANNELS_PER_ITER: int = int(
+    os.getenv("TELEGRAM_MAX_CHANNELS_PER_ITER", "50")
+)
+TELEGRAM_FETCH_WORKERS: int = int(os.getenv("TELEGRAM_FETCH_WORKERS", "5"))
+TELEGRAM_RATE_LIMIT: float = float(os.getenv("TELEGRAM_RATE", "25"))
 
 # креды Telethon (используются только в режиме mtproto)
 _TELETHON_API_ID_RAW = os.getenv("TELETHON_API_ID", "").strip()
@@ -395,6 +403,12 @@ try:
 except ValueError:
     TELETHON_API_ID = 0
 TELETHON_API_HASH: str = os.getenv("TELETHON_API_HASH", "").strip()
+TELETHON_SESSION_NAME: str = (
+    os.getenv("TELETHON_SESSION_NAME", "webwork_telethon").strip() or "webwork_telethon"
+)
+TELETHON_FLOOD_SLEEP_THRESHOLD: int = int(
+    os.getenv("TELETHON_FLOOD_SLEEP_THRESHOLD", "30")
+)
 
 # --- Database ---
 DB_PATH: str = os.getenv("DB_PATH", str(CONFIG_DIR / "newsbot.db")).strip()
@@ -424,28 +438,55 @@ def validate_config() -> None:
             f"Invalid TELEGRAM_MODE='{TELEGRAM_MODE}'. Ожидалось одно из: {sorted(allowed_modes)}"
         )
 
-    missing: list[str] = []
-    if not DRY_RUN and BOT_TOKEN in {"", "YOUR_TELEGRAM_BOT_TOKEN"}:
-        missing.append("TELEGRAM_BOT_TOKEN")
-    if not DRY_RUN and not str(CHANNEL_CHAT_ID) and not CHANNEL_ID:
-        missing.append("CHANNEL_CHAT_ID or CHANNEL_ID")
+    config_hint = (
+        f"укажите значение в {ENV_PATH} или {REPO_ENV_PATH}, либо задайте переменную окружения"
+    )
+
+    problems: list[Tuple[str, str]] = []
+
+    def require(condition: bool, key: str, hint: str) -> None:
+        if condition:
+            return
+        for existing_key, _ in problems:
+            if existing_key == key:
+                return
+        problems.append((key, hint))
+
+    require(
+        DRY_RUN or BOT_TOKEN not in {"", "YOUR_TELEGRAM_BOT_TOKEN"},
+        "TELEGRAM_BOT_TOKEN",
+        config_hint,
+    )
+    require(
+        DRY_RUN or str(CHANNEL_CHAT_ID) or CHANNEL_ID,
+        "CHANNEL_CHAT_ID",
+        config_hint,
+    )
     if ENABLE_MODERATION:
-        if str(REVIEW_CHAT_ID) in {"", "@your_review_channel"}:
-            missing.append("REVIEW_CHAT_ID")
-        if not MODERATOR_IDS:
-            missing.append("MODERATOR_IDS")
+        require(
+            str(REVIEW_CHAT_ID) not in {"", "@your_review_channel"},
+            "REVIEW_CHAT_ID",
+            config_hint,
+        )
+        require(bool(MODERATOR_IDS), "MODERATOR_IDS", "заполните список ID модераторов")
     if RAW_STREAM_ENABLED:
-        if not BOT_TOKEN:
-            missing.append("TELEGRAM_BOT_TOKEN")
-        if not str(RAW_REVIEW_CHAT_ID).strip():
-            missing.append("RAW_REVIEW_CHAT_ID")
+        require(bool(BOT_TOKEN), "TELEGRAM_BOT_TOKEN", config_hint)
+        require(
+            bool(str(RAW_REVIEW_CHAT_ID).strip()),
+            "RAW_REVIEW_CHAT_ID",
+            config_hint,
+        )
     if ONLY_TELEGRAM and TELEGRAM_MODE == "mtproto":
-        if TELETHON_API_ID <= 0:
-            missing.append("TELETHON_API_ID")
-        if not TELETHON_API_HASH:
-            missing.append("TELETHON_API_HASH")
-    if missing:
-        raise ValueError("Missing config: " + ", ".join(missing))
+        require(TELETHON_API_ID > 0, "TELETHON_API_ID", config_hint)
+        require(bool(TELETHON_API_HASH), "TELETHON_API_HASH", config_hint)
+        require(bool(TELETHON_SESSION_NAME), "TELETHON_SESSION_NAME", config_hint)
+
+    if problems:
+        details = ["Отсутствуют обязательные настройки:"]
+        for key, hint in problems:
+            details.append(f" - {key}: {hint}")
+        raise ValueError("\n".join(details))
+
     if not isinstance(MODERATOR_IDS, set) or not all(isinstance(x, int) for x in MODERATOR_IDS):
         raise ValueError("MODERATOR_IDS must be a set[int]")
     if TELEGRAM_PARSE_MODE not in {"HTML", "MarkdownV2"}:
