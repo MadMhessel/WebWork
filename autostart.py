@@ -1233,6 +1233,8 @@ class App(tk.Tk):
     def _start_with_args(self, extra_args: list[str]) -> bool:
         if not self._ensure_repo():
             return False
+        normalized_args = [arg for arg in extra_args if arg != "--loop"]
+        normalized_args.insert(0, "--loop")
         if sys.platform == "win32":
             cmd_list: list[str] = []
             windows_candidates: list[tuple[str, list[str]]] = [
@@ -1257,7 +1259,7 @@ class App(tk.Tk):
             cmd_list = ["bash", str(self.repo_dir / "start.sh")]
         else:
             cmd_list = [sys.executable, "main.py"]
-        cmd_list = [*cmd_list, *extra_args]
+        cmd_list = [*cmd_list, *normalized_args]
         env = self._collect_env()
         try:
             self.runner.start(cmd_list, cwd=str(self.repo_dir), env=env)
