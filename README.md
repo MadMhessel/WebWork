@@ -43,10 +43,13 @@ pip install beautifulsoup4
 2. В разделе **API development tools** создайте приложение и получите
    `api_id` и `api_hash`.
 3. Укажите их в `.env` вместе с именем сессии Telethon (по умолчанию
-   `webwork_telethon`). Файл сессии Telethon появится рядом со стартовым
-   скриптом после первого запуска.
-4. При работе из контейнера сохраните `.session` в `./sessions` или рядом с
-   исходниками и добавьте путь в `TELETHON_SESSION_NAME` при необходимости.
+   `webwork_telethon`). Файл сессии Telethon (`webwork_telethon.session`) хранится
+   в корне репозитория; путь можно изменить через `TELETHON_SESSION_NAME`.
+4. При первом запуске команды `python -m webwork --once` Telethon запросит код
+   подтверждения и сохранит сессию. Перенесите готовый `.session` в рабочее
+   окружение при деплое.
+5. При работе из контейнера сохраните `.session` в `./sessions` или рядом с
+   исходниками и пропишите путь в `TELETHON_SESSION_NAME`.
 
 ## Настройка окружения
 
@@ -133,13 +136,53 @@ lightweight:
 
 ## Запуск
 
-### Linux/macOS
+### Runbook (Linux/macOS/Windows)
 
-```bash
-python -m config init            # однократно, создаёт ~/.config/NewsBot/.env
-python main.py                   # основная лента
-python raw_pipeline.py           # при необходимости запустить RAW отдельно
-```
+1. Клонируйте репозиторий и перейдите в каталог проекта.
+2. Создайте виртуальное окружение согласно официальной
+   [документации Python по `venv`](https://docs.python.org/3/library/venv.html):
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate  # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements.txt
+   ```
+
+3. Инициализируйте конфигурацию (однократно):
+
+   ```bash
+   python -m config init
+   ```
+
+4. Заполните `~/.config/NewsBot/.env` (`%APPDATA%\NewsBot\.env` на Windows):
+   `TELEGRAM_BOT_TOKEN`, `CHANNEL_CHAT_ID`, `REVIEW_CHAT_ID`, `TELETHON_API_ID`,
+   `TELETHON_API_HASH`, `TELETHON_SESSION_NAME` и другие обязательные переменные.
+5. Убедитесь, что файл сессии Telethon (`webwork_telethon.session` по умолчанию)
+   находится рядом с проектом. Если его ещё нет, выполните авторизацию командой:
+
+   ```bash
+   python -m webwork --once
+   ```
+
+   Во время первого запуска Telethon попросит код подтверждения и сохранит
+   `.session` для последующих запусков.
+6. Для безопасного теста используйте флаг `--dry-run`, чтобы пройти конвейер
+   без фактической отправки сообщений:
+
+   ```bash
+   WEBWORK_LOG_LEVEL=DEBUG python -m webwork --once --dry-run
+   ```
+
+7. Для бесконечного прогона выполните:
+
+   ```bash
+   python -m webwork --loop
+   ```
+
+   Скрипты `start.sh` (Linux/macOS) и `start.bat` (Windows) автоматически
+   активируют `.venv`, устанавливают зависимости и перезапускают процесс каждые
+   10 секунд после завершения (успешного или с ошибкой).
 
 ### Интерактивный запуск и настройка
 
@@ -164,13 +207,14 @@ python -m tools.launcher --script raw_pipeline.py
 
 ### Windows
 
-Используйте `start.bat` или вручную активируйте виртуальное окружение:
+Для непрерывного запуска используйте `start.bat` (авто-перезапуск и `python -m webwork --loop`).
+Для ручного запуска активируйте окружение:
 
 ```bat
 python -m venv .venv
 .venv\Scripts\activate
-python -m config init
-python main.py
+python -m pip install -r requirements.txt
+python -m webwork --once --dry-run
 ```
 
 ## Публикация в два канала
@@ -192,6 +236,9 @@ python main.py
 * Подпись к фото/видео — максимум 1024 символа.
 * MarkdownV2 требует экранирования спецсимволов (`webwork.utils.formatting`).
 * Bot API ограничивает частоту запросов (используется экспоненциальный backoff).
+* Telethon автоматически выдерживает короткие задержки, а при `FloodWaitError`
+  выполнение приостанавливается на `exc.seconds`, после чего запрос
+  повторяется с экспоненциальным бэкоффом.
 
 ## Тестирование и DRY-RUN
 

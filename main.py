@@ -4,6 +4,7 @@ if __name__ == "__main__" or __package__ is None:
     sys.path.insert(0, os.path.dirname(__file__))
 
 import argparse
+import os
 import sys
 import threading
 import time
@@ -68,6 +69,13 @@ def _publisher_send_direct(item: Dict) -> bool:
     if not publisher:
         return False
     chat_id = getattr(config, "CHANNEL_CHAT_ID", "") or getattr(config, "CHANNEL_ID", "")
+    if getattr(config, "DRY_RUN", False):
+        logger.info(
+            "[DRY-RUN] Сообщение не отправлено (chat_id=%s, title=%s)",
+            chat_id,
+            item.get("title", "")[:120],
+        )
+        return False
     mid = publisher.publish_structured_item(
         chat_id,
         item,
@@ -393,6 +401,37 @@ def run_once(
 def main() -> int:
     init_logging(config)
     get_logger("webwork.app").info("Логирование инициализировано")
+
+    parser = argparse.ArgumentParser()
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--loop", action="store_true", help="Бесконечный цикл с паузой")
+    mode_group.add_argument("--once", action="store_true", help="Выполнить один проход и выйти")
+    parser.add_argument("--dry-run", action="store_true", help="Не отправлять сообщения в Telegram")
+    parser.add_argument("--only-raw", action="store_true", help="Запустить только RAW-поток")
+    parser.add_argument("--no-raw", action="store_true", help="Пропустить RAW-поток")
+    args = parser.parse_args()
+
+    if args.dry_run:
+        os.environ["DRY_RUN"] = "1"
+        setattr(config, "DRY_RUN", True)
+        if getattr(config, "ENABLE_MODERATION", False):
+            review_chat = str(getattr(config, "REVIEW_CHAT_ID", "")).strip()
+            if not review_chat or review_chat == "@your_review_channel":
+                logger.info(
+                    "[DRY-RUN] Модерация отключена: REVIEW_CHAT_ID не задан"
+                )
+                setattr(config, "ENABLE_MODERATION", False)
+        if getattr(config, "RAW_STREAM_ENABLED", False):
+            raw_chat = str(getattr(config, "RAW_REVIEW_CHAT_ID", "")).strip()
+            if not raw_chat:
+                logger.info(
+                    "[DRY-RUN] RAW-поток отключен: RAW_REVIEW_CHAT_ID не задан"
+                )
+                setattr(config, "RAW_STREAM_ENABLED", False)
+
+    if args.only_raw and args.no_raw:
+        parser.error("Нельзя использовать одновременно --only-raw и --no-raw")
+
     config.validate_config()
 
     if getattr(config, "DRY_RUN", False):
@@ -413,18 +452,11 @@ def main() -> int:
         updates_thread = threading.Thread(target=bot_updates.run, args=(stop_event,), daemon=True)
         updates_thread.start()
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--loop", action="store_true", help="Бесконечный цикл с паузой")
-    parser.add_argument("--only-raw", action="store_true", help="Запустить только RAW-поток")
-    parser.add_argument("--no-raw", action="store_true", help="Пропустить RAW-поток")
-    args = parser.parse_args()
-
-    if args.only_raw and args.no_raw:
-        parser.error("Нельзя использовать одновременно --only-raw и --no-raw")
-
     raw_mode = "only" if args.only_raw else "skip" if args.no_raw else "auto"
 
     if not args.loop:
+        if args.once:
+            logger.info("Запрошен одиночный прогон (--once)")
         run_once(conn, raw_mode=raw_mode)
         return 0
 

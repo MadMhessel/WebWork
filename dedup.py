@@ -122,6 +122,9 @@ def deduplicate(items: Sequence[Dict[str, object]], *, scope: str = "default") -
         if not dedup_key:
             dedup_key = repr(item)
         if dedup_key in seen:
+            logger.debug(
+                "DEDUP(in-memory:%s): пропуск дубля key=%s", scope, dedup_key
+            )
             removed += 1
             continue
         seen.add(dedup_key)
@@ -259,20 +262,26 @@ def calc_title_hash(title: str) -> str:
 
 # ---------- Main check ----------
 
-def is_duplicate(url: Optional[str], guid: Optional[str], title: Optional[str], db_conn) -> bool:
+def is_duplicate(
+    url: Optional[str], guid: Optional[str], title: Optional[str], db_conn
+) -> bool:
     """
     Returns True if the item was already seen (by URL, GUID or normalized title hash).
     """
     try:
         canonical = canonical_url(url)
         if url and db.exists_url(db_conn, url):
+            logger.debug("DEDUP(SQLite): найден URL %s", url)
             return True
         if canonical and canonical != url and db.exists_url(db_conn, canonical):
+            logger.debug("DEDUP(SQLite): найден canonical URL %s", canonical)
             return True
         if guid and db.exists_guid(db_conn, guid):
+            logger.debug("DEDUP(SQLite): найден GUID %s", guid)
             return True
         thash = calc_title_hash(title or "")
         if thash and db.exists_title_hash(db_conn, thash):
+            logger.debug("DEDUP(SQLite): найден hash %s", thash)
             return True
         if _has_similar_title(title or "", db_conn):
             return True

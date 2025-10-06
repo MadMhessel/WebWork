@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
-import json
-import re
 
 import yaml
 
 from utils import normalize_whitespace
+from logging_setup import get_logger
 
 CONFIG_PATH = Path(__file__).resolve().with_name("moderation.yaml")
 PROFANITY_PATH = Path(__file__).resolve().with_name("profanity_ru.txt")
@@ -16,6 +17,8 @@ PROFANITY_PATH = Path(__file__).resolve().with_name("profanity_ru.txt")
 _RULES_CACHE: Dict[str, Any] | None = None
 _PROFANITY_CACHE: List[str] | None = None
 _PATTERN_CACHE: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -139,6 +142,13 @@ def run_blocklists(item: Dict[str, Any]) -> BlockResult:
         if not pattern:
             continue
         if re.search(pattern, text, flags=re.I | re.U):
+            logger.info(
+                "[MODERATION:block] source=%s title=%s pattern=%s label=%s",
+                item.get("source"),
+                (item.get("title") or "")[:140],
+                pattern,
+                entry.get("label"),
+            )
             return BlockResult(True, pattern=pattern, label=entry.get("label"))
     return BlockResult(False)
 
@@ -162,7 +172,14 @@ def run_hold_flags(item: Dict[str, Any]) -> List[Flag]:
         if not pattern:
             continue
         if re.search(pattern, text, flags=re.I | re.U):
-            flags.append(_make_flag(entry, requires_quality_note=quality_note))
+            flag = _make_flag(entry, requires_quality_note=quality_note)
+            logger.info(
+                "[MODERATION:hold] key=%s pattern=%s title=%s",
+                flag.key,
+                flag.pattern,
+                (item.get("title") or "")[:140],
+            )
+            flags.append(flag)
     return flags
 
 
@@ -253,7 +270,14 @@ def run_deprioritize_flags(item: Dict[str, Any]) -> List[Flag]:
         if not pattern:
             continue
         if re.search(pattern, text, flags=re.I | re.U):
-            matches.append(_make_flag(entry))
+            flag = _make_flag(entry)
+            logger.info(
+                "[MODERATION:deprioritize] key=%s pattern=%s title=%s",
+                flag.key,
+                flag.pattern,
+                (item.get("title") or "")[:140],
+            )
+            matches.append(flag)
 
     rules = _load_rules()
     if matches and rules.get("allow_promo_if_objects_and_geo"):

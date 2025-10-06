@@ -92,9 +92,15 @@ if exist requirements.txt (
     echo [WARN] requirements.txt not found, skipping dependency installation.
 )
 
-echo [INFO] Starting WebWork...
-call "%VENV_PY%" -X utf8 main.py %*
+echo [INFO] WebWork loop launcher готов.
+:run_loop
+echo [INFO] Запускаем python -m webwork --loop %*
+call "%VENV_PY%" -X utf8 -m webwork --loop %*
 set "EXIT_CODE=%ERRORLEVEL%"
-
-popd >nul 2>&1
-endlocal & exit /b %EXIT_CODE%
+if "%EXIT_CODE%"=="0" (
+    echo [INFO] WebWork завершился корректно. Перезапуск через 10 секунд...
+) else (
+    echo [WARN] WebWork завершился с кодом %EXIT_CODE%. Перезапуск через 10 секунд...
+)
+timeout /t 10 /nobreak >nul
+goto run_loop
