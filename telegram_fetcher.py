@@ -8,6 +8,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 import threading
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
@@ -568,6 +569,9 @@ def fetch_from_telegram(
         timeout,
         options,
     )
+    log.debug(
+        "fetch_from_telegram:entered thread=%s", threading.current_thread().name
+    )
     opts = options or FetchOptions()
     effective_timeout = timeout
     if effective_timeout is None:
@@ -622,42 +626,101 @@ def fetch_from_telegram(
                 "fetch_from_telegram:return without timeout result_count=%s",
                 len(result),
             )
+            log.debug(
+                "fetch_from_telegram: returning synchronously thread=%s", 
+                threading.current_thread().name,
+            )
             return result
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            log.debug(
-                "fetch_from_telegram: ThreadPoolExecutor created max_workers=1 timeout=%s",
-                effective_timeout,
-            )
-            future = executor.submit(_call)
-            log.debug("fetch_from_telegram: future submitted, awaiting result")
+        completion_event = threading.Event()
+        worker_result: Dict[str, List[Dict[str, Any]]] = {}
+        worker_exc: Dict[str, Any] = {}
+
+        def _worker() -> None:
+            worker_thread = threading.current_thread().name
+            log.debug("fetch_from_telegram: worker start thread=%s", worker_thread)
             try:
-                result = future.result(timeout=effective_timeout)
-                log.info(
-                    "fetch_from_telegram:return with timeout result_count=%s",
+                result = _call()
+                worker_result["value"] = result
+                log.debug(
+                    "fetch_from_telegram: worker obtained result thread=%s result_count=%s",
+                    worker_thread,
                     len(result),
                 )
-                return result
-            except FuturesTimeoutError as exc:
-                log.warning(
-                    "fetch_from_telegram: timeout waiting for result after %.2fs",
-                    effective_timeout,
-                )
-                future.cancel()
+            except BaseException as exc:
+                worker_exc["exc_info"] = sys.exc_info()
                 log.debug(
-                    "fetch_from_telegram: future cancelled after timeout done=%s cancelled=%s",
-                    future.done(),
-                    future.cancelled(),
+                    "fetch_from_telegram: worker captured exception thread=%s type=%s",
+                    worker_thread,
+                    type(exc).__name__,
                 )
-                raise TelegramFetchTimeoutError(
-                    f"Telegram fetch timed out after {effective_timeout:.1f} seconds"
-                ) from exc
             finally:
                 log.debug(
-                    "fetch_from_telegram: future state done=%s cancelled=%s",
-                    future.done(),
-                    future.cancelled(),
+                    "fetch_from_telegram: worker signalling completion thread=%s",
+                    worker_thread,
                 )
+                completion_event.set()
+
+        worker_thread = threading.Thread(
+            target=_worker,
+            name="fetch_from_telegram_worker",
+            daemon=True,
+        )
+        log.debug(
+            "fetch_from_telegram: starting worker thread=%s timeout=%.2f",
+            worker_thread.name,
+            effective_timeout,
+        )
+        worker_thread.start()
+        finished = completion_event.wait(timeout=effective_timeout)
+        log.debug(
+            "fetch_from_telegram: wait finished=%s thread_alive=%s",
+            finished,
+            worker_thread.is_alive(),
+        )
+        if not finished:
+            log.warning(
+                "fetch_from_telegram: timeout waiting for worker after %.2fs", 
+                effective_timeout,
+            )
+            raise TelegramFetchTimeoutError(
+                f"Telegram fetch timed out after {effective_timeout:.1f} seconds"
+            )
+
+        worker_thread.join(timeout=1.0)
+        if worker_thread.is_alive():
+            log.warning(
+                "fetch_from_telegram: worker thread still alive after join thread=%s",
+                worker_thread.name,
+            )
+        else:
+            log.debug(
+                "fetch_from_telegram: worker thread joined thread=%s",
+                worker_thread.name,
+            )
+
+        if "exc_info" in worker_exc:
+            exc_type, exc_value, exc_tb = worker_exc["exc_info"]
+            log.debug(
+                "fetch_from_telegram: re-raising worker exception type=%s",
+                exc_type.__name__ if exc_type else "unknown",
+            )
+            if exc_value is not None and exc_tb is not None:
+                raise exc_value.with_traceback(exc_tb)
+            if exc_value is not None:
+                raise exc_value
+            raise RuntimeError("Unknown exception in fetch_from_telegram worker")
+
+        result = worker_result.get("value", [])
+        log.info(
+            "fetch_from_telegram:return with timeout result_count=%s",
+            len(result),
+        )
+        log.debug(
+            "fetch_from_telegram: returning from timed execution thread=%s", 
+            threading.current_thread().name,
+        )
+        return result
     except Exception as exc:
         log.exception(
             "fetch_from_telegram: caught exception type=%s error=%s",
