@@ -224,7 +224,11 @@ def run_once(
                     )
                     items_iter = []
                 else:
-                    from telegram_fetcher import FetchOptions, fetch_from_telegram
+                    from telegram_fetcher import (
+                        FetchOptions,
+                        TelegramFetchTimeoutError,
+                        fetch_from_telegram,
+                    )
 
                     fetch_options = FetchOptions(
                         max_channels_per_iter=int(
@@ -261,23 +265,56 @@ def run_once(
                     _trace_run_once(
                         "items fetch: invoking fetch_from_telegram (may block)"
                     )
-                    items_iter = list(
-                        fetch_from_telegram(
-                            mode,
+                    fetch_timeout = float(
+                        max(
+                            1.0,
                             getattr(
-                                config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"
+                                config,
+                                "TELEGRAM_FETCH_TIMEOUT",
+                                fetch_options.timeout_seconds or 30.0,
                             ),
-                            fetch_options.messages_per_channel,
-                            options=fetch_options,
                         )
                     )
                     logger.info(
-                        "Загрузка из Telegram: получено %d элементов (парсинг сайтов отключён)",
-                        len(items_iter),
+                        "items fetch: starting fetch_from_telegram (timeout=%ss)",
+                        fetch_timeout,
                     )
-                    _trace_run_once(
-                        f"items fetch: fetch_from_telegram returned {len(items_iter)} items"
-                    )
+                    try:
+                        items_iter = list(
+                            fetch_from_telegram(
+                                mode,
+                                getattr(
+                                    config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"
+                                ),
+                                fetch_options.messages_per_channel,
+                                options=fetch_options,
+                                timeout=fetch_timeout,
+                            )
+                        )
+                    except TelegramFetchTimeoutError:
+                        logger.error(
+                            "items fetch: fetch_from_telegram timed out after %s seconds",
+                            fetch_timeout,
+                            exc_info=True,
+                        )
+                        _trace_run_once(
+                            "items fetch: fetch_from_telegram timed out, using empty list"
+                        )
+                        items_iter = []
+                    except Exception:
+                        logger.exception("items fetch: fetch_from_telegram failed")
+                        _trace_run_once(
+                            "items fetch: fetch_from_telegram raised, using empty list"
+                        )
+                        items_iter = []
+                    else:
+                        logger.info(
+                            "items fetch: fetch_from_telegram finished, received %d items",
+                            len(items_iter),
+                        )
+                        _trace_run_once(
+                            f"items fetch: fetch_from_telegram returned {len(items_iter)} items"
+                        )
 
         stage_counts["in"] = len(items_iter)
         stage_counts["after_fetch"] = len(items_iter)
