@@ -567,17 +567,27 @@ def main() -> int:
             )
         return 0
 
-    logger.info("Старт бесконечного цикла. Пауза: %d сек.", config.LOOP_DELAY_SECS)
+    logger.info(
+        "Старт бесконечного цикла обработки (LOOP_DELAY_SECS=%d)",
+        config.LOOP_DELAY_SECS,
+    )
     while True:
+        logger.info("===> Итерация старта")
         try:
             run_once(conn, raw_mode=raw_mode)
+            logger.info("===> Итерация завершена, sleep")
             time.sleep(config.LOOP_DELAY_SECS)
         except KeyboardInterrupt:
             logger.warning("Остановка по Ctrl+C")
             break
         except Exception as ex:
-            logger.exception("Неожиданная ошибка цикла: %s", ex)
+            logger.exception("Ошибка на итерации цикла: %s", ex)
             time.sleep(15)
+        except BaseException as ex:
+            logger.exception("FATAL BaseException: %s", ex)
+            time.sleep(15)
+
+    logger.info("Вышли из while True")
 
     stop_event.set()
     if updates_thread is not None:
