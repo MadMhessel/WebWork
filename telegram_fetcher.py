@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import datetime as dt
 import logging
 import json
@@ -62,6 +63,11 @@ class FetchOptions:
     messages_per_channel: int = 50
     rate: float = 25.0
     flood_sleep_threshold: int = 30
+    timeout_seconds: Optional[float] = 30.0
+
+
+class TelegramFetchTimeoutError(RuntimeError):
+    """Raised when fetching messages from Telegram exceeds the allotted time."""
 
 
 def _state_path() -> Path:
@@ -258,17 +264,15 @@ def _chunk_aliases(aliases: List[str], chunk_size: int) -> List[List[str]]:
     return result or [aliases]
 
 
-def fetch_from_telegram(
+def _fetch_from_telegram_sync(
     mode: str,
     links_file: str,
     limit: int,
-    *,
-    options: Optional[FetchOptions] = None,
+    opts: FetchOptions,
 ) -> List[Dict[str, Any]]:
     aliases = _load_aliases(links_file)
     if not aliases:
         return []
-    opts = options or FetchOptions()
     chunk_size = max(1, min(opts.max_channels_per_iter, len(aliases)))
     chunks = _chunk_aliases(aliases, chunk_size)
     state_key = _state_key(links_file)
@@ -311,6 +315,38 @@ def fetch_from_telegram(
     _store_chunk_index(state_key, len(chunks), (chunk_index + 1) % len(chunks))
     log.info("Telegram: получено %d сообщений (mode=%s)", len(posts), mode_normalized)
     return [post.as_item() for post in posts]
+
+
+def fetch_from_telegram(
+    mode: str,
+    links_file: str,
+    limit: int,
+    *,
+    options: Optional[FetchOptions] = None,
+    timeout: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    opts = options or FetchOptions()
+    effective_timeout = timeout
+    if effective_timeout is None:
+        effective_timeout = opts.timeout_seconds
+    if effective_timeout is not None and effective_timeout <= 0:
+        effective_timeout = None
+
+    def _call() -> List[Dict[str, Any]]:
+        return _fetch_from_telegram_sync(mode, links_file, limit, opts)
+
+    if effective_timeout is None:
+        return _call()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_call)
+        try:
+            return future.result(timeout=effective_timeout)
+        except FuturesTimeoutError as exc:
+            future.cancel()
+            raise TelegramFetchTimeoutError(
+                f"Telegram fetch timed out after {effective_timeout:.1f} seconds"
+            ) from exc
 
 
 def fetch_posts_iterator(mode: str, links_file: str, limit: int) -> Iterator[Dict[str, Any]]:
