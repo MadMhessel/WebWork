@@ -8,6 +8,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
+import threading
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from telethon.tl.custom.message import Message
@@ -224,6 +225,13 @@ async def _fetch_mtproto_async(
     *,
     options: Optional[FetchOptions] = None,
 ) -> List[TelegramPost]:
+    alias_list = list(aliases)
+    log.info(
+        "fetch_mtproto_async:start alias_count=%s limit=%s options=%s",
+        len(alias_list),
+        limit,
+        options,
+    )
     api_id = getattr(config, "TELETHON_API_ID", 0)
     api_hash = getattr(config, "TELETHON_API_HASH", "")
     session = getattr(config, "TELETHON_SESSION_NAME", "webwork_telethon")
@@ -238,15 +246,72 @@ async def _fetch_mtproto_async(
         session,
         flood_sleep_threshold=flood_threshold,
     )
+    log.debug("fetch_mtproto_async: Telethon client created session=%s", session)
     concurrency = options.fetch_workers if options else 5
     bucket = get_global_bucket((options.rate if options else 25.0) or 25.0)
-    async with client:
-        messages_by_alias = await fetch_bulk_channels(
-            client,
-            aliases,
+    fetch_timeout = None
+    if options and options.timeout_seconds and options.timeout_seconds > 0:
+        fetch_timeout = float(options.timeout_seconds)
+    messages_by_alias: Dict[str, List[Message]] = {}
+    try:
+        async with client:
+            log.debug(
+                "fetch_mtproto_async: client session entered concurrency=%s timeout=%s",
+                concurrency,
+                fetch_timeout,
+            )
+            try:
+                coro = fetch_bulk_channels(
+                    client,
+                    alias_list,
+                    limit,
+                    concurrency=concurrency,
+                    bucket=bucket,
+                )
+                if fetch_timeout is not None:
+                    log.debug(
+                        "fetch_mtproto_async: awaiting fetch_bulk_channels with timeout=%s",
+                        fetch_timeout,
+                    )
+                    messages_by_alias = await asyncio.wait_for(coro, timeout=fetch_timeout)
+                else:
+                    log.debug(
+                        "fetch_mtproto_async: awaiting fetch_bulk_channels without explicit timeout"
+                    )
+                    messages_by_alias = await coro
+                log.info(
+                    "fetch_mtproto_async: fetch completed alias_count=%s",
+                    len(messages_by_alias),
+                )
+            except asyncio.TimeoutError as exc:
+                log.warning(
+                    "fetch_mtproto_async: timeout after %.2fs while fetching aliases",
+                    fetch_timeout or 0,
+                )
+                raise TelegramFetchTimeoutError(
+                    f"Telegram MTProto fetch timed out after {fetch_timeout:.1f} seconds"
+                    if fetch_timeout
+                    else "Telegram MTProto fetch timed out"
+                ) from exc
+            except Exception as exc:
+                log.exception("fetch_mtproto_async: exception during fetch %s", exc)
+                raise
+            except BaseException as exc:
+                log.critical("fetch_mtproto_async: base-exception during fetch %s", exc)
+                raise
+            finally:
+                log.debug("fetch_mtproto_async: leaving fetch_bulk_channels await")
+    except Exception as exc:
+        log.exception("fetch_mtproto_async: caught exception %s", exc)
+        raise
+    except BaseException as exc:
+        log.critical("fetch_mtproto_async: caught base-exception %s", exc)
+        raise
+    finally:
+        log.info(
+            "fetch_mtproto_async:finish alias_count=%s limit=%s",
+            len(alias_list),
             limit,
-            concurrency=concurrency,
-            bucket=bucket,
         )
     posts: List[TelegramPost] = []
     for alias, messages in messages_by_alias.items():
@@ -270,8 +335,16 @@ def _fetch_from_telegram_sync(
     limit: int,
     opts: FetchOptions,
 ) -> List[Dict[str, Any]]:
+    log.info(
+        "fetch_from_telegram_sync:start mode=%s links_file=%s limit=%s opts=%s",
+        mode,
+        links_file,
+        limit,
+        opts,
+    )
     aliases = _load_aliases(links_file)
     if not aliases:
+        log.info("fetch_from_telegram_sync:no aliases loaded, returning empty list")
         return []
     chunk_size = max(1, min(opts.max_channels_per_iter, len(aliases)))
     chunks = _chunk_aliases(aliases, chunk_size)
@@ -290,9 +363,11 @@ def _fetch_from_telegram_sync(
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
+            log.debug("fetch_from_telegram_sync: entering loop.run_until_complete")
             posts = loop.run_until_complete(
                 _fetch_mtproto_async(current_chunk, msg_limit, options=opts)
             )
+            log.debug("fetch_from_telegram_sync: loop.run_until_complete finished")
         finally:
             try:
                 loop.close()
@@ -314,6 +389,11 @@ def _fetch_from_telegram_sync(
         raise ValueError(f"Unknown telegram mode: {mode}")
     _store_chunk_index(state_key, len(chunks), (chunk_index + 1) % len(chunks))
     log.info("Telegram: получено %d сообщений (mode=%s)", len(posts), mode_normalized)
+    log.info(
+        "fetch_from_telegram_sync:return result_count=%s mode=%s",
+        len(posts),
+        mode_normalized,
+    )
     return [post.as_item() for post in posts]
 
 
@@ -325,6 +405,14 @@ def fetch_from_telegram(
     options: Optional[FetchOptions] = None,
     timeout: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
+    log.info(
+        "fetch_from_telegram:start mode=%s links_file=%s limit=%s timeout=%s options=%s",
+        mode,
+        links_file,
+        limit,
+        timeout,
+        options,
+    )
     opts = options or FetchOptions()
     effective_timeout = timeout
     if effective_timeout is None:
@@ -333,20 +421,83 @@ def fetch_from_telegram(
         effective_timeout = None
 
     def _call() -> List[Dict[str, Any]]:
-        return _fetch_from_telegram_sync(mode, links_file, limit, opts)
-
-    if effective_timeout is None:
-        return _call()
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_call)
+        thread_name = threading.current_thread().name
+        log.debug("fetch_from_telegram:_call start thread=%s", thread_name)
         try:
-            return future.result(timeout=effective_timeout)
-        except FuturesTimeoutError as exc:
-            future.cancel()
-            raise TelegramFetchTimeoutError(
-                f"Telegram fetch timed out after {effective_timeout:.1f} seconds"
-            ) from exc
+            log.debug(
+                "fetch_from_telegram:_call invoking _fetch_from_telegram_sync for %s",
+                thread_name,
+            )
+            result = _fetch_from_telegram_sync(mode, links_file, limit, opts)
+            log.info(
+                "fetch_from_telegram:_call completed thread=%s result_count=%s",
+                thread_name,
+                len(result),
+            )
+            return result
+        except Exception as exc:
+            log.exception(
+                "fetch_from_telegram:_call exception thread=%s error=%s", thread_name, exc
+            )
+            raise
+        except BaseException as exc:
+            log.critical(
+                "fetch_from_telegram:_call base-exception thread=%s error=%s",
+                thread_name,
+                exc,
+            )
+            raise
+        finally:
+            log.debug("fetch_from_telegram:_call finally thread=%s", thread_name)
+
+    try:
+        if effective_timeout is None:
+            log.debug("fetch_from_telegram: executing synchronously without timeout")
+            result = _call()
+            log.info(
+                "fetch_from_telegram:return without timeout result_count=%s",
+                len(result),
+            )
+            return result
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            log.debug(
+                "fetch_from_telegram: ThreadPoolExecutor created max_workers=1 timeout=%s",
+                effective_timeout,
+            )
+            future = executor.submit(_call)
+            log.debug("fetch_from_telegram: future submitted, awaiting result")
+            try:
+                result = future.result(timeout=effective_timeout)
+                log.info(
+                    "fetch_from_telegram:return with timeout result_count=%s",
+                    len(result),
+                )
+                return result
+            except FuturesTimeoutError as exc:
+                log.warning(
+                    "fetch_from_telegram: timeout waiting for result after %.2fs",
+                    effective_timeout,
+                )
+                future.cancel()
+                log.debug("fetch_from_telegram: future cancelled after timeout")
+                raise TelegramFetchTimeoutError(
+                    f"Telegram fetch timed out after {effective_timeout:.1f} seconds"
+                ) from exc
+    except Exception as exc:
+        log.exception("fetch_from_telegram: caught exception %s", exc)
+        raise
+    except BaseException as exc:
+        log.critical("fetch_from_telegram: caught base-exception %s", exc)
+        raise
+    finally:
+        log.info(
+            "fetch_from_telegram:finish mode=%s links_file=%s limit=%s timeout=%s",
+            mode,
+            links_file,
+            limit,
+            effective_timeout,
+        )
 
 
 def fetch_posts_iterator(mode: str, links_file: str, limit: int) -> Iterator[Dict[str, Any]]:
