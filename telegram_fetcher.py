@@ -248,6 +248,20 @@ async def _fetch_mtproto_async(
         flood_sleep_threshold=flood_threshold,
     )
     log.debug("fetch_mtproto_async: Telethon client created session=%s", session)
+    session_obj = getattr(client, "session", None)
+    session_filename = getattr(session_obj, "filename", None)
+    if isinstance(session_filename, str) and session_filename.strip():
+        raw_path = Path(session_filename).expanduser()
+        if not raw_path.is_absolute():
+            raw_path = Path.cwd() / raw_path
+        if not raw_path.exists():
+            message = (
+                "Не найден файл сессии Telethon: "
+                f"{raw_path}. Завершите интерактивный вход один раз или "
+                "передайте путь к готовому .session через TELETHON_SESSION_NAME."
+            )
+            log.error("fetch_mtproto_async: %s", message)
+            raise RuntimeError(message)
     concurrency = options.fetch_workers if options else 5
     bucket = get_global_bucket((options.rate if options else 25.0) or 25.0)
     fetch_timeout = None
