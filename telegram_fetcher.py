@@ -274,11 +274,15 @@ async def _fetch_mtproto_async(
                         fetch_timeout,
                     )
                     messages_by_alias = await asyncio.wait_for(coro, timeout=fetch_timeout)
+                    log.debug(
+                        "fetch_mtproto_async: fetch_bulk_channels completed within timeout"
+                    )
                 else:
                     log.debug(
                         "fetch_mtproto_async: awaiting fetch_bulk_channels without explicit timeout"
                     )
                     messages_by_alias = await coro
+                    log.debug("fetch_mtproto_async: fetch_bulk_channels completed without timeout")
                 log.info(
                     "fetch_mtproto_async: fetch completed alias_count=%s",
                     len(messages_by_alias),
@@ -294,18 +298,35 @@ async def _fetch_mtproto_async(
                     else "Telegram MTProto fetch timed out"
                 ) from exc
             except Exception as exc:
-                log.exception("fetch_mtproto_async: exception during fetch %s", exc)
+                log.exception(
+                    "fetch_mtproto_async: exception during fetch type=%s error=%s",
+                    type(exc).__name__,
+                    exc,
+                )
                 raise
             except BaseException as exc:
-                log.critical("fetch_mtproto_async: base-exception during fetch %s", exc)
+                log.critical(
+                    "fetch_mtproto_async: base-exception during fetch type=%s error=%s",
+                    type(exc).__name__,
+                    exc,
+                )
                 raise
             finally:
                 log.debug("fetch_mtproto_async: leaving fetch_bulk_channels await")
+        log.debug("fetch_mtproto_async: client session exited cleanly")
     except Exception as exc:
-        log.exception("fetch_mtproto_async: caught exception %s", exc)
+        log.exception(
+            "fetch_mtproto_async: caught exception type=%s error=%s",
+            type(exc).__name__,
+            exc,
+        )
         raise
     except BaseException as exc:
-        log.critical("fetch_mtproto_async: caught base-exception %s", exc)
+        log.critical(
+            "fetch_mtproto_async: caught base-exception type=%s error=%s",
+            type(exc).__name__,
+            exc,
+        )
         raise
     finally:
         log.info(
@@ -342,14 +363,26 @@ def _fetch_from_telegram_sync(
         limit,
         opts,
     )
+    log.debug("fetch_from_telegram_sync: loading aliases from %s", links_file)
     aliases = _load_aliases(links_file)
+    log.debug("fetch_from_telegram_sync: loaded %s aliases", len(aliases))
     if not aliases:
         log.info("fetch_from_telegram_sync:no aliases loaded, returning empty list")
         return []
     chunk_size = max(1, min(opts.max_channels_per_iter, len(aliases)))
+    log.debug(
+        "fetch_from_telegram_sync: chunking aliases chunk_size=%s max_channels=%s",
+        chunk_size,
+        opts.max_channels_per_iter,
+    )
     chunks = _chunk_aliases(aliases, chunk_size)
     state_key = _state_key(links_file)
     chunk_index = _load_chunk_index(state_key, len(chunks))
+    log.debug(
+        "fetch_from_telegram_sync: resolved chunk_index=%s total_chunks=%s",
+        chunk_index,
+        len(chunks),
+    )
     current_chunk = chunks[chunk_index]
     log.info(
         "Telegram: обработка чанка %s/%s (%s каналов)",
@@ -359,32 +392,154 @@ def _fetch_from_telegram_sync(
     )
     mode_normalized = (mode or "mtproto").strip().lower()
     msg_limit = opts.messages_per_channel or limit
+    posts: List[TelegramPost]
     if mode_normalized == "mtproto":
+        hard_timeout = None
+        if opts.timeout_seconds and opts.timeout_seconds > 0:
+            hard_timeout = float(opts.timeout_seconds)
+        log.debug(
+            "fetch_from_telegram_sync: creating event loop hard_timeout=%s", hard_timeout
+        )
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
             log.debug("fetch_from_telegram_sync: entering loop.run_until_complete")
-            posts = loop.run_until_complete(
-                _fetch_mtproto_async(current_chunk, msg_limit, options=opts)
-            )
-            log.debug("fetch_from_telegram_sync: loop.run_until_complete finished")
+            coroutine = _fetch_mtproto_async(current_chunk, msg_limit, options=opts)
+            if hard_timeout is not None:
+                log.debug(
+                    "fetch_from_telegram_sync: applying asyncio.wait_for hard_timeout=%s",
+                    hard_timeout,
+                )
+                coroutine = asyncio.wait_for(coroutine, timeout=hard_timeout)
+            start_time = time.time()
+            try:
+                posts = loop.run_until_complete(coroutine)
+                log.debug(
+                    "fetch_from_telegram_sync: loop.run_until_complete finished elapsed=%.2fs",
+                    time.time() - start_time,
+                )
+            except asyncio.TimeoutError as exc:
+                log.warning(
+                    "fetch_from_telegram_sync: hard timeout after %.2fs waiting for async fetch",
+                    hard_timeout or 0.0,
+                )
+                raise TelegramFetchTimeoutError(
+                    f"Telegram fetch hard timeout after {hard_timeout:.1f} seconds"
+                ) from exc
+            except Exception as exc:
+                log.exception(
+                    "fetch_from_telegram_sync: run_until_complete failed type=%s error=%s",
+                    type(exc).__name__,
+                    exc,
+                )
+                raise
+            finally:
+                pending_tasks = [
+                    task for task in asyncio.all_tasks(loop) if not task.done()
+                ]
+                if pending_tasks:
+                    log.warning(
+                        "fetch_from_telegram_sync: cancelling %s pending tasks=%s",
+                        len(pending_tasks),
+                        [repr(task) for task in pending_tasks],
+                    )
+                    for task in pending_tasks:
+                        task.cancel()
+                    try:
+                        loop.run_until_complete(
+                            asyncio.gather(*pending_tasks, return_exceptions=True)
+                        )
+                        log.debug(
+                            "fetch_from_telegram_sync: pending tasks drained successfully"
+                        )
+                    except Exception as cleanup_exc:
+                        log.exception(
+                            "fetch_from_telegram_sync: error draining pending tasks type=%s error=%s",
+                            type(cleanup_exc).__name__,
+                            cleanup_exc,
+                        )
         finally:
             try:
-                loop.close()
-            except Exception:  # pragma: no cover - cleanup guard
-                pass
+                log.debug("fetch_from_telegram_sync: shutting down async generators")
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception as exc:  # pragma: no cover - cleanup guard
+                log.exception(
+                    "fetch_from_telegram_sync: shutdown_asyncgens failed type=%s error=%s",
+                    type(exc).__name__,
+                    exc,
+                )
+            finally:
+                asyncio.set_event_loop(None)
+                try:
+                    log.debug("fetch_from_telegram_sync: closing event loop")
+                    loop.close()
+                except Exception as exc:  # pragma: no cover - cleanup guard
+                    log.exception(
+                        "fetch_from_telegram_sync: loop.close failed type=%s error=%s",
+                        type(exc).__name__,
+                        exc,
+                    )
     elif mode_normalized == "web":
         posts = []
         bucket = get_global_bucket(opts.rate)
-        for alias in current_chunk:
-            try:
-                bucket.consume()
-                items = web_fetch_latest(alias, limit=limit)
-            except Exception as exc:  # pragma: no cover - network errors
-                log.warning("Telegram web fetch error for %s: %s", alias, exc)
-                continue
-            for item in items:
-                posts.append(_web_item_to_post(item))
+        web_timeout = None
+        if opts.timeout_seconds and opts.timeout_seconds > 0:
+            web_timeout = float(opts.timeout_seconds)
+        log.debug(
+            "fetch_from_telegram_sync:web mode start chunk_size=%s web_timeout=%s",
+            len(current_chunk),
+            web_timeout,
+        )
+        with ThreadPoolExecutor(max_workers=1) as web_executor:
+            for alias in current_chunk:
+                log.debug("fetch_from_telegram_sync:web fetching alias=%s", alias)
+                future = None
+                try:
+                    bucket.consume()
+                    log.debug("fetch_from_telegram_sync:web bucket consumed alias=%s", alias)
+                    future = web_executor.submit(web_fetch_latest, alias, limit=limit)
+                    if web_timeout is not None:
+                        log.debug(
+                            "fetch_from_telegram_sync:web awaiting result alias=%s timeout=%s",
+                            alias,
+                            web_timeout,
+                        )
+                        items = future.result(timeout=web_timeout)
+                    else:
+                        log.debug(
+                            "fetch_from_telegram_sync:web awaiting result alias=%s without timeout",
+                            alias,
+                        )
+                        items = future.result()
+                    log.debug(
+                        "fetch_from_telegram_sync:web fetch completed alias=%s items=%s",
+                        alias,
+                        len(items),
+                    )
+                except FuturesTimeoutError:
+                    log.warning(
+                        "fetch_from_telegram_sync:web fetch timeout alias=%s after %.2fs",
+                        alias,
+                        web_timeout or 0.0,
+                    )
+                    if future is not None:
+                        future.cancel()
+                    continue
+                except Exception as exc:  # pragma: no cover - network errors
+                    log.warning(
+                        "fetch_from_telegram_sync:web fetch error alias=%s type=%s error=%s",
+                        alias,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    if future is not None and not future.done():
+                        future.cancel()
+                    continue
+                for item in items:
+                    posts.append(_web_item_to_post(item))
+        log.debug(
+            "fetch_from_telegram_sync:web mode finished total_posts=%s", len(posts)
+        )
     else:
         raise ValueError(f"Unknown telegram mode: {mode}")
     _store_chunk_index(state_key, len(chunks), (chunk_index + 1) % len(chunks))
@@ -429,6 +584,11 @@ def fetch_from_telegram(
                 thread_name,
             )
             result = _fetch_from_telegram_sync(mode, links_file, limit, opts)
+            log.debug(
+                "fetch_from_telegram:_call result obtained thread=%s result_count=%s",
+                thread_name,
+                len(result),
+            )
             log.info(
                 "fetch_from_telegram:_call completed thread=%s result_count=%s",
                 thread_name,
@@ -437,13 +597,17 @@ def fetch_from_telegram(
             return result
         except Exception as exc:
             log.exception(
-                "fetch_from_telegram:_call exception thread=%s error=%s", thread_name, exc
+                "fetch_from_telegram:_call exception thread=%s type=%s error=%s",
+                thread_name,
+                type(exc).__name__,
+                exc,
             )
             raise
         except BaseException as exc:
             log.critical(
-                "fetch_from_telegram:_call base-exception thread=%s error=%s",
+                "fetch_from_telegram:_call base-exception thread=%s type=%s error=%s",
                 thread_name,
+                type(exc).__name__,
                 exc,
             )
             raise
@@ -480,15 +644,33 @@ def fetch_from_telegram(
                     effective_timeout,
                 )
                 future.cancel()
-                log.debug("fetch_from_telegram: future cancelled after timeout")
+                log.debug(
+                    "fetch_from_telegram: future cancelled after timeout done=%s cancelled=%s",
+                    future.done(),
+                    future.cancelled(),
+                )
                 raise TelegramFetchTimeoutError(
                     f"Telegram fetch timed out after {effective_timeout:.1f} seconds"
                 ) from exc
+            finally:
+                log.debug(
+                    "fetch_from_telegram: future state done=%s cancelled=%s",
+                    future.done(),
+                    future.cancelled(),
+                )
     except Exception as exc:
-        log.exception("fetch_from_telegram: caught exception %s", exc)
+        log.exception(
+            "fetch_from_telegram: caught exception type=%s error=%s",
+            type(exc).__name__,
+            exc,
+        )
         raise
     except BaseException as exc:
-        log.critical("fetch_from_telegram: caught base-exception %s", exc)
+        log.critical(
+            "fetch_from_telegram: caught base-exception type=%s error=%s",
+            type(exc).__name__,
+            exc,
+        )
         raise
     finally:
         log.info(
