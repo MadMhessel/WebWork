@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -571,23 +572,54 @@ def main() -> int:
         "Старт бесконечного цикла обработки (LOOP_DELAY_SECS=%d)",
         config.LOOP_DELAY_SECS,
     )
+    print("START LOOP")
+    sys.stdout.flush()
+    logger.info("START LOOP")
     while True:
+        print("BEGIN ITERATION", time.time())
+        sys.stdout.flush()
+        logger.info("BEGIN ITERATION")
         logger.info("===> Итерация старта")
         try:
             run_once(conn, raw_mode=raw_mode)
+            print("END run_once", time.time())
+            sys.stdout.flush()
+            logger.info("END run_once")
             logger.info("===> Итерация завершена, sleep")
             time.sleep(config.LOOP_DELAY_SECS)
+            print("SLEEP END", time.time())
+            sys.stdout.flush()
+            logger.info("SLEEP END")
         except KeyboardInterrupt:
+            print("KeyboardInterrupt detected", time.time())
+            sys.stdout.flush()
             logger.warning("Остановка по Ctrl+C")
             break
         except Exception as ex:
-            logger.exception("Ошибка на итерации цикла: %s", ex)
+            exc_type = type(ex).__name__
+            print(f"Exception caught: {exc_type}: {ex}")
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
+            logger.exception("Ошибка на итерации цикла (%s): %s", exc_type, ex)
             time.sleep(15)
+            print("SLEEP END", time.time())
+            sys.stdout.flush()
+            logger.info("SLEEP END")
         except BaseException as ex:
-            logger.exception("FATAL BaseException: %s", ex)
+            exc_type = type(ex).__name__
+            print(f"BaseException caught: {exc_type}: {ex}")
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
+            logger.exception("FATAL BaseException (%s): %s", exc_type, ex)
             time.sleep(15)
+            print("SLEEP END", time.time())
+            sys.stdout.flush()
+            logger.info("SLEEP END")
 
     logger.info("Вышли из while True")
+    print("EXIT while True", time.time())
+    sys.stdout.flush()
+    logger.info("EXIT while True")
 
     stop_event.set()
     if updates_thread is not None:
