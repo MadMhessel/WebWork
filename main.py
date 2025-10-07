@@ -280,16 +280,24 @@ def run_once(
                         fetch_timeout,
                     )
                     try:
-                        items_iter = list(
-                            fetch_from_telegram(
-                                mode,
-                                getattr(
-                                    config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"
-                                ),
-                                fetch_options.messages_per_channel,
-                                options=fetch_options,
-                                timeout=fetch_timeout,
-                            )
+                        _trace_run_once(
+                            "items fetch: about to call fetch_from_telegram"
+                        )
+                        fetch_result_iterable = fetch_from_telegram(
+                            mode,
+                            getattr(
+                                config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"
+                            ),
+                            fetch_options.messages_per_channel,
+                            options=fetch_options,
+                            timeout=fetch_timeout,
+                        )
+                        _trace_run_once(
+                            "items fetch: fetch_from_telegram returned control to run_once"
+                        )
+                        items_iter = list(fetch_result_iterable)
+                        _trace_run_once(
+                            f"items fetch: fetch_from_telegram iterable materialized ({len(items_iter)} items)"
                         )
                     except TelegramFetchTimeoutError:
                         logger.error(
@@ -301,12 +309,36 @@ def run_once(
                             "items fetch: fetch_from_telegram timed out, using empty list"
                         )
                         items_iter = []
-                    except Exception:
+                    except SystemExit as exc:
+                        _trace_run_once(
+                            f"items fetch: fetch_from_telegram raised SystemExit: {exc!r}"
+                        )
+                        logger.exception(
+                            "items fetch: fetch_from_telegram raised SystemExit"
+                        )
+                        raise
+                    except KeyboardInterrupt as exc:
+                        _trace_run_once(
+                            f"items fetch: fetch_from_telegram interrupted by KeyboardInterrupt: {exc!r}"
+                        )
+                        logger.exception(
+                            "items fetch: fetch_from_telegram raised KeyboardInterrupt"
+                        )
+                        raise
+                    except Exception as exc:
                         logger.exception("items fetch: fetch_from_telegram failed")
                         _trace_run_once(
-                            "items fetch: fetch_from_telegram raised, using empty list"
+                            f"items fetch: fetch_from_telegram raised Exception ({exc!r}), using empty list"
                         )
                         items_iter = []
+                    except BaseException as exc:
+                        _trace_run_once(
+                            f"items fetch: fetch_from_telegram raised BaseException: {exc!r}"
+                        )
+                        logger.exception(
+                            "items fetch: fetch_from_telegram raised BaseException"
+                        )
+                        raise
                     else:
                         logger.info(
                             "items fetch: fetch_from_telegram finished, received %d items",
@@ -315,9 +347,17 @@ def run_once(
                         _trace_run_once(
                             f"items fetch: fetch_from_telegram returned {len(items_iter)} items"
                         )
+                    finally:
+                        _trace_run_once(
+                            "items fetch: fetch_from_telegram try-block complete"
+                        )
 
         stage_counts["in"] = len(items_iter)
         stage_counts["after_fetch"] = len(items_iter)
+
+        _trace_run_once(
+            f"run_once: post-fetch initialization start (items={len(items_iter)})"
+        )
 
         seen_urls: set = set()
         seen_title_hashes: set = set()
@@ -682,7 +722,7 @@ def run_once(
                     "Источники с повторными сбоями: %s", "; ".join(parts)
                 )
 
-        return RunSummary(
+        summary = RunSummary(
             (
                 cnt_total,
                 cnt_relevant,
@@ -695,6 +735,8 @@ def run_once(
             ),
             stage_counts,
         )
+        _trace_run_once("run_once: summary prepared, returning from function")
+        return summary
     except SystemExit as exc:
         _trace_run_once(f"run_once: SystemExit propagated (code={exc.code})")
         raise
