@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -96,362 +97,573 @@ class RunSummary:
         return iter(self.totals)
 
 
+def _trace_run_once(message: str) -> None:
+    trace_message = f"[RUN_ONCE TRACE] {message}"
+    print(trace_message)
+    sys.stdout.flush()
+    logger.info(trace_message)
+
+
+@contextmanager
+def _run_once_stage(name: str):
+    _trace_run_once(f"{name}: start")
+    try:
+        yield
+    except SystemExit as exc:
+        _trace_run_once(f"{name}: SystemExit detected (code={exc.code})")
+        logger.exception("run_once stage %s raised SystemExit", name)
+        raise
+    except BaseException as exc:  # noqa: B902 - we want to log all unexpected exits
+        _trace_run_once(f"{name}: error: {exc!r}")
+        logger.exception("run_once stage %s failed", name)
+        raise
+    else:
+        _trace_run_once(f"{name}: finish")
+
+
 def run_once(
     conn,
     *,
     raw_mode: str = "auto",
 ) -> RunSummary:
-    raw_mode = raw_mode or "auto"
-    raw_only = raw_mode == "only"
-    raw_skip = raw_mode == "skip"
-    raw_force_run = raw_only
-    raw_sources: Optional[List[str]] = None
-    raw_stream_enabled = getattr(config, "RAW_STREAM_ENABLED", False)
-    if not raw_skip and (raw_only or not raw_stream_enabled):
-        raw_path = getattr(config, "RAW_TELEGRAM_SOURCES_FILE", "")
-        if raw_path:
-            try:
-                raw_sources = raw_pipeline.load_sources_file(raw_path)
-            except Exception as exc:
-                logger.warning("[RAW] sources load error: %s", exc)
-                raw_sources = []
-            else:
-                raw_force_run = raw_force_run or bool(raw_sources)
-
-    should_run_raw = (not raw_skip) and (raw_stream_enabled or raw_force_run)
-
-    if should_run_raw:
-        logger.info(
-            "[RAW] pipeline: start (force=%s, sources=%d)",
-            raw_force_run,
-            len(raw_sources or []),
-        )
-        try:
-            raw_pipeline.run_raw_pipeline_once(
-                http_client.get_session(),
-                conn,
-                logger,
-                force=raw_force_run,
-                sources=raw_sources if raw_force_run else None,
-            )
-        except Exception:
-            logger.exception("[RAW] pipeline error")
-
-    stage_counts: Dict[str, int] = {
-        "in": 0,
-        "after_fetch": 0,
-        "after_filters": 0,
-        "after_dedup": 0,
-        "after_moderation": 0,
-        "to_publish": 0,
-    }
-
-    if raw_only:
-        return RunSummary((0, 0, 0, 0, 0, 0, 0, 0), stage_counts)
-
-    items_iter: Iterable[Dict[str, Any]]
-    if not getattr(config, "TELEGRAM_AUTO_FETCH", True):
-        logger.info(
-            "TELEGRAM_AUTO_FETCH=0, загрузка Telegram пропущена; парсинг сайтов отключён."
-        )
-        items_iter = []
-    else:
-        mode = getattr(config, "TELEGRAM_MODE", "mtproto")
-        if mode == "mtproto" and (
-            int(getattr(config, "TELETHON_API_ID", 0) or 0) <= 0
-            or not getattr(config, "TELETHON_API_HASH", "")
-        ):
-            logger.warning(
-                "TELEGRAM_MODE=mtproto, но TELETHON_API_ID/TELETHON_API_HASH не заданы. "
-                "Пропускаем загрузку из Telegram."
-            )
-            items_iter = []
-        else:
-            from telegram_fetcher import FetchOptions, fetch_from_telegram
-
-            fetch_options = FetchOptions(
-                max_channels_per_iter=int(
-                    max(1, getattr(config, "TELEGRAM_MAX_CHANNELS_PER_ITER", 50))
-                ),
-                fetch_workers=int(max(1, getattr(config, "TELEGRAM_FETCH_WORKERS", 5))),
-                messages_per_channel=int(
-                    max(1, getattr(config, "TELEGRAM_MESSAGES_PER_CHANNEL", 30))
-                ),
-                rate=float(max(0.1, getattr(config, "TELEGRAM_RATE_LIMIT", 25.0))),
-                flood_sleep_threshold=int(
-                    max(0, getattr(config, "TELETHON_FLOOD_SLEEP_THRESHOLD", 30))
-                ),
-            )
-            items_iter = list(
-                fetch_from_telegram(
-                    mode,
-                    getattr(config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"),
-                    fetch_options.messages_per_channel,
-                    options=fetch_options,
+    _trace_run_once("run_once: start")
+    try:
+        with _run_once_stage("raw configuration"):
+            raw_mode = raw_mode or "auto"
+            raw_only = raw_mode == "only"
+            raw_skip = raw_mode == "skip"
+            raw_force_run = raw_only
+            raw_sources: Optional[List[str]] = None
+            raw_stream_enabled = getattr(config, "RAW_STREAM_ENABLED", False)
+            if not raw_skip and (raw_only or not raw_stream_enabled):
+                raw_path = getattr(config, "RAW_TELEGRAM_SOURCES_FILE", "")
+                _trace_run_once(
+                    f"raw configuration: evaluate sources file (path={raw_path or 'none'})"
                 )
-            )
-            logger.info(
-                "Загрузка из Telegram: получено %d элементов (парсинг сайтов отключён)",
-                len(items_iter),
-            )
+                if raw_path:
+                    try:
+                        raw_sources = raw_pipeline.load_sources_file(raw_path)
+                    except Exception as exc:
+                        _trace_run_once(
+                            f"raw configuration: sources load error detected: {exc!r}"
+                        )
+                        logger.warning("[RAW] sources load error: %s", exc)
+                        raw_sources = []
+                    else:
+                        raw_force_run = raw_force_run or bool(raw_sources)
+                        _trace_run_once(
+                            "raw configuration: sources loaded successfully"
+                        )
+            should_run_raw = (not raw_skip) and (raw_stream_enabled or raw_force_run)
 
-    stage_counts["in"] = len(items_iter)
-    stage_counts["after_fetch"] = len(items_iter)
-
-    seen_urls: set = set()
-    seen_title_hashes: set = set()
-
-    sources_by_name = getattr(config, "SOURCES_BY_NAME", {})
-    sources_by_domain = getattr(config, "SOURCES_BY_DOMAIN_ALL", {})
-
-    cnt_total = 0
-    cnt_relevant = 0
-    cnt_dup_inpack_url = 0
-    cnt_dup_inpack_title = 0
-    cnt_dup_db = 0
-    cnt_queued = 0
-    cnt_published = 0
-    cnt_not_sent = 0
-    cnt_errors = 0
-    for it in items_iter:
-        cnt_total += 1
-        try:
-            src = it.get("source") or ""
-            url = (it.get("url") or "").strip()
-            guid = (it.get("guid") or "").strip()
-            title = normalize_whitespace(it.get("title") or "")
-            content = normalize_whitespace(it.get("content") or "")
-            ok, region_ok, topic_ok, reason = filters.is_relevant_for_source(title, content, src, config)
-            if not ok:
-                logger.info("[SKIP] %s | %s | причина: %s", src, title, reason)
-                continue
-
-            # дополнительные теги и глобальные стоп-слова
-            tags, has_neg = tagging.extract_tags(f"{title}\n{content}")
-            if has_neg:
-                logger.info("[SKIP] %s | %s | причина: нежелательная тематика", src, title)
-                continue
-
-            if classifieds.is_classified(title, content, url):
-                logger.info("[SKIP] %s | %s | причина: рекламная публикация", src, title)
-                continue
-            cnt_relevant += 1
-            stage_counts["after_filters"] += 1
-
-            # дубликаты в пакете
-            thash = compute_title_hash(title) if title else ""
-            if url and url in seen_urls:
-                cnt_dup_inpack_url += 1
-                logger.info("[SKIP] %s | %s | причина: дубль URL в пакете", src, title)
-                continue
-            if thash and thash in seen_title_hashes:
-                cnt_dup_inpack_title += 1
-                logger.info("[SKIP] %s | %s | причина: почти дубль заголовка в пакете", src, title)
-                continue
-
-            seen_urls.add(url)
-            if thash:
-                seen_title_hashes.add(thash)
-
-            # дубликаты в БД
-            if dedup.is_duplicate(url, guid, title, conn):
-                cnt_dup_db += 1
-                logger.info("[DUP_DB] url=%s | найден в истории", url)
-                continue
-            stage_counts["after_dedup"] += 1
-
-            # отправка
-            filter_meta = {
-                "region": bool(region_ok),
-                "topic": bool(topic_ok),
-            }
-
-            source_meta = dict(sources_by_name.get(src, {}))
-            domain = _normalize_domain_value(source_meta.get("source_domain"))
-
-            if not domain:
-                parsed = urlparse(url)
-                domain = _normalize_domain_value(parsed.hostname or "")
-
-            domain_sources = sources_by_domain.get(domain, []) if domain else []
-            if domain_sources:
-                matched = None
-                if url:
-                    for candidate in domain_sources:
-                        cand_url = str(candidate.get("url") or "").strip()
-                        if cand_url and url.startswith(cand_url):
-                            matched = candidate
-                            break
-                if not matched:
-                    matched = domain_sources[0]
-                combined = dict(source_meta)
-                combined.update(matched)
-                source_meta = combined
-                domain = source_meta.get("source_domain", domain)
-
-            if not domain:
-                parsed = urlparse(url)
-                domain = _normalize_domain_value(parsed.hostname or "")
-
-            allowed_rubrics = list(source_meta.get("rubrics_allowed", [])) or [
-                "objects",
-                "persons",
-                "kazusy",
-            ]
-            rubric = "objects" if "objects" in allowed_rubrics else allowed_rubrics[0]
-
-            trust_level = 0
-            try:
-                trust_level = int(source_meta.get("trust_level") or 0)
-            except (TypeError, ValueError):
-                trust_level = 0
-
-            item_clean = {
-                "source": src,
-                "source_id": src,
-                "guid": guid,
-                "url": url,
-                "title": title,
-                "content": content,
-                "summary": it.get("summary") or "",
-                "published_at": it.get("published_at") or "",
-                "tags": list(tags),
-                "reasons": filter_meta,
-                "rubric": rubric,
-                "source_domain": domain or "",
-                "trust_level": trust_level,
-            }
-
-            block = moderation.run_blocklists(item_clean)
-            if block.blocked:
+        with _run_once_stage("raw pipeline execution"):
+            if should_run_raw:
                 logger.info(
-                    "[BLOCK] %s | %s | причина: %s",
-                    src,
-                    title,
-                    block.label or block.pattern,
+                    "[RAW] pipeline: start (force=%s, sources=%d)",
+                    raw_force_run,
+                    len(raw_sources or []),
                 )
-                continue
-            stage_counts["after_moderation"] += 1
-
-            flags_hold = moderation.run_hold_flags(item_clean)
-            flags_deprio = moderation.run_deprioritize_flags(item_clean)
-            all_flags = flags_hold + flags_deprio
-            sources_ctx: List[Dict[str, Any]] = []
-            if source_meta:
-                meta_copy = dict(source_meta)
-                if domain and not meta_copy.get("source_domain"):
-                    meta_copy["source_domain"] = domain
-                if trust_level >= 3:
-                    meta_copy.setdefault("is_official", True)
-                sources_ctx.append(meta_copy)
-            confirmation = moderation.needs_confirmation(
-                item_clean, all_flags, {"sources": sources_ctx, "flags": all_flags}
-            )
-            trust_summary = moderation.summarize_trust(sources_ctx)
-            quality_note = any(flag.requires_quality_note for flag in all_flags)
-
-            item_clean["moderation_flags"] = [flag.to_dict() for flag in all_flags]
-            item_clean["needs_confirmation"] = confirmation.needs_confirmation
-            item_clean["confirmation_reasons"] = confirmation.reasons
-            item_clean["quality_note_required"] = quality_note
-            item_clean["trust_summary"] = trust_summary
-
-            item_clean = rewrite.maybe_rewrite_item(item_clean, config)
-
-            remember_success = False
-            if getattr(config, "ENABLE_MODERATION", False):
-                mod_id = moderator.enqueue_and_preview(item_clean, conn)
-                if mod_id:
-                    cnt_queued += 1
-                    remember_success = True
+                _trace_run_once(
+                    "raw pipeline execution: invoking run_raw_pipeline_once"
+                )
+                try:
+                    raw_pipeline.run_raw_pipeline_once(
+                        http_client.get_session(),
+                        conn,
+                        logger,
+                        force=raw_force_run,
+                        sources=raw_sources if raw_force_run else None,
+                    )
+                except Exception:
+                    _trace_run_once("raw pipeline execution: exception raised")
+                    logger.exception("[RAW] pipeline error")
                 else:
-                    cnt_not_sent += 1
+                    _trace_run_once("raw pipeline execution: completed")
             else:
-                sent = _publisher_send_direct(item_clean)
-                if sent:
-                    cnt_published += 1
-                    remember_success = True
+                _trace_run_once(
+                    "raw pipeline execution: skipped (should_run_raw is False)"
+                )
+
+        stage_counts: Dict[str, int] = {
+            "in": 0,
+            "after_fetch": 0,
+            "after_filters": 0,
+            "after_dedup": 0,
+            "after_moderation": 0,
+            "to_publish": 0,
+        }
+
+        with _run_once_stage("raw only shortcut"):
+            if raw_only:
+                _trace_run_once("raw only shortcut: returning empty summary")
+                return RunSummary((0, 0, 0, 0, 0, 0, 0, 0), stage_counts)
+
+        with _run_once_stage("items fetch"):
+            items_iter: Iterable[Dict[str, Any]]
+            if not getattr(config, "TELEGRAM_AUTO_FETCH", True):
+                logger.info(
+                    "TELEGRAM_AUTO_FETCH=0, загрузка Telegram пропущена; парсинг сайтов отключён."
+                )
+                _trace_run_once(
+                    "items fetch: TELEGRAM_AUTO_FETCH disabled, using empty list"
+                )
+                items_iter = []
+            else:
+                mode = getattr(config, "TELEGRAM_MODE", "mtproto")
+                _trace_run_once(f"items fetch: mode={mode}")
+                if mode == "mtproto" and (
+                    int(getattr(config, "TELETHON_API_ID", 0) or 0) <= 0
+                    or not getattr(config, "TELETHON_API_HASH", "")
+                ):
+                    logger.warning(
+                        "TELEGRAM_MODE=mtproto, но TELETHON_API_ID/TELETHON_API_HASH не заданы. "
+                        "Пропускаем загрузку из Telegram."
+                    )
+                    _trace_run_once(
+                        "items fetch: mtproto mode missing credentials, skip fetch"
+                    )
+                    items_iter = []
                 else:
-                    cnt_not_sent += 1
+                    from telegram_fetcher import FetchOptions, fetch_from_telegram
 
-            if remember_success:
-                # запоминаем в БД только успешно поставленные/отправленные материалы
-                dedup.remember(conn, item_clean)
-                stage_counts["to_publish"] += 1
+                    fetch_options = FetchOptions(
+                        max_channels_per_iter=int(
+                            max(
+                                1,
+                                getattr(
+                                    config, "TELEGRAM_MAX_CHANNELS_PER_ITER", 50
+                                ),
+                            )
+                        ),
+                        fetch_workers=int(
+                            max(1, getattr(config, "TELEGRAM_FETCH_WORKERS", 5))
+                        ),
+                        messages_per_channel=int(
+                            max(
+                                1,
+                                getattr(
+                                    config, "TELEGRAM_MESSAGES_PER_CHANNEL", 30
+                                ),
+                            )
+                        ),
+                        rate=float(
+                            max(0.1, getattr(config, "TELEGRAM_RATE_LIMIT", 25.0))
+                        ),
+                        flood_sleep_threshold=int(
+                            max(
+                                0,
+                                getattr(
+                                    config, "TELETHON_FLOOD_SLEEP_THRESHOLD", 30
+                                ),
+                            )
+                        ),
+                    )
+                    _trace_run_once(
+                        "items fetch: invoking fetch_from_telegram (may block)"
+                    )
+                    items_iter = list(
+                        fetch_from_telegram(
+                            mode,
+                            getattr(
+                                config, "TELEGRAM_LINKS_FILE", "telegram_links.txt"
+                            ),
+                            fetch_options.messages_per_channel,
+                            options=fetch_options,
+                        )
+                    )
+                    logger.info(
+                        "Загрузка из Telegram: получено %d элементов (парсинг сайтов отключён)",
+                        len(items_iter),
+                    )
+                    _trace_run_once(
+                        f"items fetch: fetch_from_telegram returned {len(items_iter)} items"
+                    )
 
-        except KeyboardInterrupt:
-            raise
-        except Exception as ex:
-            cnt_errors += 1
-            logger.exception("[ERROR] url=%s | %s", it.get("url", ""), ex)
+        stage_counts["in"] = len(items_iter)
+        stage_counts["after_fetch"] = len(items_iter)
 
-    logger.info(
-        "ИТОГО: получено=%d, релевантные=%d, дублей_в_пакете_URL=%d, почти_дублей_в_пакете=%d, "
-        "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d",
-        cnt_total,
-        cnt_relevant,
-        cnt_dup_inpack_url,
-        cnt_dup_inpack_title,
-        cnt_dup_db,
-        cnt_queued,
-        cnt_published,
-        cnt_errors,
-        cnt_not_sent,
-    )
+        seen_urls: set = set()
+        seen_title_hashes: set = set()
 
-    logger.info(
-        "[PIPELINE] in=%d after_fetch=%d after_filters=%d after_dedup=%d after_moderation=%d to_publish=%d",
-        stage_counts["in"],
-        stage_counts["after_fetch"],
-        stage_counts["after_filters"],
-        stage_counts["after_dedup"],
-        stage_counts["after_moderation"],
-        stage_counts["to_publish"],
-    )
+        sources_by_name = getattr(config, "SOURCES_BY_NAME", {})
+        sources_by_domain = getattr(config, "SOURCES_BY_DOMAIN_ALL", {})
 
-    items_ttl = int(getattr(config, "ITEM_RETENTION_DAYS", 0))
-    dedup_ttl = int(getattr(config, "DEDUP_RETENTION_DAYS", 0))
-    if items_ttl > 0 or dedup_ttl > 0:
-        db.prune_old_records(
-            conn,
-            items_ttl_days=items_ttl,
-            dedup_ttl_days=dedup_ttl,
-            batch_limit=int(getattr(config, "DB_PRUNE_BATCH", 500)),
+        cnt_total = 0
+        cnt_relevant = 0
+        cnt_dup_inpack_url = 0
+        cnt_dup_inpack_title = 0
+        cnt_dup_db = 0
+        cnt_queued = 0
+        cnt_published = 0
+        cnt_not_sent = 0
+        cnt_errors = 0
+
+        with _run_once_stage("items processing loop"):
+            _trace_run_once(
+                f"items processing loop: start iterating over {len(items_iter)} items"
+            )
+            for it in items_iter:
+                cnt_total += 1
+                item_stage_prefix = f"item #{cnt_total}"
+                try:
+                    src = it.get("source") or ""
+                    url = (it.get("url") or "").strip()
+                    guid = (it.get("guid") or "").strip()
+                    title = normalize_whitespace(it.get("title") or "")
+                    content = normalize_whitespace(it.get("content") or "")
+                    _trace_run_once(
+                        f"{item_stage_prefix}: relevance check start (source={src})"
+                    )
+                    ok, region_ok, topic_ok, reason = filters.is_relevant_for_source(
+                        title, content, src, config
+                    )
+                    if not ok:
+                        logger.info(
+                            "[SKIP] %s | %s | причина: %s", src, title, reason
+                        )
+                        _trace_run_once(
+                            f"{item_stage_prefix}: skipped by relevance ({reason})"
+                        )
+                        continue
+
+                    _trace_run_once(
+                        f"{item_stage_prefix}: tagging/extraction start"
+                    )
+                    tags, has_neg = tagging.extract_tags(f"{title}\n{content}")
+                    if has_neg:
+                        logger.info(
+                            "[SKIP] %s | %s | причина: нежелательная тематика",
+                            src,
+                            title,
+                        )
+                        _trace_run_once(
+                            f"{item_stage_prefix}: skipped by negative tag"
+                        )
+                        continue
+
+                    if classifieds.is_classified(title, content, url):
+                        logger.info(
+                            "[SKIP] %s | %s | причина: рекламная публикация",
+                            src,
+                            title,
+                        )
+                        _trace_run_once(
+                            f"{item_stage_prefix}: skipped by classifieds"
+                        )
+                        continue
+                    cnt_relevant += 1
+                    stage_counts["after_filters"] += 1
+
+                    thash = compute_title_hash(title) if title else ""
+                    if url and url in seen_urls:
+                        cnt_dup_inpack_url += 1
+                        logger.info(
+                            "[SKIP] %s | %s | причина: дубль URL в пакете",
+                            src,
+                            title,
+                        )
+                        _trace_run_once(
+                            f"{item_stage_prefix}: skipped by in-pack URL duplicate"
+                        )
+                        continue
+                    if thash and thash in seen_title_hashes:
+                        cnt_dup_inpack_title += 1
+                        logger.info(
+                            "[SKIP] %s | %s | причина: почти дубль заголовка в пакете",
+                            src,
+                            title,
+                        )
+                        _trace_run_once(
+                            f"{item_stage_prefix}: skipped by in-pack title duplicate"
+                        )
+                        continue
+
+                    seen_urls.add(url)
+                    if thash:
+                        seen_title_hashes.add(thash)
+
+                    if dedup.is_duplicate(url, guid, title, conn):
+                        cnt_dup_db += 1
+                        logger.info("[DUP_DB] url=%s | найден в истории", url)
+                        _trace_run_once(
+                            f"{item_stage_prefix}: skipped by DB duplicate"
+                        )
+                        continue
+                    stage_counts["after_dedup"] += 1
+
+                    filter_meta = {
+                        "region": bool(region_ok),
+                        "topic": bool(topic_ok),
+                    }
+
+                    source_meta = dict(sources_by_name.get(src, {}))
+                    domain = _normalize_domain_value(
+                        source_meta.get("source_domain")
+                    )
+
+                    if not domain:
+                        parsed = urlparse(url)
+                        domain = _normalize_domain_value(parsed.hostname or "")
+
+                    domain_sources = (
+                        sources_by_domain.get(domain, []) if domain else []
+                    )
+                    if domain_sources:
+                        matched = None
+                        if url:
+                            for candidate in domain_sources:
+                                cand_url = str(candidate.get("url") or "").strip()
+                                if cand_url and url.startswith(cand_url):
+                                    matched = candidate
+                                    break
+                        if not matched:
+                            matched = domain_sources[0]
+                        combined = dict(source_meta)
+                        combined.update(matched)
+                        source_meta = combined
+                        domain = source_meta.get("source_domain", domain)
+
+                    if not domain:
+                        parsed = urlparse(url)
+                        domain = _normalize_domain_value(parsed.hostname or "")
+
+                    allowed_rubrics = list(source_meta.get("rubrics_allowed", [])) or [
+                        "objects",
+                        "persons",
+                        "kazusy",
+                    ]
+                    rubric = (
+                        "objects" if "objects" in allowed_rubrics else allowed_rubrics[0]
+                    )
+
+                    trust_level = 0
+                    try:
+                        trust_level = int(source_meta.get("trust_level") or 0)
+                    except (TypeError, ValueError):
+                        trust_level = 0
+
+                    item_clean = {
+                        "source": src,
+                        "source_id": src,
+                        "guid": guid,
+                        "url": url,
+                        "title": title,
+                        "content": content,
+                        "summary": it.get("summary") or "",
+                        "published_at": it.get("published_at") or "",
+                        "tags": list(tags),
+                        "reasons": filter_meta,
+                        "rubric": rubric,
+                        "source_domain": domain or "",
+                        "trust_level": trust_level,
+                    }
+
+                    _trace_run_once(
+                        f"{item_stage_prefix}: moderation checks start"
+                    )
+                    block = moderation.run_blocklists(item_clean)
+                    if block.blocked:
+                        logger.info(
+                            "[BLOCK] %s | %s | причина: %s",
+                            src,
+                            title,
+                            block.label or block.pattern,
+                        )
+                        _trace_run_once(
+                            f"{item_stage_prefix}: blocked by moderation ({block.label or block.pattern})"
+                        )
+                        continue
+                    stage_counts["after_moderation"] += 1
+
+                    flags_hold = moderation.run_hold_flags(item_clean)
+                    flags_deprio = moderation.run_deprioritize_flags(item_clean)
+                    all_flags = flags_hold + flags_deprio
+                    sources_ctx: List[Dict[str, Any]] = []
+                    if source_meta:
+                        meta_copy = dict(source_meta)
+                        if domain and not meta_copy.get("source_domain"):
+                            meta_copy["source_domain"] = domain
+                        if trust_level >= 3:
+                            meta_copy.setdefault("is_official", True)
+                        sources_ctx.append(meta_copy)
+                    confirmation = moderation.needs_confirmation(
+                        item_clean, all_flags, {"sources": sources_ctx, "flags": all_flags}
+                    )
+                    trust_summary = moderation.summarize_trust(sources_ctx)
+                    quality_note = any(
+                        flag.requires_quality_note for flag in all_flags
+                    )
+
+                    item_clean["moderation_flags"] = [
+                        flag.to_dict() for flag in all_flags
+                    ]
+                    item_clean["needs_confirmation"] = (
+                        confirmation.needs_confirmation
+                    )
+                    item_clean["confirmation_reasons"] = confirmation.reasons
+                    item_clean["quality_note_required"] = quality_note
+                    item_clean["trust_summary"] = trust_summary
+
+                    _trace_run_once(
+                        f"{item_stage_prefix}: rewrite/maybe_rewrite start"
+                    )
+                    item_clean = rewrite.maybe_rewrite_item(item_clean, config)
+
+                    remember_success = False
+                    if getattr(config, "ENABLE_MODERATION", False):
+                        _trace_run_once(
+                            f"{item_stage_prefix}: enqueue moderator (may block)"
+                        )
+                        mod_id = moderator.enqueue_and_preview(item_clean, conn)
+                        if mod_id:
+                            cnt_queued += 1
+                            remember_success = True
+                            _trace_run_once(
+                                f"{item_stage_prefix}: queued for moderation"
+                            )
+                        else:
+                            cnt_not_sent += 1
+                            _trace_run_once(
+                                f"{item_stage_prefix}: NOT queued for moderation"
+                            )
+                    else:
+                        _trace_run_once(
+                            f"{item_stage_prefix}: direct publish attempt"
+                        )
+                        sent = _publisher_send_direct(item_clean)
+                        if sent:
+                            cnt_published += 1
+                            remember_success = True
+                            _trace_run_once(
+                                f"{item_stage_prefix}: published directly"
+                            )
+                        else:
+                            cnt_not_sent += 1
+                            _trace_run_once(
+                                f"{item_stage_prefix}: direct publish failed"
+                            )
+
+                    if remember_success:
+                        _trace_run_once(
+                            f"{item_stage_prefix}: remember in dedup"
+                        )
+                        dedup.remember(conn, item_clean)
+                        stage_counts["to_publish"] += 1
+
+                except KeyboardInterrupt:
+                    raise
+                except SystemExit as exc:
+                    _trace_run_once(
+                        f"{item_stage_prefix}: SystemExit detected (code={exc.code})"
+                    )
+                    raise
+                except Exception as ex:
+                    cnt_errors += 1
+                    logger.exception("[ERROR] url=%s | %s", it.get("url", ""), ex)
+                    _trace_run_once(
+                        f"{item_stage_prefix}: exception encountered ({ex!r})"
+                    )
+
+        with _run_once_stage("summary logging"):
+            logger.info(
+                "ИТОГО: получено=%d, релевантные=%d, дублей_в_пакете_URL=%d, почти_дублей_в_пакете=%d, "
+                "дублей_в_БД=%d, в_очередь=%d, опубликовано=%d, ошибок=%d, не_отправлено=%d",
+                cnt_total,
+                cnt_relevant,
+                cnt_dup_inpack_url,
+                cnt_dup_inpack_title,
+                cnt_dup_db,
+                cnt_queued,
+                cnt_published,
+                cnt_errors,
+                cnt_not_sent,
+            )
+
+            logger.info(
+                "[PIPELINE] in=%d after_fetch=%d after_filters=%d after_dedup=%d after_moderation=%d to_publish=%d",
+                stage_counts["in"],
+                stage_counts["after_fetch"],
+                stage_counts["after_filters"],
+                stage_counts["after_dedup"],
+                stage_counts["after_moderation"],
+                stage_counts["to_publish"],
+            )
+
+        with _run_once_stage("database pruning"):
+            items_ttl = int(getattr(config, "ITEM_RETENTION_DAYS", 0))
+            dedup_ttl = int(getattr(config, "DEDUP_RETENTION_DAYS", 0))
+            if items_ttl > 0 or dedup_ttl > 0:
+                _trace_run_once(
+                    f"database pruning: start (items_ttl={items_ttl}, dedup_ttl={dedup_ttl})"
+                )
+                db.prune_old_records(
+                    conn,
+                    items_ttl_days=items_ttl,
+                    dedup_ttl_days=dedup_ttl,
+                    batch_limit=int(getattr(config, "DB_PRUNE_BATCH", 500)),
+                )
+                _trace_run_once("database pruning: completed")
+            else:
+                _trace_run_once(
+                    "database pruning: skipped (ttl values are zero or negative)"
+                )
+
+        with _run_once_stage("host failure stats"):
+            active_failures: Dict[str, Dict[str, float]] = {}
+            if _get_host_fail_stats is not None:
+                _trace_run_once(
+                    "host failure stats: fetching active host failure statistics"
+                )
+                try:
+                    active_failures = _get_host_fail_stats(active_only=True)
+                except Exception:
+                    logger.exception(
+                        "Не удалось получить статистику повторных сбоев источников"
+                    )
+                    active_failures = {}
+                    _trace_run_once(
+                        "host failure stats: exception while fetching statistics"
+                    )
+                else:
+                    _trace_run_once(
+                        f"host failure stats: fetched {len(active_failures)} records"
+                    )
+            else:
+                _trace_run_once(
+                    "host failure stats: fetcher not available (import error)"
+                )
+            if active_failures:
+                parts = []
+                now = time.time()
+                for host, data in active_failures.items():
+                    first_ts = data.get("first_failure_ts") or now
+                    duration_min = max(0, int((now - first_ts) / 60))
+                    parts.append(
+                        f"{host}: {data.get('count', 0)} попыток, {duration_min} мин"
+                    )
+                logger.warning(
+                    "Источники с повторными сбоями: %s", "; ".join(parts)
+                )
+
+        return RunSummary(
+            (
+                cnt_total,
+                cnt_relevant,
+                cnt_dup_inpack_url,
+                cnt_dup_inpack_title,
+                cnt_dup_db,
+                cnt_queued,
+                cnt_published,
+                cnt_errors,
+            ),
+            stage_counts,
         )
+    except SystemExit as exc:
+        _trace_run_once(f"run_once: SystemExit propagated (code={exc.code})")
+        raise
+    finally:
+        _trace_run_once("run_once: finish")
 
-    active_failures: Dict[str, Dict[str, float]] = {}
-    if _get_host_fail_stats is not None:
-        try:
-            active_failures = _get_host_fail_stats(active_only=True)
-        except Exception:
-            logger.exception(
-                "Не удалось получить статистику повторных сбоев источников"
-            )
-            active_failures = {}
-    if active_failures:
-        parts = []
-        now = time.time()
-        for host, data in active_failures.items():
-            first_ts = data.get("first_failure_ts") or now
-            duration_min = max(0, int((now - first_ts) / 60))
-            parts.append(
-                f"{host}: {data.get('count', 0)} попыток, {duration_min} мин"
-            )
-        logger.warning("Источники с повторными сбоями: %s", "; ".join(parts))
-
-    return RunSummary(
-        (
-            cnt_total,
-            cnt_relevant,
-            cnt_dup_inpack_url,
-            cnt_dup_inpack_title,
-            cnt_dup_db,
-            cnt_queued,
-            cnt_published,
-            cnt_errors,
-        ),
-        stage_counts,
-    )
 
 def main() -> int:
     init_logging(config)
